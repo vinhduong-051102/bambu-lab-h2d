@@ -231,23 +231,63 @@
     ws.onmessage = (event) => {
       try {
         const message = JSON.parse(event.data);
-        let printerState = null;
 
-        if (message.type === 'printer.state') {
-          printerState = message.data;
-        } else if (message.type === 'printer.connection') {
-          if (message.data && typeof message.data.online === 'boolean') {
-            printerDot.className = message.data.online ? 'status-dot online' : 'status-dot offline';
-            printerStatusText.textContent = message.data.online ? 'Máy in Online' : 'Máy in Offline';
+        switch (message.type) {
+          case 'printer.state': {
+            if (message.data) {
+              updateDashboardUI(message.data);
+              addLog(`Đã nhận dữ liệu telemetry (Trạng thái: ${message.data.state || 'UNKNOWN'})`, 'info');
+            }
+            break;
           }
-          return;
-        } else {
-          printerState = message;
-        }
-
-        if (printerState) {
-          updateDashboardUI(printerState);
-          addLog(`Đã nhận dữ liệu telemetry từ máy in (Trạng thái: ${printerState.state || 'UNKNOWN'})`, 'info');
+          case 'printer.connection': {
+            if (message.data && typeof message.data.online === 'boolean') {
+              printerDot.className = message.data.online ? 'status-dot online' : 'status-dot offline';
+              printerStatusText.textContent = message.data.online ? 'Máy in Online' : 'Máy in Offline';
+              addLog(`Trạng thái kết nối máy in: ${message.data.online ? 'Online' : 'Offline'}`, message.data.online ? 'success' : 'warn');
+            }
+            break;
+          }
+          case 'printer.temperature': {
+            if (message.data) {
+              if (message.data.nozzle && message.data.nozzle.current !== null) {
+                nozzleCurText.textContent = `${message.data.nozzle.current}°C`;
+              }
+              if (message.data.bed && message.data.bed.current !== null) {
+                bedCurText.textContent = `${message.data.bed.current}°C`;
+              }
+            }
+            break;
+          }
+          case 'printer.progress': {
+            if (message.data && typeof message.data.progress === 'number') {
+              updateProgressRing(message.data.progress);
+            }
+            break;
+          }
+          case 'printer.error': {
+            if (message.data && message.data.hmsErrors) {
+              addLog(`Phát hiện cảnh báo HMS error: ${JSON.stringify(message.data.hmsErrors)}`, 'warn');
+            }
+            break;
+          }
+          case 'command.started': {
+            addLog(`🚀 Đang thực thi lệnh: ${message.data?.command || 'Unknown'}`, 'info');
+            break;
+          }
+          case 'command.completed': {
+            addLog(`✅ Lệnh ${message.data?.command || ''} hoàn tất thành công!`, 'success');
+            break;
+          }
+          case 'command.failed': {
+            addLog(`❌ Lệnh ${message.data?.command || ''} thất bại: ${message.data?.error || ''}`, 'warn');
+            break;
+          }
+          default: {
+            if (message.state !== undefined) {
+              updateDashboardUI(message);
+            }
+          }
         }
       } catch (err) {
         console.error('Error parsing WS frame:', err);

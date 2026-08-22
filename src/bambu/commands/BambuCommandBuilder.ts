@@ -6,6 +6,15 @@ export class BambuCommandBuilder {
     return String(this.sequenceId);
   }
 
+  public static buildPushAllPayload(): Record<string, unknown> {
+    return {
+      pushing: {
+        sequence_id: '0',
+        command: 'pushall',
+      },
+    };
+  }
+
   public static buildPausePayload(): Record<string, unknown> {
     return {
       print: {

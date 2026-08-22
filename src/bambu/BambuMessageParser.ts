@@ -115,10 +115,16 @@ export class BambuMessageParser {
     const upper = rawState.toUpperCase();
     switch (upper) {
       case 'IDLE':
+      case 'STANDBY':
+      case 'OFF':
+      case 'READY':
+      case 'INIT':
         return 'IDLE';
       case 'PREPARE':
       case 'SLICING':
       case 'RUNNING':
+      case 'WARMUP':
+      case 'HEATING':
         return 'RUNNING';
       case 'PAUSE':
       case 'PAUSED':

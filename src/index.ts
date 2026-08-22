@@ -9,6 +9,7 @@ import { normalizePrinterState } from './domain/normalizePrinterState.js';
 import { BambuMqttClient } from './bambu/BambuMqttClient.js';
 import { BambuCameraService } from './bambu/BambuCameraService.js';
 import { BambuMessageParser } from './bambu/BambuMessageParser.js';
+import { BambuCommandBuilder } from './bambu/commands/BambuCommandBuilder.js';
 import { createServer } from './server/server.js';
 import { BambuTopics } from './bambu/BambuTopics.js';
 
@@ -118,6 +119,8 @@ Subscribed:
   ${BambuTopics.getReportTopic(env.BAMBU_SERIAL)}
 `);
     await mqttClient.subscribeReports();
+    // Request full status report dump from printer immediately on connection
+    await mqttClient.publishRequest(BambuCommandBuilder.buildPushAllPayload());
   } catch (err) {
     logger.warn({ error: err instanceof Error ? err.message : String(err) }, 'Initial MQTT connection attempt failed. Gateway will auto-retry in background.');
   }
