@@ -44,6 +44,7 @@ export interface NozzleState {
   filamentId: string | null;
   state: string | number | null;
   wear: number | null;
+  tm?: number | null;
   temperatureSource?: string | null;
   temperatureConfidence?: 'CONFIRMED' | 'POSSIBLE' | 'UNKNOWN';
   metadata?: FieldMetadata;

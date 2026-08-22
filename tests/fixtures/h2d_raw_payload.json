@@ -7,27 +7,31 @@
     "total_layer_num": 28,
     "subtask_name": "Torus",
     "gcode_file": "Torus.gcode",
-    "nozzle_temper": 45,
+    "nozzle_temper": 36,
     "nozzle_target_temper": 0,
     "nozzle": {
+      "src_id": 0,
+      "tar_id": 0,
       "info": [
         {
           "id": 0,
           "diameter": 0.4,
+          "fila_id": "",
+          "sn": "N/A",
+          "stat": 0,
+          "tm": 0,
           "type": "HS01",
-          "sn": "NZ001",
-          "fila_id": "GFA00",
-          "stat": 1,
-          "wear": 12
+          "wear": 0
         },
         {
           "id": 1,
           "diameter": 0.4,
+          "fila_id": "",
+          "sn": "N/A",
+          "stat": 0,
+          "tm": 0,
           "type": "HS01",
-          "sn": "NZ002",
-          "fila_id": "GFA01",
-          "stat": 1,
-          "wear": 5
+          "wear": 0
         }
       ]
     },
@@ -35,7 +39,7 @@
       "info": [
         {
           "id": 0,
-          "temp": 45,
+          "temp": 36,
           "hnow": 0,
           "hpre": 0,
           "htar": 0,
@@ -43,10 +47,10 @@
         },
         {
           "id": 1,
-          "temp": 41,
-          "hnow": 0,
-          "hpre": 0,
-          "htar": 0,
+          "temp": 36,
+          "hnow": 1,
+          "hpre": 1,
+          "htar": 1,
           "stat": 0
         }
       ]

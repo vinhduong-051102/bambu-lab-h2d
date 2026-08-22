@@ -63,6 +63,13 @@ document.addEventListener('DOMContentLoaded', () => {
   const consoleLogs = document.getElementById('consoleLogs');
   const lastUpdateText = document.getElementById('lastUpdateText');
 
+  // Diagnostics Elements
+  const diagActiveTool = document.getElementById('diagActiveTool');
+  const diagNozzles = document.getElementById('diagNozzles');
+  const diagExtruders = document.getElementById('diagExtruders');
+  const diagRawJson = document.getElementById('diagRawJson');
+  const btnRefreshDiag = document.getElementById('btnRefreshDiag');
+
   // Modal & Toast
   const openCapModalBtn = document.getElementById('openCapModalBtn');
   const closeCapModalBtn = document.getElementById('closeCapModalBtn');
@@ -113,6 +120,69 @@ document.addEventListener('DOMContentLoaded', () => {
     return `${h > 0 ? h + 'h ' : ''}${m}m`;
   }
 
+  // Diagnostics Explorer Fetcher
+  async function fetchDiagnostics() {
+    try {
+      const res = await fetch('/api/printer/diagnostics');
+      if (!res.ok) return;
+      const data = await res.json();
+
+      // Render Active Tool
+      if (diagActiveTool) {
+        const mnt = data.machineNozzleTemperature || {};
+        diagActiveTool.innerHTML = `
+          <div>Active Nozzle ID: <strong>${data.activeNozzleId !== null && data.activeNozzleId !== undefined ? data.activeNozzleId : 'None'}</strong></div>
+          <div>Machine Temp: <strong>${mnt.current !== null && mnt.current !== undefined ? mnt.current : '--'}°C</strong> / Target: <strong>${mnt.target ?? 0}°C</strong></div>
+          <div>Source: <code>${mnt.source || 'N/A'}</code></div>
+          <div>Confidence: <span style="color: #eab308;">${mnt.confidence || 'POSSIBLE'}</span></div>
+        `;
+      }
+
+      // Render Hardware Nozzles
+      if (diagNozzles) {
+        const nozzlesList = data.nozzles || [];
+        if (nozzlesList.length === 0) {
+          diagNozzles.innerHTML = '<div>Không có dữ liệu nozzle phần cứng</div>';
+        } else {
+          diagNozzles.innerHTML = nozzlesList.map((n) => `
+            <div style="border-bottom: 1px solid rgba(255,255,255,0.05); padding-bottom: 4px; margin-bottom: 4px;">
+              <strong>Nozzle #${n.id}</strong> (Type: ${n.type || 'N/A'}, Size: ${n.diameter || '--'}mm, SN: ${n.serial || 'N/A'})<br>
+              Temp: <strong style="color: ${n.current !== null ? '#4ade80' : '#ef4444'}">${n.current !== null && n.current !== undefined ? n.current + '°C' : '--'}</strong> | State: ${n.state ?? 0} | Wear: ${n.wear ?? 0} | TM: ${n.tm ?? 0}<br>
+              Confidence: <span style="color: ${n.temperatureConfidence === 'CONFIRMED' ? '#4ade80' : '#94a3b8'}">${n.temperatureConfidence || 'UNKNOWN'}</span>
+            </div>
+          `).join('');
+        }
+      }
+
+      // Render Extruders
+      if (diagExtruders) {
+        const extList = data.extruders || [];
+        if (extList.length === 0) {
+          diagExtruders.innerHTML = '<div>Không có dữ liệu extruder phần cứng</div>';
+        } else {
+          diagExtruders.innerHTML = extList.map((e) => `
+            <div style="border-bottom: 1px solid rgba(255,255,255,0.05); padding-bottom: 4px; margin-bottom: 4px;">
+              <strong>Extruder #${e.id}</strong> - Temp: <strong style="color: #38bdf8">${e.temp !== null && e.temp !== undefined ? e.temp + '°C' : '--'}</strong><br>
+              hnow: ${e.hnow ?? 0} | hpre: ${e.hpre ?? 0} | htar: ${e.htar ?? 0} | state: ${e.state ?? 0}
+            </div>
+          `).join('');
+        }
+      }
+
+      // Render Raw Data Json
+      if (diagRawJson) {
+        diagRawJson.textContent = JSON.stringify({
+          rawPayload: data.rawPayload,
+          discoveredCandidates: data.temperatureCandidates,
+        }, null, 2);
+      }
+    } catch (err) {
+      console.warn('Diagnostics fetch failed:', err);
+    }
+  }
+
+  btnRefreshDiag?.addEventListener('click', fetchDiagnostics);
+
   // Dashboard UI Updater
   function updateDashboardUI(state) {
     if (!state) return;
@@ -155,7 +225,7 @@ document.addEventListener('DOMContentLoaded', () => {
       const n2 = (nozzles && nozzles.length > 1) ? nozzles[1] : nozzle2;
 
       if (n1) {
-        if (nozzleCurText) nozzleCurText.textContent = n1.current !== null && n1.current !== undefined ? n1.current : '0';
+        if (nozzleCurText) nozzleCurText.textContent = n1.current !== null && n1.current !== undefined ? n1.current : '--';
         if (nozzleTarText) nozzleTarText.textContent = `/ ${n1.target !== null && n1.target !== undefined ? n1.target : 0}°C`;
         const nozzlePct = Math.min(100, Math.max(0, ((Number(n1.current) || 0) / 300) * 100));
         if (nozzleBar) nozzleBar.style.width = `${nozzlePct}%`;
@@ -204,6 +274,8 @@ document.addEventListener('DOMContentLoaded', () => {
       const timeStr = new Date(state.updatedAt).toLocaleTimeString();
       lastUpdateText.textContent = `Cập nhật lần cuối: ${timeStr}`;
     }
+
+    fetchDiagnostics();
   }
 
   // Helper Format Hex Color cho AMS Tray
@@ -494,6 +566,7 @@ document.addEventListener('DOMContentLoaded', () => {
   addLog('Khởi tạo giao diện Gateway Dashboard & Camera...', 'info');
   connectWebSocket();
   fetchPrinterStatus();
+  fetchDiagnostics();
   initCameraInfo();
 
   // Refresh camera snapshot (2s)

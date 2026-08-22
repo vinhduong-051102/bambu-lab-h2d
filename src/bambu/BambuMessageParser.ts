@@ -74,6 +74,15 @@ export class BambuMessageParser {
       return null;
     };
 
+    const parseId = (val: unknown): number | null => {
+      if (typeof val === 'number') return isNaN(val) ? null : val;
+      if (typeof val === 'string') {
+        const p = parseInt(val, 10);
+        return isNaN(p) ? null : p;
+      }
+      return null;
+    };
+
     // Track processed top-level keys to prevent duplicates in rawExtensions
     const processedKeys = new Set<string>();
 
@@ -115,15 +124,15 @@ export class BambuMessageParser {
       nozzleTargetTemp = parseNum(print.nozzle_target_temper);
     }
 
-    // Inspect active nozzle indicator if present in raw payload
-    const activeNozzleId = print.nozzle?.src_id ?? print.device?.nozzle?.src_id ?? print.ext_tool ?? null;
+    // Determine activeNozzleId exclusively from src_id or tar_id (no ext_tool fallback)
+    const activeNozzleId = parseId(print.nozzle?.src_id) ?? parseId(print.nozzle?.tar_id) ?? null;
 
     const primaryNozzleTemp: PrimaryNozzleTempState = {
       current: nozzleCurrentTemp,
       target: nozzleTargetTemp,
       activeNozzleId,
       source: 'print.nozzle_temper',
-      confidence: 'POSSIBLE', // Machine active nozzle temperature, exact tool mapping is POSSIBLE until telemetry sequence confirms
+      confidence: 'POSSIBLE',
       metadata: {
         source: 'print.nozzle_temper',
         confidence: 'POSSIBLE',
@@ -140,23 +149,19 @@ export class BambuMessageParser {
           const itemTemp = item?.temp !== undefined ? parseNum(item?.temp) : null;
           const itemTarget = item?.target_temp !== undefined ? parseNum(item?.target_temp) : null;
 
-          let current: number | null = itemTemp;
-          let target: number | null = itemTarget;
-          let tempSource: string | null = itemTemp !== null ? `print.nozzle.info[${idx}].temp` : null;
-          let tempConfidence: 'CONFIRMED' | 'POSSIBLE' | 'UNKNOWN' = itemTemp !== null ? 'CONFIRMED' : 'UNKNOWN';
-
           nozzles.push({
             id: item?.id !== undefined ? item.id : idx,
-            current,
-            target,
+            current: itemTemp,
+            target: itemTarget,
             diameter: parseNum(item?.diameter),
             type: item?.type !== undefined ? String(item.type) : null,
             serial: item?.sn !== undefined ? String(item.sn) : (item?.serial !== undefined ? String(item.serial) : null),
             filamentId: item?.fila_id !== undefined ? String(item.fila_id) : (item?.filament_id !== undefined ? String(item.filament_id) : null),
             state: item?.stat !== undefined ? item.stat : (item?.state !== undefined ? item.state : null),
             wear: parseNum(item?.wear),
-            temperatureSource: tempSource,
-            temperatureConfidence: tempConfidence,
+            tm: parseNum(item?.tm),
+            temperatureSource: itemTemp !== null ? `print.nozzle.info[${idx}].temp` : null,
+            temperatureConfidence: itemTemp !== null ? 'CONFIRMED' : 'UNKNOWN',
             metadata: {
               source: `print.nozzle.info[${idx}]`,
               confidence: 'CONFIRMED',

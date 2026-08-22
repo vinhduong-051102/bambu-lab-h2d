@@ -3,9 +3,16 @@ import { PrinterState, createInitialPrinterState } from './PrinterState.js';
 export type StateChangeListener = (state: PrinterState) => void;
 export type ConnectionChangeListener = (online: boolean) => void;
 
+export interface TelemetryDiff {
+  timestamp: string;
+  diffs: Record<string, { prev: unknown; curr: unknown }>;
+}
+
 export class PrinterStateStore {
   private state: PrinterState;
   private rawPayload: Record<string, unknown> | null = null;
+  private payloadHistory: Array<{ timestamp: string; payload: Record<string, unknown>; diffs: Record<string, { prev: unknown; curr: unknown }> }> = [];
+  private maxHistorySize = 50;
   private listeners: Set<StateChangeListener> = new Set();
   private connectionListeners: Set<ConnectionChangeListener> = new Set();
   private offlineTimer: NodeJS.Timeout | null = null;
@@ -28,8 +35,30 @@ export class PrinterStateStore {
     return this.rawPayload;
   }
 
+  public getPayloadHistory() {
+    return this.payloadHistory;
+  }
+
   public setRawPayload(payload: Record<string, unknown>): void {
+    const timestamp = new Date().toISOString();
+    const prev = this.rawPayload?.print as Record<string, unknown> | undefined;
+    const curr = payload?.print as Record<string, unknown> | undefined;
+
+    const diffs: Record<string, { prev: unknown; curr: unknown }> = {};
+    if (prev && curr) {
+      const allKeys = new Set([...Object.keys(prev), ...Object.keys(curr)]);
+      for (const k of allKeys) {
+        if (JSON.stringify(prev[k]) !== JSON.stringify(curr[k])) {
+          diffs[k] = { prev: prev[k], curr: curr[k] };
+        }
+      }
+    }
+
     this.rawPayload = payload;
+    this.payloadHistory.push({ timestamp, payload, diffs });
+    if (this.payloadHistory.length > this.maxHistorySize) {
+      this.payloadHistory.shift();
+    }
   }
 
   public updateState(updatedState: PrinterState): PrinterState {

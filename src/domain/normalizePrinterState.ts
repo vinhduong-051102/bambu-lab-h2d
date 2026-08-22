@@ -28,6 +28,7 @@ export function normalizePrinterState(
           filamentId: incoming.filamentId !== null ? incoming.filamentId : existing.filamentId,
           state: incoming.state !== null ? incoming.state : existing.state,
           wear: incoming.wear !== null ? incoming.wear : existing.wear,
+          tm: incoming.tm !== null && incoming.tm !== undefined ? incoming.tm : existing.tm,
           temperatureSource: incoming.temperatureSource || existing.temperatureSource,
           temperatureConfidence: incoming.temperatureConfidence || existing.temperatureConfidence,
           metadata: incoming.metadata || existing.metadata,
@@ -120,8 +121,11 @@ export function normalizePrinterState(
     target: parsed.temperatures?.nozzle.target !== null && parsed.temperatures?.nozzle.target !== undefined
       ? parsed.temperatures.nozzle.target
       : currentState.temperatures.nozzle.target,
+    activeNozzleId: parsed.temperatures?.nozzle.activeNozzleId !== undefined && parsed.temperatures?.nozzle.activeNozzleId !== null
+      ? parsed.temperatures.nozzle.activeNozzleId
+      : currentState.temperatures.nozzle.activeNozzleId,
     source: parsed.temperatures?.nozzle.source || currentState.temperatures.nozzle.source,
-    confidence: 'CONFIRMED' as const,
+    confidence: 'POSSIBLE' as const,
     metadata: parsed.temperatures?.nozzle.metadata || currentState.temperatures.nozzle.metadata,
   };
 
