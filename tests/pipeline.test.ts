@@ -45,15 +45,25 @@ describe('End-to-End Pipeline Data Flow Debug Test', () => {
 
     // Check Stage 1: RAW_PRESENT
     expect(snapshot.raw.print).toBeDefined();
+    expect((snapshot.raw.print as any).nozzle_temper).toBe(45);
+    expect((snapshot.raw.print as any).nozzle_target_temper).toBe(0);
 
     // Check Stage 2: BambuMessageParser
+    expect(snapshot.parsed.temperatures?.nozzle.current).toBe(45);
+    expect(snapshot.parsed.temperatures?.nozzle.target).toBe(0);
     expect(snapshot.parsed.temperatures?.nozzles).toHaveLength(2);
+    expect(snapshot.parsed.temperatures?.nozzles[0].current).toBe(45);
+    expect(snapshot.parsed.temperatures?.nozzles[1].current).toBeNull();
     expect(snapshot.parsed.extruders).toHaveLength(2);
+    expect(snapshot.parsed.extruders?.[0].temp).toBe(45);
+    expect(snapshot.parsed.extruders?.[1].temp).toBe(41);
     expect(snapshot.parsed.ams).toHaveLength(1);
     expect(snapshot.parsed.hmsErrors).toHaveLength(1);
     expect(snapshot.parsed.rawExtensions?.custom_h2d_unparsed_feature).toBeDefined();
 
     // Check Stage 3: Normalizer
+    expect(snapshot.normalized.temperatures.nozzle.current).toBe(45);
+    expect(snapshot.normalized.temperatures.nozzle.target).toBe(0);
     expect(snapshot.normalized.temperatures.nozzles).toHaveLength(2);
     expect(snapshot.normalized.extruders).toHaveLength(2);
     expect(snapshot.normalized.ams).toHaveLength(1);
@@ -61,6 +71,7 @@ describe('End-to-End Pipeline Data Flow Debug Test', () => {
     expect(snapshot.normalized.rawExtensions?.custom_h2d_unparsed_feature).toBeDefined();
 
     // Check Stage 4: Store
+    expect(snapshot.store.temperatures.nozzle.current).toBe(45);
     expect(snapshot.store.temperatures.nozzles).toHaveLength(2);
     expect(snapshot.store.extruders).toHaveLength(2);
     expect(snapshot.store.ams).toHaveLength(1);
@@ -77,8 +88,14 @@ describe('End-to-End Pipeline Data Flow Debug Test', () => {
     const apiBody = res.json();
 
     // Verify API output field presence
+    expect(apiBody.temperatures.nozzle.current).toBe(45);
+    expect(apiBody.temperatures.nozzle.target).toBe(0);
     expect(apiBody.temperatures.nozzles).toHaveLength(2);
+    expect(apiBody.temperatures.nozzles[0].current).toBe(45);
+    expect(apiBody.temperatures.nozzles[1].current).toBeNull();
     expect(apiBody.extruders).toHaveLength(2);
+    expect(apiBody.extruders[0].temp).toBe(45);
+    expect(apiBody.extruders[1].temp).toBe(41);
     expect(apiBody.ams).toHaveLength(1);
     expect(apiBody.hmsErrors).toHaveLength(1);
     expect(apiBody.fan.cooling).toBe(0);

@@ -4,20 +4,38 @@ import h2dFixture from './fixtures/h2d_raw_payload.json';
 
 describe('BambuMessageParser - H2D RAW Telemetry Fixture', () => {
   it('should parse real Bambu Lab H2D raw payload fixture accurately per specification', () => {
+    // 0. Test Mandatory RAW Fixture Keys
+    const raw = h2dFixture as any;
+    expect(raw.print.nozzle_temper).toBe(45);
+    expect(raw.print.nozzle_target_temper).toBe(0);
+    expect(raw.print.nozzle.info).toHaveLength(2);
+    expect(raw.print.extruder.info[0].temp).toBe(45);
+    expect(raw.print.extruder.info[1].temp).toBe(41);
+
     const parsedJson = BambuMessageParser.parseJsonPayload(JSON.stringify(h2dFixture));
     expect(parsedJson).not.toBeNull();
 
     const result = BambuMessageParser.parseReport(parsedJson!);
 
-    // 1. NOZZLE
+    // 1. PRIMARY SCALAR NOZZLE TEMP & NOZZLE HARDWARE INFO
+    expect(result.temperatures?.nozzle.current).toBe(45);
+    expect(result.temperatures?.nozzle.target).toBe(0);
+    expect(result.temperatures?.nozzle.source).toBe('print.nozzle_temper');
+    expect(result.temperatures?.nozzle.confidence).toBe('CONFIRMED');
+
     expect(result.temperatures?.nozzles).toBeDefined();
     expect(result.temperatures?.nozzles.length).toBe(2);
 
     expect(result.temperatures?.nozzles[0].id).toBe(0);
     expect(result.temperatures?.nozzles[1].id).toBe(1);
 
+    // Nozzle 0 has current=45 from scalar nozzle_temper
     expect(result.temperatures?.nozzles[0].current).toBe(45);
-    expect(result.temperatures?.nozzles[1].current).toBe(41);
+    expect(result.temperatures?.nozzles[0].target).toBe(0);
+
+    // Nozzle 1 temperature is NULL (not unconfirmedly guessed from extruder!)
+    expect(result.temperatures?.nozzles[1].current).toBeNull();
+    expect(result.temperatures?.nozzles[1].target).toBeNull();
 
     expect(result.temperatures?.nozzles[0].diameter).toBe(0.4);
     expect(result.temperatures?.nozzles[1].diameter).toBe(0.4);
@@ -31,7 +49,7 @@ describe('BambuMessageParser - H2D RAW Telemetry Fixture', () => {
     expect(result.temperatures?.nozzles[0].filamentId).toBe('GFA00');
     expect(result.temperatures?.nozzles[1].filamentId).toBe('GFA01');
 
-    // 2. EXTRUDER
+    // 2. EXTRUDER (Separated from nozzle temp)
     expect(result.extruders).toBeDefined();
     expect(result.extruders?.length).toBe(2);
 
@@ -91,9 +109,11 @@ describe('BambuMessageParser - H2D RAW Telemetry Fixture', () => {
     expect(result.job?.totalLayers).toBe(28);
     expect(result.job?.name).toBe('Torus');
 
-    // 8. RAW EXTENSIONS (No duplicates of parsed keys)
+    // 8. RAW EXTENSIONS (No duplicates of parsed keys like nozzle_temper)
     expect(result.rawExtensions).toBeDefined();
     expect(result.rawExtensions?.custom_h2d_unparsed_feature).toEqual({ feature_key: 'val123' });
+    expect(result.rawExtensions?.nozzle_temper).toBeUndefined();
+    expect(result.rawExtensions?.nozzle_target_temper).toBeUndefined();
     expect(result.rawExtensions?.gcode_state).toBeUndefined();
     expect(result.rawExtensions?.nozzle).toBeUndefined();
   });

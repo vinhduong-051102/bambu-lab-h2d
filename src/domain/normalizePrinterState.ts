@@ -20,7 +20,6 @@ export function normalizePrinterState(
       if (existing) {
         nozzleMap.set(incoming.id, {
           ...existing,
-
           current: incoming.current !== null ? incoming.current : existing.current,
           target: incoming.target !== null ? incoming.target : existing.target,
           diameter: incoming.diameter !== null ? incoming.diameter : existing.diameter,
@@ -29,6 +28,8 @@ export function normalizePrinterState(
           filamentId: incoming.filamentId !== null ? incoming.filamentId : existing.filamentId,
           state: incoming.state !== null ? incoming.state : existing.state,
           wear: incoming.wear !== null ? incoming.wear : existing.wear,
+          temperatureSource: incoming.temperatureSource || existing.temperatureSource,
+          temperatureConfidence: incoming.temperatureConfidence || existing.temperatureConfidence,
           metadata: incoming.metadata || existing.metadata,
         });
       } else {
@@ -72,7 +73,6 @@ export function normalizePrinterState(
     parsed.ams.forEach((incomingUnit) => {
       const existingUnit = amsMap.get(incomingUnit.id);
       if (existingUnit) {
-        // Merge trays by ID
         const trayMap = new Map<string, AMSTray>();
         existingUnit.trays.forEach((t) => trayMap.set(t.id, { ...t }));
         incomingUnit.trays.forEach((incomingTray) => {
@@ -112,7 +112,19 @@ export function normalizePrinterState(
     mergedAms = Array.from(amsMap.values());
   }
 
-  // 4. Merge Bed & Chamber
+  // 4. Merge Primary Nozzle Temp, Bed & Chamber
+  const primaryNozzle = {
+    current: parsed.temperatures?.nozzle.current !== null && parsed.temperatures?.nozzle.current !== undefined
+      ? parsed.temperatures.nozzle.current
+      : currentState.temperatures.nozzle.current,
+    target: parsed.temperatures?.nozzle.target !== null && parsed.temperatures?.nozzle.target !== undefined
+      ? parsed.temperatures.nozzle.target
+      : currentState.temperatures.nozzle.target,
+    source: parsed.temperatures?.nozzle.source || currentState.temperatures.nozzle.source,
+    confidence: 'CONFIRMED' as const,
+    metadata: parsed.temperatures?.nozzle.metadata || currentState.temperatures.nozzle.metadata,
+  };
+
   const bed = {
     current: parsed.temperatures?.bed.current !== null && parsed.temperatures?.bed.current !== undefined
       ? parsed.temperatures.bed.current
@@ -149,6 +161,7 @@ export function normalizePrinterState(
     stateMetadata: parsed.stateMetadata ?? currentState.stateMetadata,
     progress: parsed.progress !== undefined && parsed.progress !== null ? parsed.progress : currentState.progress,
     temperatures: {
+      nozzle: primaryNozzle,
       nozzles: mergedNozzles,
       bed,
       chamber,

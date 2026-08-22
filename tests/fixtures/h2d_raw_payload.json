@@ -7,12 +7,12 @@
     "total_layer_num": 28,
     "subtask_name": "Torus",
     "gcode_file": "Torus.gcode",
+    "nozzle_temper": 45,
+    "nozzle_target_temper": 0,
     "nozzle": {
       "info": [
         {
           "id": 0,
-          "temp": 45,
-          "target_temp": 0,
           "diameter": 0.4,
           "type": "HS01",
           "sn": "NZ001",
@@ -22,8 +22,6 @@
         },
         {
           "id": 1,
-          "temp": 41,
-          "target_temp": 0,
           "diameter": 0.4,
           "type": "HS01",
           "sn": "NZ002",

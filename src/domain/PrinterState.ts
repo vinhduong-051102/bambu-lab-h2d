@@ -12,6 +12,14 @@ export interface FieldMetadata {
   updatedAt?: number;
 }
 
+export interface PrimaryNozzleTempState {
+  current: number | null;
+  target: number | null;
+  source: string;
+  confidence: 'CONFIRMED' | 'POSSIBLE' | 'UNKNOWN';
+  metadata?: FieldMetadata;
+}
+
 export interface BedState {
   current: number | null;
   target: number | null;
@@ -35,6 +43,8 @@ export interface NozzleState {
   filamentId: string | null;
   state: string | number | null;
   wear: number | null;
+  temperatureSource?: string | null;
+  temperatureConfidence?: 'CONFIRMED' | 'POSSIBLE' | 'UNKNOWN';
   metadata?: FieldMetadata;
 }
 
@@ -94,6 +104,7 @@ export interface PrinterState {
   stateMetadata?: FieldMetadata;
   progress: number | null;
   temperatures: {
+    nozzle: PrimaryNozzleTempState;
     nozzles: NozzleState[];
     bed: BedState;
     chamber: ChamberState;
@@ -123,6 +134,12 @@ export function createInitialPrinterState(serial: string): PrinterState {
     state: 'UNKNOWN',
     progress: null,
     temperatures: {
+      nozzle: {
+        current: null,
+        target: null,
+        source: 'print.nozzle_temper',
+        confidence: 'CONFIRMED',
+      },
       nozzles: [],
       bed: { current: null, target: null },
       chamber: { current: null, source: null, confidence: 'POSSIBLE' },

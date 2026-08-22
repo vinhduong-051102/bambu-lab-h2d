@@ -2,6 +2,7 @@ import { logger } from '../logger/logger.js';
 import { BambuRawReportPayload } from './types.js';
 import {
   PrinterStateStatus,
+  PrimaryNozzleTempState,
   BedState,
   ChamberState,
   NozzleState,
@@ -40,6 +41,7 @@ export class BambuMessageParser {
     stateMetadata?: FieldMetadata;
     progress?: number | null;
     temperatures?: {
+      nozzle: PrimaryNozzleTempState;
       nozzles: NozzleState[];
       bed: BedState;
       chamber: ChamberState;
@@ -100,22 +102,65 @@ export class BambuMessageParser {
       }
     }
 
-    // 3. Nozzles (print.nozzle.info[])
+    // 3. Primary Scalar Nozzle Temperature (print.nozzle_temper & print.nozzle_target_temper)
+    let nozzleCurrentTemp: number | null = null;
+    let nozzleTargetTemp: number | null = null;
+
+    if (print.nozzle_temper !== undefined) {
+      processedKeys.add('nozzle_temper');
+      nozzleCurrentTemp = parseNum(print.nozzle_temper);
+    }
+    if (print.nozzle_target_temper !== undefined) {
+      processedKeys.add('nozzle_target_temper');
+      nozzleTargetTemp = parseNum(print.nozzle_target_temper);
+    }
+
+    const primaryNozzleTemp: PrimaryNozzleTempState = {
+      current: nozzleCurrentTemp,
+      target: nozzleTargetTemp,
+      source: 'print.nozzle_temper',
+      confidence: 'CONFIRMED',
+      metadata: {
+        source: 'print.nozzle_temper',
+        confidence: 'CONFIRMED',
+        updatedAt: now,
+      },
+    };
+
+    // 4. Nozzle Hardware Info Array (print.nozzle.info[])
     const nozzles: NozzleState[] = [];
     if (print.nozzle !== undefined) {
       processedKeys.add('nozzle');
       if (Array.isArray(print.nozzle?.info)) {
         print.nozzle.info.forEach((item: any, idx: number) => {
+          const itemTemp = parseNum(item?.temp);
+          const itemTarget = parseNum(item?.target_temp);
+
+          let current: number | null = itemTemp;
+          let target: number | null = itemTarget;
+          let tempSource: string | null = itemTemp !== null ? `print.nozzle.info[${idx}].temp` : null;
+          let tempConfidence: 'CONFIRMED' | 'POSSIBLE' | 'UNKNOWN' = itemTemp !== null ? 'CONFIRMED' : 'UNKNOWN';
+
+          // For primary nozzle (id 0), fallback to scalar print.nozzle_temper if info array has no temp
+          if (current === null && idx === 0 && nozzleCurrentTemp !== null) {
+            current = nozzleCurrentTemp;
+            target = nozzleTargetTemp;
+            tempSource = 'print.nozzle_temper';
+            tempConfidence = 'CONFIRMED';
+          }
+
           nozzles.push({
             id: item?.id !== undefined ? item.id : idx,
-            current: parseNum(item?.temp),
-            target: parseNum(item?.target_temp),
+            current,
+            target,
             diameter: parseNum(item?.diameter),
             type: item?.type !== undefined ? String(item.type) : null,
             serial: item?.sn !== undefined ? String(item.sn) : (item?.serial !== undefined ? String(item.serial) : null),
             filamentId: item?.fila_id !== undefined ? String(item.fila_id) : (item?.filament_id !== undefined ? String(item.filament_id) : null),
             state: item?.stat !== undefined ? item.stat : (item?.state !== undefined ? item.state : null),
             wear: parseNum(item?.wear),
+            temperatureSource: tempSource,
+            temperatureConfidence: tempConfidence,
             metadata: {
               source: `print.nozzle.info[${idx}]`,
               confidence: 'CONFIRMED',
@@ -126,7 +171,7 @@ export class BambuMessageParser {
       }
     }
 
-    // 4. Extruders (print.extruder.info[])
+    // 5. Extruders (print.extruder.info[])
     const extruders: ExtruderState[] = [];
     if (print.extruder !== undefined) {
       processedKeys.add('extruder');
@@ -149,7 +194,7 @@ export class BambuMessageParser {
       }
     }
 
-    // 5. Bed Temperature
+    // 6. Bed Temperature
     let bedCurrent: number | null = null;
     let bedTarget: number | null = null;
     if (print.bed_temper !== undefined) processedKeys.add('bed_temper');
@@ -168,7 +213,7 @@ export class BambuMessageParser {
       },
     };
 
-    // 6. Chamber Temperature (Priority: ctc.info.temp -> info.temp -> chamber_temper)
+    // 7. Chamber Temperature
     let chamberCurrent: number | null = null;
     let chamberSource: string | null = null;
 
@@ -198,12 +243,13 @@ export class BambuMessageParser {
     };
 
     const temperatures = {
+      nozzle: primaryNozzleTemp,
       nozzles,
       bed,
       chamber,
     };
 
-    // 7. Job Info
+    // 8. Job Info
     if (print.subtask_name !== undefined) processedKeys.add('subtask_name');
     if (print.gcode_file !== undefined) processedKeys.add('gcode_file');
     if (print.layer_num !== undefined) processedKeys.add('layer_num');
@@ -223,7 +269,7 @@ export class BambuMessageParser {
       remainingTimeMinutes: parseNum(print.mc_remaining_time),
     };
 
-    // 8. Fans
+    // 9. Fans
     if (print.cooling_fan_speed !== undefined) processedKeys.add('cooling_fan_speed');
     if (print.big_fan1_speed !== undefined) processedKeys.add('big_fan1_speed');
     if (print.big_fan2_speed !== undefined) processedKeys.add('big_fan2_speed');
@@ -243,11 +289,11 @@ export class BambuMessageParser {
       },
     };
 
-    // 9. AMS
+    // 10. AMS
     if (print.ams !== undefined) processedKeys.add('ams');
     const ams = this.parseAmsData(print.ams, now);
 
-    // 10. HMS Errors
+    // 11. HMS Errors
     if (print.hms !== undefined) processedKeys.add('hms');
     const hmsErrors: HMSError[] = [];
     if (Array.isArray(print.hms)) {
@@ -270,7 +316,7 @@ export class BambuMessageParser {
     processedKeys.add('result');
     processedKeys.add('reason');
 
-    // 11. Extract ONLY unparsed / unknown fields into rawExtensions (no duplicate of processed keys!)
+    // 12. Extract ONLY unparsed / unknown fields into rawExtensions
     const rawExtensions: Record<string, unknown> = {};
     for (const [k, v] of Object.entries(print)) {
       if (!processedKeys.has(k)) {

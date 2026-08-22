@@ -162,8 +162,8 @@ document.addEventListener('DOMContentLoaded', () => {
       }
 
       if (n2) {
-        if (nozzle2CurText) nozzle2CurText.textContent = n2.current !== null && n2.current !== undefined ? n2.current : '0';
-        if (nozzle2TarText) nozzle2TarText.textContent = `/ ${n2.target !== null && n2.target !== undefined ? n2.target : 0}°C`;
+        if (nozzle2CurText) nozzle2CurText.textContent = n2.current !== null && n2.current !== undefined ? n2.current : '--';
+        if (nozzle2TarText) nozzle2TarText.textContent = n2.target !== null && n2.target !== undefined ? `/ ${n2.target}°C` : '/ --°C';
         const nozzle2Pct = Math.min(100, Math.max(0, ((Number(n2.current) || 0) / 300) * 100));
         if (nozzle2Bar) nozzle2Bar.style.width = `${nozzle2Pct}%`;
       }
