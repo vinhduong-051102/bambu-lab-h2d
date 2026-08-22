@@ -175,8 +175,9 @@ document.addEventListener('DOMContentLoaded', () => {
         bedBar.style.width = `${bedPct}%`;
       }
 
-      if (chamber !== undefined) {
-        chamberCurText.textContent = chamber !== null ? chamber : '--';
+      if (chamber !== undefined && chamber !== null) {
+        const chamberVal = typeof chamber === 'object' ? chamber.current : chamber;
+        if (chamberCurText) chamberCurText.textContent = chamberVal !== null && chamberVal !== undefined ? `${chamberVal}°C` : '--';
       }
     }
 
@@ -411,11 +412,21 @@ document.addEventListener('DOMContentLoaded', () => {
           }
           case 'printer.temperature': {
             if (message.data) {
-              if (message.data.nozzle && message.data.nozzle.current !== null) {
-                nozzleCurText.textContent = `${message.data.nozzle.current}`;
+              const { nozzles, bed, chamber } = message.data;
+              if (Array.isArray(nozzles) && nozzles.length > 0) {
+                if (nozzles[0] && nozzles[0].current !== null && nozzleCurText) {
+                  nozzleCurText.textContent = `${nozzles[0].current}`;
+                }
+                if (nozzles[1] && nozzles[1].current !== null && nozzle2CurText) {
+                  nozzle2CurText.textContent = `${nozzles[1].current}`;
+                }
               }
-              if (message.data.bed && message.data.bed.current !== null) {
-                bedCurText.textContent = `${message.data.bed.current}`;
+              if (bed && bed.current !== null && bedCurText) {
+                bedCurText.textContent = `${bed.current}`;
+              }
+              if (chamber && chamberCurText) {
+                const cVal = typeof chamber === 'object' ? chamber.current : chamber;
+                if (cVal !== null && cVal !== undefined) chamberCurText.textContent = `${cVal}°C`;
               }
             }
             break;
