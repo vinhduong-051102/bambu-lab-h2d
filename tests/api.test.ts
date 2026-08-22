@@ -5,6 +5,7 @@ import { CapabilityRegistry } from '../src/domain/capabilities/CapabilityRegistr
 import { PrinterCommandService } from '../src/domain/commands/PrinterCommandService.js';
 import { PrinterService } from '../src/domain/PrinterService.js';
 import { normalizePrinterState } from '../src/domain/normalizePrinterState.js';
+import { env } from '../src/config/env.js';
 import { createServer } from '../src/server/server.js';
 
 describe('Fastify REST API & Capability Routes', () => {
@@ -88,6 +89,7 @@ describe('Fastify REST API & Capability Routes', () => {
   });
 
   it('POST /api/printer/actions/pause should return 403 when BAMBU_REAL_PRINTER is false (safety mode)', async () => {
+    env.BAMBU_REAL_PRINTER = false;
     const res = await app.inject({
       method: 'POST',
       url: '/api/printer/actions/pause',
