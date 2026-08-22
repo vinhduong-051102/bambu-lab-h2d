@@ -157,14 +157,14 @@ document.addEventListener('DOMContentLoaded', () => {
       if (n1) {
         if (nozzleCurText) nozzleCurText.textContent = n1.current !== null && n1.current !== undefined ? n1.current : '0';
         if (nozzleTarText) nozzleTarText.textContent = `/ ${n1.target !== null && n1.target !== undefined ? n1.target : 0}°C`;
-        const nozzlePct = Math.min(100, Math.max(0, (((n1.current as number) || 0) / 300) * 100));
+        const nozzlePct = Math.min(100, Math.max(0, ((Number(n1.current) || 0) / 300) * 100));
         if (nozzleBar) nozzleBar.style.width = `${nozzlePct}%`;
       }
 
       if (n2) {
         if (nozzle2CurText) nozzle2CurText.textContent = n2.current !== null && n2.current !== undefined ? n2.current : '0';
         if (nozzle2TarText) nozzle2TarText.textContent = `/ ${n2.target !== null && n2.target !== undefined ? n2.target : 0}°C`;
-        const nozzle2Pct = Math.min(100, Math.max(0, (((n2.current as number) || 0) / 300) * 100));
+        const nozzle2Pct = Math.min(100, Math.max(0, ((Number(n2.current) || 0) / 300) * 100));
         if (nozzle2Bar) nozzle2Bar.style.width = `${nozzle2Pct}%`;
       }
 
