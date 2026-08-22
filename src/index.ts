@@ -94,6 +94,7 @@ WebSocket:
   // Handle incoming MQTT messages
   mqttClient.onMessage((topic, message) => {
     const rawPayload = BambuMessageParser.parseJsonPayload(message);
+    console.log(rawPayload)
     if (!rawPayload) {
       return;
     }
