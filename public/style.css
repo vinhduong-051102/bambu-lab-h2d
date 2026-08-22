@@ -76,6 +76,7 @@ body {
   justify-content: center;
   color: #fff;
   box-shadow: 0 0 20px rgba(0, 242, 254, 0.3);
+  flex-shrink: 0;
 }
 
 .brand-title h1 {
@@ -99,6 +100,7 @@ body {
 .status-pills {
   display: flex;
   gap: 12px;
+  flex-wrap: wrap;
 }
 
 .status-pill {
@@ -118,6 +120,7 @@ body {
   height: 10px;
   border-radius: 50%;
   position: relative;
+  flex-shrink: 0;
 }
 
 .status-dot.online {
@@ -170,6 +173,8 @@ body {
   display: flex;
   justify-content: space-between;
   align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
 }
 
 .header-title {
@@ -182,6 +187,7 @@ body {
   width: 20px;
   height: 20px;
   color: var(--primary-accent);
+  flex-shrink: 0;
 }
 
 .header-title h2 {
@@ -215,12 +221,6 @@ body {
 .fan-card { grid-column: span 5; }
 .ams-card { grid-column: span 12; }
 .console-card { grid-column: span 12; }
-
-@media (max-width: 1024px) {
-  .job-hero-card, .temp-card, .camera-card, .fan-card, .ams-card, .console-card {
-    grid-column: span 12;
-  }
-}
 
 /* Job Hero Body */
 .job-body {
@@ -289,6 +289,7 @@ body {
   display: flex;
   flex-direction: column;
   gap: 16px;
+  width: 100%;
 }
 
 .job-filename .label {
@@ -361,6 +362,7 @@ body {
   justify-content: space-between;
   align-items: center;
   pointer-events: none;
+  gap: 8px;
 }
 
 .cam-live-indicator {
@@ -372,6 +374,7 @@ body {
   padding: 4px 8px;
   border-radius: 6px;
   backdrop-filter: blur(4px);
+  flex-shrink: 0;
 }
 
 .cam-rtsp-url {
@@ -543,7 +546,8 @@ body {
 /* Console Card */
 .quick-links {
   display: flex;
-  gap: 10px;
+  gap: 8px;
+  flex-wrap: wrap;
 }
 
 .api-link {
@@ -556,6 +560,7 @@ body {
   padding: 4px 10px;
   border-radius: 6px;
   transition: all 0.2s ease;
+  white-space: nowrap;
 }
 
 .api-link:hover {
@@ -578,6 +583,7 @@ body {
 
 .log-line {
   line-height: 1.4;
+  word-break: break-word;
 }
 
 .log-line.info { color: var(--text-muted); }
@@ -592,4 +598,172 @@ body {
   font-size: 0.8rem;
   color: var(--text-dim);
   padding: 8px 4px;
+}
+
+/* ==========================================================================
+   MOBILE & TABLET RESPONSIVE MEDIA QUERIES
+   ========================================================================== */
+
+/* Tablet & Smaller Screens (<= 1024px) */
+@media (max-width: 1024px) {
+  .job-hero-card, .temp-card, .camera-card, .fan-card, .ams-card, .console-card {
+    grid-column: span 12;
+  }
+
+  .dashboard-grid {
+    gap: 16px;
+  }
+}
+
+/* Mobile Screens (<= 768px) */
+@media (max-width: 768px) {
+  body {
+    padding: 12px;
+  }
+
+  .app-container {
+    gap: 16px;
+  }
+
+  /* Header adjustments for Mobile */
+  .header-nav {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 14px;
+    padding: 14px 16px;
+    border-radius: 14px;
+  }
+
+  .brand-title h1 {
+    font-size: 1.2rem;
+  }
+
+  .status-pills {
+    width: 100%;
+    justify-content: flex-start;
+  }
+
+  .status-pill {
+    padding: 6px 12px;
+    font-size: 0.8rem;
+  }
+
+  /* Cards Mobile Adjustments */
+  .card {
+    padding: 16px;
+    border-radius: 14px;
+    gap: 14px;
+  }
+
+  .card-header {
+    flex-direction: row;
+    align-items: center;
+  }
+
+  /* Job Hero Mobile Layout */
+  .job-body {
+    flex-direction: column;
+    gap: 20px;
+    align-items: center;
+  }
+
+  .progress-ring-container {
+    width: 160px;
+    height: 160px;
+  }
+
+  .progress-ring {
+    width: 160px;
+    height: 160px;
+  }
+
+  .ring-bg, .ring-progress {
+    r: 66;
+    cx: 80;
+    cy: 80;
+    stroke-dasharray: 414.69;
+    stroke-dashoffset: 414.69;
+  }
+
+  .progress-overlay .percentage {
+    font-size: 1.9rem;
+  }
+
+  .job-filename {
+    text-align: center;
+  }
+
+  .metric-box {
+    padding: 10px;
+  }
+
+  .metric-value {
+    font-size: 1rem;
+  }
+
+  /* Camera Card Mobile */
+  .camera-overlay {
+    bottom: 8px;
+    left: 8px;
+    right: 8px;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 6px;
+  }
+
+  .cam-rtsp-url {
+    max-width: 100%;
+    font-size: 0.65rem;
+  }
+
+  /* AMS Mobile Grid */
+  .ams-container {
+    grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  }
+
+  /* Footer Mobile */
+  .app-footer {
+    flex-direction: column;
+    align-items: center;
+    text-align: center;
+    gap: 6px;
+    font-size: 0.75rem;
+  }
+}
+
+/* Small Mobile Screens (<= 480px) */
+@media (max-width: 480px) {
+  .logo-icon {
+    width: 40px;
+    height: 40px;
+  }
+
+  .brand-title h1 {
+    font-size: 1.1rem;
+  }
+
+  .status-pills {
+    flex-direction: column;
+    gap: 8px;
+    width: 100%;
+  }
+
+  .status-pill {
+    width: 100%;
+    justify-content: flex-start;
+  }
+
+  .job-metrics-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .quick-links {
+    width: 100%;
+    overflow-x: auto;
+    padding-bottom: 4px;
+  }
+
+  .gauge-readout strong {
+    font-size: 1.1rem;
+  }
 }
