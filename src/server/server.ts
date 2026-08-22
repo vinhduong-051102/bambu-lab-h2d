@@ -41,6 +41,23 @@ export async function createServer(
   // Attach Gateway API Key Authentication Hook
   fastify.addHook('preHandler', authenticateRequest);
 
+  // Handle Fastify Body Parsing & Validation Errors
+  fastify.setErrorHandler((error, request, reply) => {
+    if (error.code === 'FST_ERR_CTP_EMPTY_JSON_BODY') {
+      reply.status(400).send({
+        success: false,
+        error: 'EMPTY_JSON_BODY',
+        message: 'Request body cannot be empty when Content-Type is application/json.',
+      });
+      return;
+    }
+    reply.status(error.statusCode || 500).send({
+      success: false,
+      error: error.name || 'INTERNAL_SERVER_ERROR',
+      message: error.message,
+    });
+  });
+
   // Register All REST API & WebSocket Routes
   await fastify.register(healthRoutes);
   await fastify.register(capabilitiesRoutes, { capabilityRegistry: printerService.capabilityRegistry });

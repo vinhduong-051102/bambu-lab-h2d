@@ -223,8 +223,8 @@ document.addEventListener('DOMContentLoaded', () => {
       const options = {
         method,
         headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body || {}),
       };
-      if (body) options.body = JSON.stringify(body);
 
       const res = await fetch(url, options);
       const data = await res.json();
