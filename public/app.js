@@ -200,9 +200,11 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   // Helper Format Độ Ẩm AMS (Bambu Lab giao thức trả về Level 1..5)
-  function formatAmsHumidity(val) {
+  function formatAmsHumidity(val, rawVal) {
     if (val === null || val === undefined || isNaN(Number(val))) return 'Chưa có dữ liệu';
     const lvl = Number(val);
+    const rawInfo = rawVal !== null && rawVal !== undefined ? ` (Giá trị gốc: ${rawVal})` : '';
+
     if (lvl >= 1 && lvl <= 5) {
       const labels = {
         1: 'Mức 1 (Rất khô < 20%)',
@@ -211,9 +213,9 @@ document.addEventListener('DOMContentLoaded', () => {
         4: 'Mức 4 (Hơi ẩm 40-50%)',
         5: 'Mức 5 (Cảnh báo ẩm > 50%)',
       };
-      return labels[lvl];
+      return `${labels[lvl]}${rawInfo}`;
     }
-    return `${lvl}%`;
+    return `${lvl}%${rawInfo}`;
   }
 
   // AMS Renderer
@@ -235,7 +237,7 @@ document.addEventListener('DOMContentLoaded', () => {
         `;
       }).join('');
 
-      const humidityText = formatAmsHumidity(unit.humidity);
+      const humidityText = formatAmsHumidity(unit.humidity, unit.rawHumidity);
 
       return `
         <div class="ams-unit">

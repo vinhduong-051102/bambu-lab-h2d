@@ -171,6 +171,7 @@ export class BambuMessageParser {
       return {
         id: String(unit?.id ?? idx),
         humidity: typeof unit?.humidity === 'number' || typeof unit?.humidity === 'string' ? Number(unit.humidity) || null : null,
+        rawHumidity: unit?.humidity ?? unit?.humidity_raw ?? null,
         temperature: typeof unit?.temp === 'number' || typeof unit?.temp === 'string' ? Number(unit.temp) || null : null,
         filaments,
       };

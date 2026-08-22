@@ -21,6 +21,7 @@ export interface AMSFilament {
 export interface AMSUnit {
   id: string;
   humidity: number | null;
+  rawHumidity?: string | number | null;
   temperature: number | null;
   filaments: AMSFilament[];
 }
