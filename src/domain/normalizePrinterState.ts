@@ -19,6 +19,10 @@ export function normalizePrinterState(
         current: parsed.temperatures?.nozzle.current ?? currentState.temperatures.nozzle.current,
         target: parsed.temperatures?.nozzle.target ?? currentState.temperatures.nozzle.target,
       },
+      nozzle2: {
+        current: parsed.temperatures?.nozzle2?.current ?? currentState.temperatures.nozzle2?.current ?? null,
+        target: parsed.temperatures?.nozzle2?.target ?? currentState.temperatures.nozzle2?.target ?? null,
+      },
       bed: {
         current: parsed.temperatures?.bed.current ?? currentState.temperatures.bed.current,
         target: parsed.temperatures?.bed.target ?? currentState.temperatures.bed.target,

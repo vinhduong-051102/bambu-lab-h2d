@@ -33,6 +33,7 @@ describe('PrinterStateStore & normalizePrinterState', () => {
         gcode_state: 'RUNNING',
         mc_percent: 75,
         nozzle_temper: 215,
+        nozzle_temper_1: 220,
         bed_temper: 60,
       },
     };
@@ -45,6 +46,7 @@ describe('PrinterStateStore & normalizePrinterState', () => {
     expect(updated.state).toBe('RUNNING');
     expect(updated.progress).toBe(75);
     expect(updated.temperatures.nozzle.current).toBe(215);
+    expect(updated.temperatures.nozzle2?.current).toBe(220);
     expect(listener).toHaveBeenCalledTimes(1);
     expect(listener).toHaveBeenCalledWith(updated);
   });

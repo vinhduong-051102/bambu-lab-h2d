@@ -31,6 +31,7 @@ export class BambuMessageParser {
     progress?: number | null;
     temperatures?: {
       nozzle: TemperatureSensor;
+      nozzle2?: TemperatureSensor;
       bed: TemperatureSensor;
       chamber: number | null;
     };
@@ -64,28 +65,47 @@ export class BambuMessageParser {
       progress = Math.max(0, Math.min(100, Math.round(print.mc_percent)));
     }
 
-    // 3. Map temperatures (support dual nozzles for H2D)
-    const noz2Cur = typeof print.nozzle_temper_1 === 'number'
-      ? print.nozzle_temper_1
-      : (typeof print.nozzle_temper_2 === 'number' ? print.nozzle_temper_2 : null);
-    const noz2Tar = typeof print.nozzle_target_temper_1 === 'number'
-      ? print.nozzle_target_temper_1
-      : (typeof print.nozzle_target_temper_2 === 'number' ? print.nozzle_target_temper_2 : null);
+    // Helper parse số từ number, string hoặc mảng
+    const parseNum = (val: unknown): number | null => {
+      if (typeof val === 'number') return isNaN(val) ? null : val;
+      if (typeof val === 'string') {
+        const p = parseFloat(val);
+        return isNaN(p) ? null : p;
+      }
+      return null;
+    };
+
+    // 3. Map temperatures (flexible array & multi-key support for dual nozzles)
+    const noz1Cur = Array.isArray(print.nozzle_temper)
+      ? parseNum(print.nozzle_temper[0])
+      : parseNum(print.nozzle_temper ?? print.nozzle_temper_0 ?? print.ext_temper_0);
+
+    const noz1Tar = Array.isArray(print.nozzle_target_temper)
+      ? parseNum(print.nozzle_target_temper[0])
+      : parseNum(print.nozzle_target_temper ?? print.nozzle_target_temper_0);
+
+    const noz2Cur = Array.isArray(print.nozzle_temper) && print.nozzle_temper.length > 1
+      ? parseNum(print.nozzle_temper[1])
+      : parseNum(print.nozzle_temper_1 ?? print.nozzle_temper_2 ?? print.nozzle_temper_sub ?? print.ext_temper_1 ?? print.right_nozzle_temper);
+
+    const noz2Tar = Array.isArray(print.nozzle_target_temper) && print.nozzle_target_temper.length > 1
+      ? parseNum(print.nozzle_target_temper[1])
+      : parseNum(print.nozzle_target_temper_1 ?? print.nozzle_target_temper_2 ?? print.nozzle_target_temper_sub ?? print.ext_target_temper_1 ?? print.right_nozzle_target_temper);
 
     const temperatures = {
       nozzle: {
-        current: typeof print.nozzle_temper === 'number' ? print.nozzle_temper : null,
-        target: typeof print.nozzle_target_temper === 'number' ? print.nozzle_target_temper : null,
+        current: noz1Cur,
+        target: noz1Tar,
       },
       nozzle2: {
         current: noz2Cur,
         target: noz2Tar,
       },
       bed: {
-        current: typeof print.bed_temper === 'number' ? print.bed_temper : null,
-        target: typeof print.bed_target_temper === 'number' ? print.bed_target_temper : null,
+        current: parseNum(print.bed_temper),
+        target: parseNum(print.bed_target_temper),
       },
-      chamber: typeof print.chamber_temper === 'number' ? print.chamber_temper : null,
+      chamber: parseNum(print.chamber_temper),
     };
 
     // 4. Map job info
