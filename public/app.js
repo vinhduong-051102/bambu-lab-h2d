@@ -149,19 +149,22 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     if (state.temperatures) {
-      const { nozzle, nozzle2, bed, chamber } = state.temperatures;
+      const { nozzles, nozzle, nozzle2, bed, chamber } = state.temperatures;
 
-      if (nozzle) {
-        if (nozzleCurText) nozzleCurText.textContent = nozzle.current !== null ? nozzle.current : '0';
-        if (nozzleTarText) nozzleTarText.textContent = `/ ${nozzle.target !== null ? nozzle.target : 0}°C`;
-        const nozzlePct = Math.min(100, Math.max(0, ((nozzle.current || 0) / 300) * 100));
+      const n1 = (nozzles && nozzles.length > 0) ? nozzles[0] : nozzle;
+      const n2 = (nozzles && nozzles.length > 1) ? nozzles[1] : nozzle2;
+
+      if (n1) {
+        if (nozzleCurText) nozzleCurText.textContent = n1.current !== null && n1.current !== undefined ? n1.current : '0';
+        if (nozzleTarText) nozzleTarText.textContent = `/ ${n1.target !== null && n1.target !== undefined ? n1.target : 0}°C`;
+        const nozzlePct = Math.min(100, Math.max(0, (((n1.current as number) || 0) / 300) * 100));
         if (nozzleBar) nozzleBar.style.width = `${nozzlePct}%`;
       }
 
-      if (nozzle2) {
-        if (nozzle2CurText) nozzle2CurText.textContent = nozzle2.current !== null ? nozzle2.current : '0';
-        if (nozzle2TarText) nozzle2TarText.textContent = `/ ${nozzle2.target !== null ? nozzle2.target : 0}°C`;
-        const nozzle2Pct = Math.min(100, Math.max(0, ((nozzle2.current || 0) / 300) * 100));
+      if (n2) {
+        if (nozzle2CurText) nozzle2CurText.textContent = n2.current !== null && n2.current !== undefined ? n2.current : '0';
+        if (nozzle2TarText) nozzle2TarText.textContent = `/ ${n2.target !== null && n2.target !== undefined ? n2.target : 0}°C`;
+        const nozzle2Pct = Math.min(100, Math.max(0, (((n2.current as number) || 0) / 300) * 100));
         if (nozzle2Bar) nozzle2Bar.style.width = `${nozzle2Pct}%`;
       }
 
@@ -178,9 +181,9 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     if (state.fan) {
-      const part = state.fan.part ?? 0;
-      const aux = state.fan.aux ?? 0;
-      const chamber = state.fan.chamber ?? 0;
+      const part = state.fan.cooling ?? state.fan.part ?? 0;
+      const aux = state.fan.bigFan1 ?? state.fan.aux ?? 0;
+      const chamber = state.fan.bigFan2 ?? state.fan.chamber ?? 0;
 
       partFanPct.textContent = `${part}%`;
       partFanBar.style.width = `${part}%`;

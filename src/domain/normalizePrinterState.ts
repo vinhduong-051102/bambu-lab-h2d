@@ -9,26 +9,30 @@ export function normalizePrinterState(
   const parsed = BambuMessageParser.parseReport(rawPayload);
   const now = new Date().toISOString();
 
+  // Merge nozzles array
+  const nozzles = (parsed.temperatures?.nozzles && parsed.temperatures.nozzles.length > 0)
+    ? parsed.temperatures.nozzles
+    : currentState.temperatures.nozzles;
+
+  // Merge extruders array
+  const extruders = (parsed.extruders && parsed.extruders.length > 0)
+    ? parsed.extruders
+    : currentState.extruders;
+
   return {
     ...currentState,
     online: true,
     state: parsed.state ?? currentState.state,
     progress: parsed.progress !== undefined ? parsed.progress : currentState.progress,
     temperatures: {
-      nozzle: {
-        current: parsed.temperatures?.nozzle.current ?? currentState.temperatures.nozzle.current,
-        target: parsed.temperatures?.nozzle.target ?? currentState.temperatures.nozzle.target,
-      },
-      nozzle2: {
-        current: parsed.temperatures?.nozzle2?.current ?? currentState.temperatures.nozzle2?.current ?? null,
-        target: parsed.temperatures?.nozzle2?.target ?? currentState.temperatures.nozzle2?.target ?? null,
-      },
+      nozzles,
       bed: {
         current: parsed.temperatures?.bed.current ?? currentState.temperatures.bed.current,
         target: parsed.temperatures?.bed.target ?? currentState.temperatures.bed.target,
       },
       chamber: parsed.temperatures?.chamber ?? currentState.temperatures.chamber,
     },
+    extruders,
     job: {
       name: parsed.job?.name ?? currentState.job.name,
       currentLayer: parsed.job?.currentLayer ?? currentState.job.currentLayer,
@@ -36,11 +40,17 @@ export function normalizePrinterState(
       remainingTimeMinutes: parsed.job?.remainingTimeMinutes ?? currentState.job.remainingTimeMinutes,
     },
     fan: {
-      part: parsed.fan?.part ?? currentState.fan.part,
-      aux: parsed.fan?.aux ?? currentState.fan.aux,
-      chamber: parsed.fan?.chamber ?? currentState.fan.chamber,
+      cooling: parsed.fan?.cooling ?? currentState.fan.cooling,
+      bigFan1: parsed.fan?.bigFan1 ?? currentState.fan.bigFan1,
+      bigFan2: parsed.fan?.bigFan2 ?? currentState.fan.bigFan2,
+      fan: parsed.fan?.fan ?? currentState.fan.fan,
+      fanGear: parsed.fan?.fanGear ?? currentState.fan.fanGear,
     },
-    ams: parsed.ams && parsed.ams.length > 0 ? parsed.ams : currentState.ams,
+    hmsErrors: (parsed.hmsErrors && parsed.hmsErrors.length > 0) ? parsed.hmsErrors : currentState.hmsErrors,
+    ams: (parsed.ams && parsed.ams.length > 0) ? parsed.ams : currentState.ams,
+    rawExtensions: parsed.rawExtensions
+      ? { ...currentState.rawExtensions, ...parsed.rawExtensions }
+      : currentState.rawExtensions,
     lastMessageAt: now,
     updatedAt: now,
   };

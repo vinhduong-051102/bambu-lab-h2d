@@ -1,8 +1,9 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { PrinterStateStore } from '../src/domain/PrinterStateStore.js';
 import { normalizePrinterState } from '../src/domain/normalizePrinterState.js';
+import h2dFixture from './fixtures/h2d_raw_payload.json';
 
-describe('PrinterStateStore & normalizePrinterState', () => {
+describe('PrinterStateStore & normalizePrinterState with H2D Fixture', () => {
   beforeEach(() => {
     vi.useFakeTimers();
   });
@@ -21,32 +22,26 @@ describe('PrinterStateStore & normalizePrinterState', () => {
     expect(state.progress).toBeNull();
   });
 
-  it('should update state and notify subscribers when normalized state is set', () => {
+  it('should update state and notify subscribers when normalized H2D state is set', () => {
     const store = new PrinterStateStore('01S00A123456789');
     const listener = vi.fn();
 
     store.subscribe(listener);
 
     const initial = store.getState();
-    const rawPayload = {
-      print: {
-        gcode_state: 'RUNNING',
-        mc_percent: 75,
-        nozzle_temper: 215,
-        nozzle_temper_1: 220,
-        bed_temper: 60,
-      },
-    };
-
-    const nextState = normalizePrinterState(initial, rawPayload);
+    const nextState = normalizePrinterState(initial, h2dFixture as any);
     store.updateState(nextState);
 
     const updated = store.getState();
     expect(updated.online).toBe(true);
-    expect(updated.state).toBe('RUNNING');
-    expect(updated.progress).toBe(75);
-    expect(updated.temperatures.nozzle.current).toBe(215);
-    expect(updated.temperatures.nozzle2?.current).toBe(220);
+    expect(updated.state).toBe('FINISHED');
+    expect(updated.progress).toBe(100);
+    expect(updated.temperatures.nozzles.length).toBe(2);
+    expect(updated.temperatures.nozzles[0].current).toBe(45);
+    expect(updated.temperatures.nozzles[1].current).toBe(41);
+    expect(updated.extruders.length).toBe(2);
+    expect(updated.hmsErrors?.length).toBe(1);
+    expect(updated.hmsErrors![0].code).toBe(65543);
     expect(listener).toHaveBeenCalledTimes(1);
     expect(listener).toHaveBeenCalledWith(updated);
   });
@@ -71,7 +66,7 @@ describe('PrinterStateStore & normalizePrinterState', () => {
     const store = new PrinterStateStore('01S00A123456789', timeoutMs);
 
     const initial = store.getState();
-    const nextState = normalizePrinterState(initial, { print: { gcode_state: 'RUNNING' } });
+    const nextState = normalizePrinterState(initial, { print: { gcode_state: 'RUNNING' } } as any);
     store.updateState(nextState);
 
     expect(store.getState().online).toBe(true);

@@ -1,6 +1,14 @@
 import { logger } from '../logger/logger.js';
 import { BambuRawReportPayload } from './types.js';
-import { PrinterStateStatus, TemperatureSensor, AMSUnit } from '../domain/PrinterState.js';
+import {
+  PrinterStateStatus,
+  TemperatureSensor,
+  NozzleState,
+  ExtruderState,
+  HMSError,
+  AMSUnit,
+  FanState,
+} from '../domain/PrinterState.js';
 
 export class BambuMessageParser {
   /**
@@ -30,42 +38,27 @@ export class BambuMessageParser {
     state?: PrinterStateStatus;
     progress?: number | null;
     temperatures?: {
-      nozzle: TemperatureSensor;
-      nozzle2?: TemperatureSensor;
+      nozzles: NozzleState[];
       bed: TemperatureSensor;
       chamber: number | null;
     };
+    extruders?: ExtruderState[];
     job?: {
       name: string | null;
       currentLayer: number | null;
       totalLayers: number | null;
       remainingTimeMinutes: number | null;
     };
-    fan?: {
-      part: number | null;
-      aux: number | null;
-      chamber: number | null;
-    };
+    fan?: FanState;
     ams?: AMSUnit[];
+    hmsErrors?: HMSError[];
+    rawExtensions?: Record<string, unknown>;
   } {
-    const print = payload.print;
+    const print = payload.print as Record<string, any> | undefined;
     if (!print || typeof print !== 'object') {
       return {};
     }
 
-    // 1. Map printer status
-    let state: PrinterStateStatus | undefined;
-    if (typeof print.gcode_state === 'string') {
-      state = this.mapGcodeState(print.gcode_state);
-    }
-
-    // 2. Map progress
-    let progress: number | null = null;
-    if (typeof print.mc_percent === 'number') {
-      progress = Math.max(0, Math.min(100, Math.round(print.mc_percent)));
-    }
-
-    // Helper parse số từ number, string hoặc mảng
     const parseNum = (val: unknown): number | null => {
       if (typeof val === 'number') return isNaN(val) ? null : val;
       if (typeof val === 'string') {
@@ -75,40 +68,70 @@ export class BambuMessageParser {
       return null;
     };
 
-    // 3. Map temperatures (flexible array & multi-key support for dual nozzles)
-    const noz1Cur = Array.isArray(print.nozzle_temper)
-      ? parseNum(print.nozzle_temper[0])
-      : parseNum(print.nozzle_temper ?? print.nozzle_temper_0 ?? print.ext_temper_0);
+    // 1. Map printer status
+    let state: PrinterStateStatus | undefined;
+    if (typeof print.gcode_state === 'string') {
+      state = this.mapGcodeState(print.gcode_state);
+    }
 
-    const noz1Tar = Array.isArray(print.nozzle_target_temper)
-      ? parseNum(print.nozzle_target_temper[0])
-      : parseNum(print.nozzle_target_temper ?? print.nozzle_target_temper_0);
+    // 2. Map progress
+    let progress: number | null = null;
+    if (typeof print.mc_percent === 'number' || typeof print.mc_percent === 'string') {
+      const num = parseNum(print.mc_percent);
+      if (num !== null) {
+        progress = Math.max(0, Math.min(100, Math.round(num)));
+      }
+    }
 
-    const noz2Cur = Array.isArray(print.nozzle_temper) && print.nozzle_temper.length > 1
-      ? parseNum(print.nozzle_temper[1])
-      : parseNum(print.nozzle_temper_1 ?? print.nozzle_temper_2 ?? print.nozzle_temper_sub ?? print.ext_temper_1 ?? print.right_nozzle_temper);
+    // 3. Map Nozzles (print.nozzle.info[])
+    const nozzles: NozzleState[] = [];
+    if (print.nozzle && Array.isArray(print.nozzle.info)) {
+      print.nozzle.info.forEach((item: any, idx: number) => {
+        nozzles.push({
+          id: String(item?.id ?? idx),
+          current: parseNum(item?.temp),
+          target: parseNum(item?.target_temp),
+          diameter: parseNum(item?.diameter),
+          type: item?.type ? String(item.type) : null,
+          serial: item?.serial ? String(item.serial) : null,
+          filamentId: item?.filament_id ? String(item.filament_id) : null,
+          state: item?.state ? String(item.state) : null,
+          wear: parseNum(item?.wear),
+        });
+      });
+    }
 
-    const noz2Tar = Array.isArray(print.nozzle_target_temper) && print.nozzle_target_temper.length > 1
-      ? parseNum(print.nozzle_target_temper[1])
-      : parseNum(print.nozzle_target_temper_1 ?? print.nozzle_target_temper_2 ?? print.nozzle_target_temper_sub ?? print.ext_target_temper_1 ?? print.right_nozzle_target_temper);
+    // 4. Map Extruders (print.extruder.info[])
+    const extruders: ExtruderState[] = [];
+    if (print.extruder && Array.isArray(print.extruder.info)) {
+      print.extruder.info.forEach((item: any, idx: number) => {
+        extruders.push({
+          id: String(item?.id ?? idx),
+          temp: parseNum(item?.temp),
+          targetTemp: parseNum(item?.target_temp),
+          state: item?.state ? String(item.state) : null,
+        });
+      });
+    }
+
+    // 5. Map Bed & Chamber temperatures
+    // Chamber: check ctc.info.temp -> info.temp -> device.ctc.info.temp -> chamber_temper
+    const chamberTemp =
+      parseNum(print.ctc?.info?.temp) ??
+      parseNum(print.info?.temp) ??
+      parseNum(print.device?.ctc?.info?.temp) ??
+      parseNum(print.chamber_temper);
 
     const temperatures = {
-      nozzle: {
-        current: noz1Cur,
-        target: noz1Tar,
-      },
-      nozzle2: {
-        current: noz2Cur,
-        target: noz2Tar,
-      },
+      nozzles,
       bed: {
         current: parseNum(print.bed_temper),
         target: parseNum(print.bed_target_temper),
       },
-      chamber: parseNum(print.chamber_temper),
+      chamber: chamberTemp,
     };
 
-    // 4. Map job info
+    // 6. Map job info
     const jobName = typeof print.subtask_name === 'string' && print.subtask_name.trim() !== ''
       ? print.subtask_name
       : typeof print.gcode_file === 'string' && print.gcode_file.trim() !== ''
@@ -117,28 +140,58 @@ export class BambuMessageParser {
 
     const job = {
       name: jobName,
-      currentLayer: typeof print.layer_num === 'number' ? print.layer_num : null,
-      totalLayers: typeof print.total_layer_num === 'number' ? print.total_layer_num : null,
-      remainingTimeMinutes: typeof print.mc_remaining_time === 'number' ? print.mc_remaining_time : null,
+      currentLayer: parseNum(print.layer_num),
+      totalLayers: parseNum(print.total_layer_num),
+      remainingTimeMinutes: parseNum(print.mc_remaining_time),
     };
 
-    // 5. Map fan speeds
-    const fan = {
-      part: this.parseFanSpeed(print.cooling_fan_speed),
-      aux: this.parseFanSpeed(print.big_fan1_speed),
-      chamber: this.parseFanSpeed(print.big_fan2_speed),
+    // 7. Map Fans
+    const fan: FanState = {
+      cooling: parseNum(print.cooling_fan_speed),
+      bigFan1: parseNum(print.big_fan1_speed),
+      bigFan2: parseNum(print.big_fan2_speed),
+      fan: parseNum(print.fan),
+      fanGear: parseNum(print.fan_gear),
     };
 
-    // 6. Map AMS data (optional extension)
+    // 8. Map AMS data
     const ams = this.parseAmsData(print.ams);
+
+    // 9. Map HMS diagnostic codes (attr & code preserved)
+    const hmsErrors: HMSError[] = [];
+    if (Array.isArray(print.hms)) {
+      print.hms.forEach((item: any) => {
+        hmsErrors.push({
+          attr: item?.attr ?? null,
+          code: item?.code ?? null,
+        });
+      });
+    }
+
+    // 10. Preserve Raw Extensions / Unknown Fields
+    const knownKeys = new Set([
+      'gcode_state', 'mc_percent', 'mc_remaining_time', 'layer_num', 'total_layer_num',
+      'subtask_name', 'gcode_file', 'nozzle', 'extruder', 'bed_temper', 'bed_target_temper',
+      'cooling_fan_speed', 'big_fan1_speed', 'big_fan2_speed', 'fan', 'fan_gear',
+      'ams', 'hms', 'ctc', 'info', 'device', 'chamber_temper', 'sequence_id', 'command'
+    ]);
+    const rawExtensions: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(print)) {
+      if (!knownKeys.has(k)) {
+        rawExtensions[k] = v;
+      }
+    }
 
     return {
       ...(state !== undefined && { state }),
       progress,
       temperatures,
+      extruders,
       job,
       fan,
       ams,
+      hmsErrors,
+      rawExtensions,
     };
   }
 
@@ -173,17 +226,6 @@ export class BambuMessageParser {
     }
   }
 
-  private static parseFanSpeed(val: unknown): number | null {
-    if (typeof val === 'number') {
-      return val;
-    }
-    if (typeof val === 'string') {
-      const parsed = parseInt(val, 10);
-      return isNaN(parsed) ? null : parsed;
-    }
-    return null;
-  }
-
   private static parseAmsData(amsObj: unknown): AMSUnit[] {
     if (!amsObj || typeof amsObj !== 'object') return [];
     const amsWrapper = amsObj as { ams?: unknown[] };
@@ -191,19 +233,43 @@ export class BambuMessageParser {
 
     return amsWrapper.ams.map((unit: any, idx: number) => {
       const filaments = Array.isArray(unit.tray)
-        ? unit.tray.map((tray: any, trayIdx: number) => ({
-            id: String(tray?.id ?? trayIdx),
-            type: typeof tray?.tray_type === 'string' ? tray.tray_type : null,
-            color: typeof tray?.tray_color === 'string' ? tray.tray_color : null,
-            remainingPercentage: typeof tray?.remain === 'number' ? tray.remain : null,
-          }))
+        ? unit.tray.map((tray: any, trayIdx: number) => {
+            const rawColor = typeof tray?.tray_color === 'string' ? tray.tray_color : null;
+            let color: string | null = null;
+            if (rawColor) {
+              const clean = rawColor.startsWith('#') ? rawColor.slice(1) : rawColor;
+              color = '#' + clean.slice(0, 6);
+            }
+            return {
+              id: String(tray?.id ?? trayIdx),
+              type: typeof tray?.tray_type === 'string' ? tray.tray_type : null,
+              subBrands: typeof tray?.tray_sub_brands === 'string' ? tray.tray_sub_brands : null,
+              color,
+              rawColor,
+              remainingPercentage: typeof tray?.remain === 'number' ? tray.remain : (typeof tray?.remain === 'string' ? parseFloat(tray.remain) : null),
+              diameter: typeof tray?.tray_diameter === 'number' ? tray.tray_diameter : null,
+              weight: typeof tray?.tray_weight === 'number' ? tray.tray_weight : null,
+              uuid: tray?.tray_uuid ? String(tray.tray_uuid) : null,
+              tagUid: tray?.tag_uid ? String(tray.tag_uid) : null,
+              infoIdx: typeof tray?.tray_info_idx === 'number' ? tray.tray_info_idx : null,
+            };
+          })
         : [];
+
+      const parseNum = (v: unknown): number | null => {
+        if (typeof v === 'number') return isNaN(v) ? null : v;
+        if (typeof v === 'string') {
+          const p = parseFloat(v);
+          return isNaN(p) ? null : p;
+        }
+        return null;
+      };
 
       return {
         id: String(unit?.id ?? idx),
-        humidity: typeof unit?.humidity === 'number' || typeof unit?.humidity === 'string' ? Number(unit.humidity) || null : null,
-        rawHumidity: unit?.humidity ?? unit?.humidity_raw ?? null,
-        temperature: typeof unit?.temp === 'number' || typeof unit?.temp === 'string' ? Number(unit.temp) || null : null,
+        humidity: parseNum(unit?.humidity),
+        humidityRaw: unit?.humidity ?? unit?.humidity_raw ?? null,
+        temperature: parseNum(unit?.temp),
         filaments,
       };
     });
