@@ -1,192 +1,291 @@
-(function () {
-  // DOM Elements
+document.addEventListener('DOMContentLoaded', () => {
+  // UI Element References
   const serialBadge = document.getElementById('serialBadge');
+  const realPrinterBadge = document.getElementById('realPrinterBadge');
   const printerDot = document.getElementById('printerDot');
   const printerStatusText = document.getElementById('printerStatusText');
   const wsDot = document.getElementById('wsDot');
   const wsStatusText = document.getElementById('wsStatusText');
 
+  // Control Buttons
+  const btnPause = document.getElementById('btnPause');
+  const btnResume = document.getElementById('btnResume');
+  const btnStop = document.getElementById('btnStop');
+
+  // Job Hero
   const jobStateBadge = document.getElementById('jobStateBadge');
-  const progressRing = document.getElementById('progressRing');
   const progressVal = document.getElementById('progressVal');
+  const progressRing = document.getElementById('progressRing');
   const jobNameText = document.getElementById('jobNameText');
   const layersText = document.getElementById('layersText');
   const remainingTimeText = document.getElementById('remainingTimeText');
 
-  const nozzleCurr = document.getElementById('nozzleCurr');
-  const nozzleTarget = document.getElementById('nozzleTarget');
+  // Thermal
+  const nozzleCurText = document.getElementById('nozzleCurr');
+  const nozzleTarText = document.getElementById('nozzleTarget');
   const nozzleBar = document.getElementById('nozzleBar');
+  const nozzleInput = document.getElementById('nozzleInput');
+  const btnSetNozzle = document.getElementById('btnSetNozzle');
 
-  const bedCurr = document.getElementById('bedCurr');
-  const bedTarget = document.getElementById('bedTarget');
+  const bedCurText = document.getElementById('bedCurr');
+  const bedTarText = document.getElementById('bedTarget');
   const bedBar = document.getElementById('bedBar');
+  const bedInput = document.getElementById('bedInput');
+  const btnSetBed = document.getElementById('btnSetBed');
 
-  const chamberCurr = document.getElementById('chamberCurr');
+  const chamberCurText = document.getElementById('chamberCurr');
 
-  const partFanPct = document.getElementById('partFanPct');
-  const partFanBar = document.getElementById('partFanBar');
-  const auxFanPct = document.getElementById('auxFanPct');
-  const auxFanBar = document.getElementById('auxFanBar');
-  const chamberFanPct = document.getElementById('chamberFanPct');
-  const chamberFanBar = document.getElementById('chamberFanBar');
-  const mainFanIcon = document.getElementById('mainFanIcon');
-
-  const cameraStreamImg = document.getElementById('cameraStreamImg');
+  // Camera
+  const cameraImg = document.getElementById('cameraStreamImg');
   const camRtspUrl = document.getElementById('camRtspUrl');
 
+  // Fans
+  const partFanPct = document.getElementById('partFanPct');
+  const partFanBar = document.getElementById('partFanBar');
+  const sliderPartFan = document.getElementById('sliderPartFan');
+
+  const auxFanPct = document.getElementById('auxFanPct');
+  const auxFanBar = document.getElementById('auxFanBar');
+  const sliderAuxFan = document.getElementById('sliderAuxFan');
+
+  const chamberFanPct = document.getElementById('chamberFanPct');
+  const chamberFanBar = document.getElementById('chamberFanBar');
+  const sliderChamberFan = document.getElementById('sliderChamberFan');
+
+  // AMS & Logs
   const amsContainer = document.getElementById('amsContainer');
   const consoleLogs = document.getElementById('consoleLogs');
   const lastUpdateText = document.getElementById('lastUpdateText');
 
-  const CIRCLE_CIRCUMFERENCE = 477.52; // 2 * Math.PI * 76
+  // Modal & Toast
+  const openCapModalBtn = document.getElementById('openCapModalBtn');
+  const closeCapModalBtn = document.getElementById('closeCapModalBtn');
+  const capModal = document.getElementById('capModal');
+  const capListContainer = document.getElementById('capListContainer');
+  const toastContainer = document.getElementById('toastContainer');
 
   let ws = null;
   let wsReconnectTimer = null;
-  let pollTimer = null;
 
+  // Toast System
+  function showToast(message, type = 'info') {
+    const toast = document.createElement('div');
+    toast.className = `toast toast-${type}`;
+    toast.textContent = message;
+    toastContainer.appendChild(toast);
+    setTimeout(() => {
+      toast.remove();
+    }, 4000);
+  }
+
+  // Console Log Helper
   function addLog(message, type = 'info') {
-    const timestamp = new Date().toLocaleTimeString('vi-VN');
     const line = document.createElement('div');
     line.className = `log-line ${type}`;
-    line.textContent = `[${timestamp}] ${message}`;
+    const time = new Date().toLocaleTimeString();
+    line.textContent = `[${time}] ${message}`;
     consoleLogs.appendChild(line);
     consoleLogs.scrollTop = consoleLogs.scrollHeight;
-
-    // Limit log entries
-    while (consoleLogs.children.length > 50) {
-      consoleLogs.removeChild(consoleLogs.firstChild);
-    }
   }
 
-  function formatTimeMinutes(totalMinutes) {
-    if (totalMinutes === null || totalMinutes === undefined || isNaN(totalMinutes)) {
-      return '--:--';
-    }
-    const mins = Math.max(0, Math.floor(totalMinutes));
-    const hours = Math.floor(mins / 60);
-    const remainingMins = mins % 60;
-    if (hours > 0) {
-      return `${hours}h ${remainingMins}m`;
-    }
-    return `${remainingMins} phút`;
+  // Progress Ring Updater
+  function updateProgressRing(percentage) {
+    const radius = 76;
+    const circumference = 2 * Math.PI * radius;
+    const progress = Math.max(0, Math.min(100, percentage || 0));
+    const offset = circumference - (progress / 100) * circumference;
+
+    progressRing.style.strokeDashoffset = offset;
+    progressVal.textContent = `${Math.round(progress)}%`;
   }
 
+  // Format Minutes to HH:MM
+  function formatMinutes(mins) {
+    if (mins === null || mins === undefined || isNaN(mins)) return '--:--';
+    const h = Math.floor(mins / 60);
+    const m = mins % 60;
+    return `${h > 0 ? h + 'h ' : ''}${m}m`;
+  }
+
+  // Dashboard UI Updater
   function updateDashboardUI(state) {
     if (!state) return;
 
-    // 1. Header & Serial
     if (state.serial) {
       serialBadge.textContent = `Serial: ${state.serial}`;
     }
 
-    // Printer Online Status
-    if (state.online) {
-      printerDot.className = 'status-dot online';
-      printerStatusText.textContent = 'Máy in Online';
-    } else {
-      printerDot.className = 'status-dot offline';
-      printerStatusText.textContent = 'Máy in Offline';
+    printerDot.className = state.online ? 'status-dot online' : 'status-dot offline';
+    printerStatusText.textContent = state.online ? 'Máy in Online' : 'Máy in Offline';
+
+    if (state.state) {
+      const stateStr = String(state.state).toUpperCase();
+      jobStateBadge.textContent = stateStr;
+      jobStateBadge.className = `badge state-badge ${stateStr.toLowerCase()}`;
     }
 
-    // 2. Job Status & Progress
-    const status = state.state || 'UNKNOWN';
-    jobStateBadge.textContent = status;
-    jobStateBadge.className = `badge state-badge ${status.toLowerCase()}`;
+    updateProgressRing(state.progress ?? 0);
 
-    const progress = state.progress !== null && state.progress !== undefined ? Math.min(100, Math.max(0, state.progress)) : 0;
-    progressVal.textContent = `${Math.round(progress)}%`;
-
-    const strokeOffset = CIRCLE_CIRCUMFERENCE - (progress / 100) * CIRCLE_CIRCUMFERENCE;
-    progressRing.style.strokeDashoffset = strokeOffset;
-
-    // Job File & Layers
-    const filename = state.job?.name ? state.job.name.replace(/\.(gcode|3mf)$/i, '') : 'Chưa có tác vụ';
-    jobNameText.textContent = filename;
-
-    const currLayer = state.job?.currentLayer ?? 0;
-    const totalLayer = state.job?.totalLayers ?? 0;
-    layersText.textContent = totalLayer > 0 ? `${currLayer} / ${totalLayer}` : '--';
-
-    remainingTimeText.textContent = formatTimeMinutes(state.job?.remainingTimeMinutes);
-
-    // 3. Temperature Gauges
-    const nozzleC = state.temperatures?.nozzle?.current ?? 0;
-    const nozzleT = state.temperatures?.nozzle?.target ?? 0;
-    nozzleCurr.textContent = nozzleC !== null ? Math.round(nozzleC) : 0;
-    nozzleTarget.textContent = nozzleT !== null ? `/ ${Math.round(nozzleT)}°C` : '/ 0°C';
-    nozzleBar.style.width = `${Math.min(100, (nozzleC / 300) * 100)}%`;
-
-    const bedC = state.temperatures?.bed?.current ?? 0;
-    const bedT = state.temperatures?.bed?.target ?? 0;
-    bedCurr.textContent = bedC !== null ? Math.round(bedC) : 0;
-    bedTarget.textContent = bedT !== null ? `/ ${Math.round(bedT)}°C` : '/ 0°C';
-    bedBar.style.width = `${Math.min(100, (bedC / 120) * 100)}%`;
-
-    const chamberC = state.temperatures?.chamber;
-    chamberCurr.textContent = chamberC !== null && chamberC !== undefined ? Math.round(chamberC) : '--';
-
-    // 4. Fans
-    const partF = state.fan?.part ?? 0;
-    const auxF = state.fan?.aux ?? 0;
-    const chamberF = state.fan?.chamber ?? 0;
-
-    partFanPct.textContent = `${partF}%`;
-    partFanBar.style.width = `${partF}%`;
-
-    auxFanPct.textContent = `${auxF}%`;
-    auxFanBar.style.width = `${auxF}%`;
-
-    chamberFanPct.textContent = `${chamberF}%`;
-    chamberFanBar.style.width = `${chamberF}%`;
-
-    if (partF > 0 || auxF > 0 || chamberF > 0) {
-      mainFanIcon.classList.add('spinning');
-    } else {
-      mainFanIcon.classList.remove('spinning');
+    if (state.job) {
+      jobNameText.textContent = state.job.name || 'Không có tên tác vụ';
+      layersText.textContent = `${state.job.currentLayer ?? 0} / ${state.job.totalLayers ?? 0}`;
+      remainingTimeText.textContent = formatMinutes(state.job.remainingTimeMinutes);
     }
 
-    // 5. AMS Units
-    if (state.ams && Array.isArray(state.ams) && state.ams.length > 0) {
-      amsContainer.innerHTML = '';
-      state.ams.forEach((amsUnit) => {
-        if (amsUnit.filaments && Array.isArray(amsUnit.filaments)) {
-          amsUnit.filaments.forEach((fil, idx) => {
-            const card = document.createElement('div');
-            card.className = 'ams-slot-card';
-            const colorHex = fil.color ? (fil.color.startsWith('#') ? fil.color : `#${fil.color}`) : '#64748b';
-            card.innerHTML = `
-              <div class="ams-slot-header">
-                <span>AMS ${amsUnit.id} - Slot ${idx + 1}</span>
-                <span class="color-dot" style="background-color: ${colorHex}"></span>
-              </div>
-              <div class="ams-slot-type">${fil.type || 'Chưa rõ'}</div>
-              <div class="bar-container">
-                <div class="bar-fill" style="width: ${fil.remainingPercentage ?? 0}%; background-color: ${colorHex}"></div>
-              </div>
-            `;
-            amsContainer.appendChild(card);
-          });
-        }
-      });
-    } else {
-      amsContainer.innerHTML = '<div class="empty-ams">Không có thông tin AMS hoặc chưa gắn khay nhựa.</div>';
+    if (state.temperatures) {
+      const { nozzle, bed, chamber } = state.temperatures;
+
+      if (nozzle) {
+        nozzleCurText.textContent = nozzle.current !== null ? nozzle.current : '0';
+        nozzleTarText.textContent = `/ ${nozzle.target !== null ? nozzle.target : 0}°C`;
+        const nozzlePct = Math.min(100, Math.max(0, ((nozzle.current || 0) / 300) * 100));
+        nozzleBar.style.width = `${nozzlePct}%`;
+      }
+
+      if (bed) {
+        bedCurText.textContent = bed.current !== null ? bed.current : '0';
+        bedTarText.textContent = `/ ${bed.target !== null ? bed.target : 0}°C`;
+        const bedPct = Math.min(100, Math.max(0, ((bed.current || 0) / 120) * 100));
+        bedBar.style.width = `${bedPct}%`;
+      }
+
+      if (chamber !== undefined) {
+        chamberCurText.textContent = chamber !== null ? chamber : '--';
+      }
     }
 
-    // Footer timestamp
+    if (state.fan) {
+      const part = state.fan.part ?? 0;
+      const aux = state.fan.aux ?? 0;
+      const chamber = state.fan.chamber ?? 0;
+
+      partFanPct.textContent = `${part}%`;
+      partFanBar.style.width = `${part}%`;
+
+      auxFanPct.textContent = `${aux}%`;
+      auxFanBar.style.width = `${aux}%`;
+
+      chamberFanPct.textContent = `${chamber}%`;
+      chamberFanBar.style.width = `${chamber}%`;
+    }
+
+    if (state.ams) {
+      renderAMS(state.ams);
+    }
+
     if (state.updatedAt) {
-      const updatedDate = new Date(state.updatedAt);
-      lastUpdateText.textContent = `Cập nhật lần cuối: ${updatedDate.toLocaleTimeString('vi-VN')}`;
+      const timeStr = new Date(state.updatedAt).toLocaleTimeString();
+      lastUpdateText.textContent = `Cập nhật lần cuối: ${timeStr}`;
     }
   }
 
-  // Camera Info Fetcher
+  // AMS Renderer
+  function renderAMS(amsUnits) {
+    if (!amsUnits || amsUnits.length === 0) {
+      amsContainer.innerHTML = '<div class="empty-ams">Chưa có dữ liệu khay nhựa AMS</div>';
+      return;
+    }
+
+    amsContainer.innerHTML = amsUnits.map((unit) => {
+      const filamentsHtml = (unit.filaments || []).map((fil) => `
+        <div class="tray-item">
+          <div class="color-dot" style="background-color: ${fil.color || '#cccccc'};"></div>
+          <span class="tray-type">${fil.type || 'N/A'}</span>
+          <span class="tray-rem">${fil.remainingPercentage !== null ? fil.remainingPercentage + '%' : '--'}</span>
+        </div>
+      `).join('');
+
+      return `
+        <div class="ams-unit">
+          <div class="ams-unit-title">AMS Unit #${unit.id} (Nhiệt: ${unit.temperature ?? '--'}°C | Độ ẩm: ${unit.humidity ?? '--'})</div>
+          <div class="tray-grid">${filamentsHtml}</div>
+        </div>
+      `;
+    }).join('');
+  }
+
+  // Send Command API Helper
+  async function sendCommand(url, method = 'POST', body = null) {
+    try {
+      const options = {
+        method,
+        headers: { 'Content-Type': 'application/json' },
+      };
+      if (body) options.body = JSON.stringify(body);
+
+      const res = await fetch(url, options);
+      const data = await res.json();
+
+      if (res.ok && data.success) {
+        showToast(data.message || 'Lệnh đã được gửi thành công!', 'success');
+        addLog(`✅ ${data.message || 'Lệnh thành công'}`, 'success');
+      } else {
+        if (res.status === 403 && data.error === 'TEST_MODE_RESTRICTED') {
+          showToast('Chế độ Read-Only: Đặt BAMBU_REAL_PRINTER=true để bật máy thật.', 'warn');
+          addLog(`⚠️ Lệnh bị chặn (Safety Mode): ${data.message}`, 'warn');
+        } else {
+          showToast(`Lỗi (${res.status}): ${data.message || data.error}`, 'error');
+          addLog(`❌ Lỗi lệnh (${res.status}): ${data.message}`, 'warn');
+        }
+      }
+    } catch (err) {
+      showToast(`Không thể kết nối API: ${err.message}`, 'error');
+      addLog(`❌ Lỗi mạng API: ${err.message}`, 'warn');
+    }
+  }
+
+  // Event Listeners for Quick Controls
+  btnPause?.addEventListener('click', () => sendCommand('/api/printer/actions/pause'));
+  btnResume?.addEventListener('click', () => sendCommand('/api/printer/actions/resume'));
+  btnStop?.addEventListener('click', () => {
+    if (confirm('Bạn có chắc chắn muốn HỦY tác vụ in hiện tại?')) {
+      sendCommand('/api/printer/actions/stop');
+    }
+  });
+
+  // Temperature Controls
+  btnSetNozzle?.addEventListener('click', () => {
+    const val = Number(nozzleInput.value);
+    if (!isNaN(val)) sendCommand('/api/printer/temperature/nozzle', 'POST', { target: val });
+  });
+
+  btnSetBed?.addEventListener('click', () => {
+    const val = Number(bedInput.value);
+    if (!isNaN(val)) sendCommand('/api/printer/temperature/bed', 'POST', { target: val });
+  });
+
+  document.querySelectorAll('.preset-btn').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const type = btn.getAttribute('data-type');
+      const val = Number(btn.getAttribute('data-val'));
+      if (type === 'nozzle') sendCommand('/api/printer/temperature/nozzle', 'POST', { target: val });
+      if (type === 'bed') sendCommand('/api/printer/temperature/bed', 'POST', { target: val });
+    });
+  });
+
+  // Fan Controls
+  document.querySelectorAll('.btn-fan-set').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const fanType = btn.getAttribute('data-fan');
+      let slider = null;
+      if (fanType === 'part') slider = sliderPartFan;
+      if (fanType === 'aux') slider = sliderAuxFan;
+      if (fanType === 'chamber') slider = sliderChamberFan;
+
+      if (slider) {
+        sendCommand(`/api/printer/fans/${fanType}`, 'POST', { speed: Number(slider.value) });
+      }
+    });
+  });
+
+  // Camera Info
   async function initCameraInfo() {
     try {
       const res = await fetch('/api/camera/info');
       if (res.ok) {
-        const info = await res.json();
-        if (camRtspUrl && info.rtspsUrl322) {
-          camRtspUrl.textContent = `RTSPS: ${info.rtspsUrl322}`;
+        const data = await res.json();
+        if (data.rtspUrl) {
+          camRtspUrl.textContent = `RTSPS: ${data.rtspUrl}`;
         }
       }
     } catch (err) {
@@ -194,18 +293,33 @@
     }
   }
 
-  // REST API Fallback Polling
-  async function fetchPrinterStatus() {
+  // Capability Registry Explorer Modal
+  openCapModalBtn?.addEventListener('click', async () => {
+    capModal.classList.add('open');
+    capListContainer.innerHTML = '<div class="loading-spinner">Đang tải danh sách capabilities...</div>';
+
     try {
-      const res = await fetch('/api/printer');
+      const res = await fetch('/api/capabilities');
       if (res.ok) {
         const data = await res.json();
-        updateDashboardUI(data);
+        capListContainer.innerHTML = (data.capabilities || []).map((cap) => `
+          <div class="cap-item">
+            <div>
+              <strong>${cap.name}</strong> (${cap.id})
+              <div style="font-size: 0.78rem; color: #9ca3af;">${cap.description || ''}</div>
+            </div>
+            <span class="cap-status-pill ${cap.status.toLowerCase()}">${cap.status}</span>
+          </div>
+        `).join('');
       }
     } catch (err) {
-      console.warn('REST API poll failed:', err);
+      capListContainer.innerHTML = `<div class="error">Lỗi khi tải capabilities: ${err.message}</div>`;
     }
-  }
+  });
+
+  closeCapModalBtn?.addEventListener('click', () => {
+    capModal.classList.remove('open');
+  });
 
   // WebSocket Setup
   function connectWebSocket() {
@@ -251,10 +365,10 @@
           case 'printer.temperature': {
             if (message.data) {
               if (message.data.nozzle && message.data.nozzle.current !== null) {
-                nozzleCurText.textContent = `${message.data.nozzle.current}°C`;
+                nozzleCurText.textContent = `${message.data.nozzle.current}`;
               }
               if (message.data.bed && message.data.bed.current !== null) {
-                bedCurText.textContent = `${message.data.bed.current}°C`;
+                bedCurText.textContent = `${message.data.bed.current}`;
               }
             }
             break;
@@ -294,16 +408,11 @@
       }
     };
 
-    ws.onerror = (err) => {
-      console.error('WS Error:', err);
-    };
-
     ws.onclose = () => {
       wsDot.className = 'status-dot offline';
       wsStatusText.textContent = 'WS Disconnected';
       addLog('WebSocket mất kết nối. Đang thử lại sau 3s...', 'warn');
 
-      // Schedule reconnect
       if (!wsReconnectTimer) {
         wsReconnectTimer = setTimeout(connectWebSocket, 3000);
       }
@@ -311,18 +420,14 @@
   }
 
   // Init
-  addLog('Đang khởi tạo kết nối Gateway Web Dashboard & Camera...', 'info');
+  addLog('Khởi tạo giao diện Gateway Dashboard & Camera...', 'info');
   connectWebSocket();
-  fetchPrinterStatus();
   initCameraInfo();
 
-  // Periodically refresh camera snapshot (2s)
+  // Refresh camera snapshot (2s)
   setInterval(() => {
-    if (cameraStreamImg) {
-      cameraStreamImg.src = `/api/camera/snapshot?t=${Date.now()}`;
+    if (cameraImg) {
+      cameraImg.src = `/api/camera/snapshot?t=${Date.now()}`;
     }
   }, 2000);
-
-  // Fallback Polling every 5 seconds in case WS drops
-  pollTimer = setInterval(fetchPrinterStatus, 5000);
-})();
+});

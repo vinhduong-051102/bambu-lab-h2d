@@ -3,8 +3,8 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Bambu Lab H2D Gateway - Real-time Dashboard & Camera</title>
-  <meta name="description" content="Local LAN Gateway, Real-time Dashboard & Live Camera Stream for Bambu Lab H2D 3D Printer">
+  <title>Bambu Lab H2D Gateway - Command & Telemetry Dashboard</title>
+  <meta name="description" content="Local LAN Gateway, Real-time Dashboard, Control Plane & Live Camera Stream for Bambu Lab H2D 3D Printer">
   <!-- Google Fonts -->
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -25,11 +25,22 @@
         </div>
         <div class="brand-title">
           <h1>Bambu Lab H2D <span>Gateway</span></h1>
-          <span class="sub-badge" id="serialBadge">Serial: Offline</span>
+          <div class="header-badges">
+            <span class="sub-badge" id="serialBadge">Serial: Offline</span>
+            <span class="mode-badge safety-mode" id="realPrinterBadge">Safety Mode (Read-Only)</span>
+          </div>
         </div>
       </div>
 
       <div class="status-pills">
+        <button class="btn-cap-modal" id="openCapModalBtn">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <rect x="2" y="3" width="20" height="14" rx="2" ry="2"></rect>
+            <line x1="8" y1="21" x2="16" y2="21"></line>
+            <line x1="12" y1="17" x2="12" y2="21"></line>
+          </svg>
+          Capabilities
+        </button>
         <div class="status-pill" id="printerPill">
           <span class="status-dot offline" id="printerDot"></span>
           <span class="status-text" id="printerStatusText">Offline</span>
@@ -40,6 +51,38 @@
         </div>
       </div>
     </header>
+
+    <!-- Control Plane Quick Bar -->
+    <section class="control-quick-bar">
+      <div class="control-title">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <circle cx="12" cy="12" r="10"></circle>
+          <polygon points="10 8 16 12 10 16 10 8"></polygon>
+        </svg>
+        <span>Điều Khiển Máy In</span>
+      </div>
+      <div class="control-actions">
+        <button class="btn-ctrl btn-pause" id="btnPause" title="Tạm dừng in (Pause)">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <rect x="6" y="4" width="4" height="16"></rect>
+            <rect x="14" y="4" width="4" height="16"></rect>
+          </svg>
+          Tạm Dừng
+        </button>
+        <button class="btn-ctrl btn-resume" id="btnResume" title="Tiếp tục in (Resume)">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <polygon points="5 3 19 12 5 21 5 3"></polygon>
+          </svg>
+          Tiếp Tục
+        </button>
+        <button class="btn-ctrl btn-stop" id="btnStop" title="Hủy tác vụ in (Stop)">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <rect x="4" y="4" width="16" height="16" rx="2"></rect>
+          </svg>
+          Hủy In
+        </button>
+      </div>
+    </section>
 
     <!-- Main Grid Content -->
     <main class="dashboard-grid">
@@ -91,20 +134,20 @@
         </div>
       </section>
 
-      <!-- Thermal Sensors Card -->
+      <!-- Thermal Control Card -->
       <section class="card temp-card">
         <div class="card-header">
           <div class="header-title">
             <svg class="icon temp-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
               <path d="M14 14.76V3.5a2.5 2.5 0 0 0-5 0v11.26a4.5 4.5 0 1 0 5 0z"></path>
             </svg>
-            <h2>Nhiệt Độ (Thermal Control)</h2>
+            <h2>Điều Chỉnh Nhiệt Độ</h2>
           </div>
         </div>
 
         <div class="temp-gauge-container">
-          <!-- Nozzle Temp -->
-          <div class="temp-gauge-item">
+          <!-- Nozzle Temp Control -->
+          <div class="temp-control-group">
             <div class="gauge-head">
               <span class="gauge-title">🔥 Đầu Phun (Hotend)</span>
               <span class="gauge-readout">
@@ -115,10 +158,20 @@
             <div class="bar-container">
               <div class="bar-fill hotend-bar" id="nozzleBar" style="width: 0%"></div>
             </div>
+            <div class="temp-input-row">
+              <input type="number" id="nozzleInput" min="0" max="300" placeholder="220" class="temp-input" />
+              <button class="btn-set-temp" id="btnSetNozzle">Đặt Nhiệt</button>
+              <div class="preset-pills">
+                <button class="preset-btn" data-type="nozzle" data-val="200">PLA 200</button>
+                <button class="preset-btn" data-type="nozzle" data-val="240">PETG 240</button>
+                <button class="preset-btn" data-type="nozzle" data-val="250">ABS 250</button>
+                <button class="preset-btn off" data-type="nozzle" data-val="0">Tắt</button>
+              </div>
+            </div>
           </div>
 
-          <!-- Bed Temp -->
-          <div class="temp-gauge-item">
+          <!-- Bed Temp Control -->
+          <div class="temp-control-group">
             <div class="gauge-head">
               <span class="gauge-title">♨️ Bàn In (Heatbed)</span>
               <span class="gauge-readout">
@@ -128,6 +181,16 @@
             </div>
             <div class="bar-container">
               <div class="bar-fill bed-bar" id="bedBar" style="width: 0%"></div>
+            </div>
+            <div class="temp-input-row">
+              <input type="number" id="bedInput" min="0" max="120" placeholder="60" class="temp-input" />
+              <button class="btn-set-temp" id="btnSetBed">Đặt Nhiệt</button>
+              <div class="preset-pills">
+                <button class="preset-btn" data-type="bed" data-val="60">PLA 60</button>
+                <button class="preset-btn" data-type="bed" data-val="80">PETG 80</button>
+                <button class="preset-btn" data-type="bed" data-val="100">ABS 100</button>
+                <button class="preset-btn off" data-type="bed" data-val="0">Tắt</button>
+              </div>
             </div>
           </div>
 
@@ -168,7 +231,7 @@
         </div>
       </section>
 
-      <!-- Cooling & Fans Card -->
+      <!-- Cooling & Fans Control Card -->
       <section class="card fan-card">
         <div class="card-header">
           <div class="header-title">
@@ -176,11 +239,12 @@
               <path d="M12 12c-2 0-4-2-4-4s2-4 4-4 4 2 4 4-2 4-4 4zm0 0c0 2 2 4 4 4s4-2 4-4-2-4-4-4-4 2-4 4zm0 0c-2 0-4 2-4 4s2 4 4 4 4-2 4-4-2-4-4-4zm0 0c0-2-2-4-4-4s-4 2-4 4 2 4 4 4 4-2 4-4z"></path>
               <circle cx="12" cy="12" r="2"></circle>
             </svg>
-            <h2>Hệ Thống Quạt (Fans)</h2>
+            <h2>Điều Chỉnh Quạt (Fans)</h2>
           </div>
         </div>
 
         <div class="fan-grid">
+          <!-- Part Fan -->
           <div class="fan-box">
             <div class="fan-info">
               <span class="fan-name">Quạt Mẫu (Part Fan)</span>
@@ -189,8 +253,13 @@
             <div class="bar-container">
               <div class="bar-fill fan-bar" id="partFanBar" style="width: 0%"></div>
             </div>
+            <div class="fan-ctrl-row">
+              <input type="range" min="0" max="100" value="0" class="fan-slider" id="sliderPartFan" />
+              <button class="btn-fan-set" data-fan="part">Lưu</button>
+            </div>
           </div>
 
+          <!-- Aux Fan -->
           <div class="fan-box">
             <div class="fan-info">
               <span class="fan-name">Quạt Phụ (Aux Fan)</span>
@@ -199,8 +268,13 @@
             <div class="bar-container">
               <div class="bar-fill fan-bar" id="auxFanBar" style="width: 0%"></div>
             </div>
+            <div class="fan-ctrl-row">
+              <input type="range" min="0" max="100" value="0" class="fan-slider" id="sliderAuxFan" />
+              <button class="btn-fan-set" data-fan="aux">Lưu</button>
+            </div>
           </div>
 
+          <!-- Chamber Fan -->
           <div class="fan-box">
             <div class="fan-info">
               <span class="fan-name">Quạt Buồng (Chamber Fan)</span>
@@ -208,6 +282,10 @@
             </div>
             <div class="bar-container">
               <div class="bar-fill fan-bar" id="chamberFanBar" style="width: 0%"></div>
+            </div>
+            <div class="fan-ctrl-row">
+              <input type="range" min="0" max="100" value="0" class="fan-slider" id="sliderChamberFan" />
+              <button class="btn-fan-set" data-fan="chamber">Lưu</button>
             </div>
           </div>
         </div>
@@ -230,7 +308,7 @@
         </div>
       </section>
 
-      <!-- System Links & Logs Console Card -->
+      <!-- Event Stream & Audit Log Console Card -->
       <section class="card console-card">
         <div class="card-header">
           <div class="header-title">
@@ -238,11 +316,11 @@
               <polyline points="4 17 10 11 4 5"></polyline>
               <line x1="12" y1="19" x2="20" y2="19"></line>
             </svg>
-            <h2>Real-Time Event Stream</h2>
+            <h2>Console Log & Command Audit</h2>
           </div>
           <div class="quick-links">
-            <a href="/api/printer" target="_blank" class="api-link">GET /api/printer</a>
-            <a href="/health" target="_blank" class="api-link">GET /health</a>
+            <a href="/api/commands" target="_blank" class="api-link">GET /api/commands</a>
+            <a href="/api/capabilities" target="_blank" class="api-link">GET /api/capabilities</a>
           </div>
         </div>
 
@@ -253,11 +331,31 @@
 
     </main>
 
+    <!-- Footer -->
     <footer class="app-footer">
-      <span>Bambu Lab H2D Gateway &bull; Powered by Node.js, Fastify & MQTT TLS</span>
+      <span>Bambu Lab H2D Gateway &bull; Enterprise Local Bridge</span>
       <span id="lastUpdateText">Cập nhật lần cuối: Chưa có dữ liệu</span>
     </footer>
   </div>
+
+  <!-- Capabilities Registry Modal -->
+  <div class="modal-backdrop" id="capModal">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h3><span class="modal-icon">⚙️</span> Capability Registry Explorer</h3>
+        <button class="btn-close-modal" id="closeCapModalBtn">&times;</button>
+      </div>
+      <div class="modal-body">
+        <p class="modal-desc">Danh sách tất cả các tính năng và trạng thái hỗ trợ thực tế của máy in Bambu Lab H2D:</p>
+        <div class="cap-list" id="capListContainer">
+          <div class="loading-spinner">Đang tải capabilities...</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Toast Notification -->
+  <div class="toast-container" id="toastContainer"></div>
 
   <script src="/app.js"></script>
 </body>
