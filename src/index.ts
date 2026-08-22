@@ -28,8 +28,11 @@ Printer:
 MQTT:
   Status: connecting...
 
-HTTP:
+Web Dashboard:
   http://${env.HTTP_HOST}:${env.HTTP_PORT}
+
+REST API:
+  http://${env.HTTP_HOST}:${env.HTTP_PORT}/api/printer
 
 WebSocket:
   ws://${env.HTTP_HOST}:${env.HTTP_PORT}/ws

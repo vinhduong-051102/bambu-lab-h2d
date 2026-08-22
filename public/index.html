@@ -1,0 +1,239 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Bambu Lab H2D Gateway - Real-time Dashboard</title>
+  <meta name="description" content="Local LAN Gateway & Real-time Dashboard for Bambu Lab H2D 3D Printer">
+  <!-- Google Fonts -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&family=Outfit:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <div class="app-container">
+    <!-- Top Navigation Header -->
+    <header class="header-nav">
+      <div class="brand-section">
+        <div class="logo-icon">
+          <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"></path>
+            <polyline points="3.27 6.96 12 12.01 20.73 6.96"></polyline>
+            <line x1="12" y1="22.08" x2="12" y2="12"></line>
+          </svg>
+        </div>
+        <div class="brand-title">
+          <h1>Bambu Lab H2D <span>Gateway</span></h1>
+          <span class="sub-badge" id="serialBadge">Serial: Offline</span>
+        </div>
+      </div>
+
+      <div class="status-pills">
+        <div class="status-pill" id="printerPill">
+          <span class="status-dot offline" id="printerDot"></span>
+          <span class="status-text" id="printerStatusText">Offline</span>
+        </div>
+        <div class="status-pill" id="wsPill">
+          <span class="status-dot connecting" id="wsDot"></span>
+          <span class="status-text" id="wsStatusText">WS Connecting...</span>
+        </div>
+      </div>
+    </header>
+
+    <!-- Main Grid Content -->
+    <main class="dashboard-grid">
+
+      <!-- Hero Card: Active Job & Progress -->
+      <section class="card job-hero-card">
+        <div class="card-header">
+          <div class="header-title">
+            <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <polygon points="12 2 2 7 12 12 22 7 12 2"></polygon>
+              <polyline points="2 17 12 22 22 17"></polyline>
+              <polyline points="2 12 12 17 22 12"></polyline>
+            </svg>
+            <h2>Trạng Thái In Real-Time</h2>
+          </div>
+          <span class="badge state-badge unknown" id="jobStateBadge">UNKNOWN</span>
+        </div>
+
+        <div class="job-body">
+          <div class="progress-ring-container">
+            <svg class="progress-ring" width="180" height="180">
+              <circle class="ring-bg" cx="90" cy="90" r="76" />
+              <circle class="ring-progress" id="progressRing" cx="90" cy="90" r="76" />
+            </svg>
+            <div class="progress-overlay">
+              <span class="percentage" id="progressVal">0%</span>
+              <span class="progress-label">Tiến Độ</span>
+            </div>
+          </div>
+
+          <div class="job-details">
+            <div class="job-filename">
+              <span class="label">File Đang In</span>
+              <span class="value filename-text" id="jobNameText">Chưa có tác vụ</span>
+            </div>
+
+            <div class="job-metrics-grid">
+              <div class="metric-box">
+                <span class="metric-label">Lớp in (Layer)</span>
+                <span class="metric-value" id="layersText">0 / 0</span>
+              </div>
+
+              <div class="metric-box">
+                <span class="metric-label">Thời gian còn lại</span>
+                <span class="metric-value" id="remainingTimeText">--:--</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- Thermal Sensors Card -->
+      <section class="card temp-card">
+        <div class="card-header">
+          <div class="header-title">
+            <svg class="icon temp-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M14 14.76V3.5a2.5 2.5 0 0 0-5 0v11.26a4.5 4.5 0 1 0 5 0z"></path>
+            </svg>
+            <h2>Nhiệt Độ (Thermal Control)</h2>
+          </div>
+        </div>
+
+        <div class="temp-gauge-container">
+          <!-- Nozzle Temp -->
+          <div class="temp-gauge-item">
+            <div class="gauge-head">
+              <span class="gauge-title">🔥 Đầu Phun (Hotend)</span>
+              <span class="gauge-readout">
+                <strong id="nozzleCurr">0</strong><span class="unit">°C</span>
+                <small id="nozzleTarget">/ 0°C</small>
+              </span>
+            </div>
+            <div class="bar-container">
+              <div class="bar-fill hotend-bar" id="nozzleBar" style="width: 0%"></div>
+            </div>
+          </div>
+
+          <!-- Bed Temp -->
+          <div class="temp-gauge-item">
+            <div class="gauge-head">
+              <span class="gauge-title">♨️ Bàn In (Heatbed)</span>
+              <span class="gauge-readout">
+                <strong id="bedCurr">0</strong><span class="unit">°C</span>
+                <small id="bedTarget">/ 0°C</small>
+              </span>
+            </div>
+            <div class="bar-container">
+              <div class="bar-fill bed-bar" id="bedBar" style="width: 0%"></div>
+            </div>
+          </div>
+
+          <!-- Chamber Temp -->
+          <div class="temp-gauge-item chamber-item">
+            <div class="gauge-head">
+              <span class="gauge-title">🌡️ Buồng In (Chamber)</span>
+              <span class="gauge-readout">
+                <strong id="chamberCurr">--</strong><span class="unit">°C</span>
+              </span>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- Cooling & Fans Card -->
+      <section class="card fan-card">
+        <div class="card-header">
+          <div class="header-title">
+            <svg class="icon fan-svg-icon" id="mainFanIcon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M12 12c-2 0-4-2-4-4s2-4 4-4 4 2 4 4-2 4-4 4zm0 0c0 2 2 4 4 4s4-2 4-4-2-4-4-4-4 2-4 4zm0 0c-2 0-4 2-4 4s2 4 4 4 4-2 4-4-2-4-4-4zm0 0c0-2-2-4-4-4s-4 2-4 4 2 4 4 4 4-2 4-4z"></path>
+              <circle cx="12" cy="12" r="2"></circle>
+            </svg>
+            <h2>Hệ Thống Quạt (Fans)</h2>
+          </div>
+        </div>
+
+        <div class="fan-grid">
+          <div class="fan-box">
+            <div class="fan-info">
+              <span class="fan-name">Quạt Mẫu (Part Fan)</span>
+              <span class="fan-pct" id="partFanPct">0%</span>
+            </div>
+            <div class="bar-container">
+              <div class="bar-fill fan-bar" id="partFanBar" style="width: 0%"></div>
+            </div>
+          </div>
+
+          <div class="fan-box">
+            <div class="fan-info">
+              <span class="fan-name">Quạt Phụ (Aux Fan)</span>
+              <span class="fan-pct" id="auxFanPct">0%</span>
+            </div>
+            <div class="bar-container">
+              <div class="bar-fill fan-bar" id="auxFanBar" style="width: 0%"></div>
+            </div>
+          </div>
+
+          <div class="fan-box">
+            <div class="fan-info">
+              <span class="fan-name">Quạt Buồng (Chamber Fan)</span>
+              <span class="fan-pct" id="chamberFanPct">0%</span>
+            </div>
+            <div class="bar-container">
+              <div class="bar-fill fan-bar" id="chamberFanBar" style="width: 0%"></div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- AMS System Card -->
+      <section class="card ams-card">
+        <div class="card-header">
+          <div class="header-title">
+            <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <rect x="2" y="7" width="20" height="14" rx="2" ry="2"></rect>
+              <path d="M16 21V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v16"></path>
+            </svg>
+            <h2>Hệ Thống Khay Nhựa AMS</h2>
+          </div>
+        </div>
+
+        <div class="ams-container" id="amsContainer">
+          <div class="empty-ams">Chưa có thông tin dữ liệu AMS</div>
+        </div>
+      </section>
+
+      <!-- System Links & Logs Console Card -->
+      <section class="card console-card">
+        <div class="card-header">
+          <div class="header-title">
+            <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <polyline points="4 17 10 11 4 5"></polyline>
+              <line x1="12" y1="19" x2="20" y2="19"></line>
+            </svg>
+            <h2>Real-Time Event Stream</h2>
+          </div>
+          <div class="quick-links">
+            <a href="/api/printer" target="_blank" class="api-link">GET /api/printer</a>
+            <a href="/health" target="_blank" class="api-link">GET /health</a>
+          </div>
+        </div>
+
+        <div class="console-body" id="consoleLogs">
+          <div class="log-line info">[System] Đã kết nối giao diện Dashboard. Đang chờ dữ liệu...</div>
+        </div>
+      </section>
+
+    </main>
+
+    <footer class="app-footer">
+      <span>Bambu Lab H2D Gateway &bull; Powered by Node.js, Fastify & MQTT TLS</span>
+      <span id="lastUpdateText">Cập nhật lần cuối: Chưa có dữ liệu</span>
+    </footer>
+  </div>
+
+  <script src="/app.js"></script>
+</body>
+</html>
