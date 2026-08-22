@@ -41,19 +41,21 @@ describe('BambuMessageParser & Temperature Discovery - H2D RAW Telemetry Fixture
     expect(result.temperatures?.nozzle.source).toBe('print.nozzle_temper');
     expect(result.temperatures?.nozzle.confidence).toBe('POSSIBLE');
 
-    // 2. HARDWARE NOZZLES ARRAY (current = null, temperatureConfidence = UNKNOWN)
+    // 2. HARDWARE NOZZLES ARRAY (using extruder temp fallback)
     expect(result.temperatures?.nozzles).toBeDefined();
     expect(result.temperatures?.nozzles.length).toBe(2);
 
     expect(result.temperatures?.nozzles[0].id).toBe(0);
     expect(result.temperatures?.nozzles[1].id).toBe(1);
 
-    expect(result.temperatures?.nozzles[0].current).toBeNull();
-    expect(result.temperatures?.nozzles[0].temperatureConfidence).toBe('UNKNOWN');
+    expect(result.temperatures?.nozzles[0].current).toBe(36);
+    expect(result.temperatures?.nozzles[0].temperatureConfidence).toBe('POSSIBLE');
+    expect(result.temperatures?.nozzles[0].temperatureSource).toBe('print.extruder.info[0].temp');
     expect(result.temperatures?.nozzles[0].tm).toBe(0);
 
-    expect(result.temperatures?.nozzles[1].current).toBeNull();
-    expect(result.temperatures?.nozzles[1].temperatureConfidence).toBe('UNKNOWN');
+    expect(result.temperatures?.nozzles[1].current).toBe(36);
+    expect(result.temperatures?.nozzles[1].temperatureConfidence).toBe('POSSIBLE');
+    expect(result.temperatures?.nozzles[1].temperatureSource).toBe('print.extruder.info[1].temp');
     expect(result.temperatures?.nozzles[1].tm).toBe(0);
 
     expect(result.temperatures?.nozzles[0].diameter).toBe(0.4);
@@ -68,7 +70,7 @@ describe('BambuMessageParser & Temperature Discovery - H2D RAW Telemetry Fixture
     expect(result.temperatures?.nozzles[0].filamentId).toBe('');
     expect(result.temperatures?.nozzles[1].filamentId).toBe('');
 
-    // 3. EXTRUDER (Separated from nozzle temp)
+    // 3. EXTRUDER (Extruder telemetry)
     expect(result.extruders).toBeDefined();
     expect(result.extruders?.length).toBe(2);
 

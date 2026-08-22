@@ -54,10 +54,10 @@ describe('End-to-End Pipeline Data Flow Debug Test', () => {
     expect(snapshot.parsed.temperatures?.nozzle.activeNozzleId).toBe(0);
     expect(snapshot.parsed.temperatures?.nozzle.confidence).toBe('POSSIBLE');
     expect(snapshot.parsed.temperatures?.nozzles).toHaveLength(2);
-    expect(snapshot.parsed.temperatures?.nozzles[0].current).toBeNull();
-    expect(snapshot.parsed.temperatures?.nozzles[0].temperatureConfidence).toBe('UNKNOWN');
-    expect(snapshot.parsed.temperatures?.nozzles[1].current).toBeNull();
-    expect(snapshot.parsed.temperatures?.nozzles[1].temperatureConfidence).toBe('UNKNOWN');
+    expect(snapshot.parsed.temperatures?.nozzles[0].current).toBe(36);
+    expect(snapshot.parsed.temperatures?.nozzles[0].temperatureConfidence).toBe('POSSIBLE');
+    expect(snapshot.parsed.temperatures?.nozzles[1].current).toBe(36);
+    expect(snapshot.parsed.temperatures?.nozzles[1].temperatureConfidence).toBe('POSSIBLE');
     expect(snapshot.parsed.extruders).toHaveLength(2);
     expect(snapshot.parsed.extruders?.[0].temp).toBe(36);
     expect(snapshot.parsed.extruders?.[1].temp).toBe(36);
@@ -87,8 +87,8 @@ describe('End-to-End Pipeline Data Flow Debug Test', () => {
     expect(apiBody.temperatures.nozzle.target).toBe(0);
     expect(apiBody.temperatures.nozzle.activeNozzleId).toBe(0);
     expect(apiBody.temperatures.nozzles).toHaveLength(2);
-    expect(apiBody.temperatures.nozzles[0].current).toBeNull();
-    expect(apiBody.temperatures.nozzles[1].current).toBeNull();
+    expect(apiBody.temperatures.nozzles[0].current).toBe(36);
+    expect(apiBody.temperatures.nozzles[1].current).toBe(36);
     expect(apiBody.extruders).toHaveLength(2);
     expect(apiBody.extruders[0].temp).toBe(36);
     expect(apiBody.extruders[1].temp).toBe(36);
@@ -105,8 +105,8 @@ describe('End-to-End Pipeline Data Flow Debug Test', () => {
     expect(diagBody.extruderCount).toBe(2);
     expect(diagBody.activeNozzleId).toBe(0);
     expect(diagBody.machineNozzleTemperature.current).toBe(36);
-    expect(diagBody.nozzles[0].current).toBeNull();
-    expect(diagBody.nozzles[1].current).toBeNull();
+    expect(diagBody.nozzles[0].current).toBe(36);
+    expect(diagBody.nozzles[1].current).toBe(36);
     expect(diagBody.extruders[0].temp).toBe(36);
     expect(diagBody.extruders[1].temp).toBe(36);
   });

@@ -124,7 +124,7 @@ export class BambuMessageParser {
       nozzleTargetTemp = parseNum(print.nozzle_target_temper);
     }
 
-    // Determine activeNozzleId exclusively from src_id or tar_id (no ext_tool fallback)
+    // Determine activeNozzleId exclusively from src_id or tar_id
     const activeNozzleId = parseId(print.nozzle?.src_id) ?? parseId(print.nozzle?.tar_id) ?? null;
 
     const primaryNozzleTemp: PrimaryNozzleTempState = {
@@ -149,10 +149,27 @@ export class BambuMessageParser {
           const itemTemp = item?.temp !== undefined ? parseNum(item?.temp) : null;
           const itemTarget = item?.target_temp !== undefined ? parseNum(item?.target_temp) : null;
 
+          // Extruder temp fallback per user request ("Dung temp trong extruder de lam nhiet do dau in")
+          const extItem = Array.isArray(print.extruder?.info) ? print.extruder.info[idx] : undefined;
+          const extTemp = extItem?.temp !== undefined ? parseNum(extItem.temp) : null;
+          const extTarget = extItem?.htar !== undefined ? parseNum(extItem.htar) : null;
+
+          let current: number | null = itemTemp;
+          let target: number | null = itemTarget;
+          let tempSource: string | null = itemTemp !== null ? `print.nozzle.info[${idx}].temp` : null;
+          let tempConfidence: 'CONFIRMED' | 'POSSIBLE' | 'UNKNOWN' = itemTemp !== null ? 'CONFIRMED' : 'UNKNOWN';
+
+          if (current === null && extTemp !== null) {
+            current = extTemp;
+            target = target !== null ? target : extTarget;
+            tempSource = `print.extruder.info[${idx}].temp`;
+            tempConfidence = 'POSSIBLE';
+          }
+
           nozzles.push({
             id: item?.id !== undefined ? item.id : idx,
-            current: itemTemp,
-            target: itemTarget,
+            current,
+            target,
             diameter: parseNum(item?.diameter),
             type: item?.type !== undefined ? String(item.type) : null,
             serial: item?.sn !== undefined ? String(item.sn) : (item?.serial !== undefined ? String(item.serial) : null),
@@ -160,11 +177,11 @@ export class BambuMessageParser {
             state: item?.stat !== undefined ? item.stat : (item?.state !== undefined ? item.state : null),
             wear: parseNum(item?.wear),
             tm: parseNum(item?.tm),
-            temperatureSource: itemTemp !== null ? `print.nozzle.info[${idx}].temp` : null,
-            temperatureConfidence: itemTemp !== null ? 'CONFIRMED' : 'UNKNOWN',
+            temperatureSource: tempSource,
+            temperatureConfidence: tempConfidence,
             metadata: {
-              source: `print.nozzle.info[${idx}]`,
-              confidence: 'CONFIRMED',
+              source: tempSource || `print.nozzle.info[${idx}]`,
+              confidence: tempConfidence,
               updatedAt: now,
             },
           });
@@ -172,7 +189,7 @@ export class BambuMessageParser {
       }
     }
 
-    // 5. Extruders (print.extruder.info[]) - Extruder Telemetry (CONFIRMED for Extruder, NOT Nozzle)
+    // 5. Extruders (print.extruder.info[]) - Extruder Telemetry
     const extruders: ExtruderState[] = [];
     if (print.extruder !== undefined) {
       processedKeys.add('extruder');
