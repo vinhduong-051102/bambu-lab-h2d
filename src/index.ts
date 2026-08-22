@@ -106,6 +106,10 @@ WebSocket:
     const currentState = stateStore.getState();
     const nextState = normalizePrinterState(currentState, rawPayload);
     stateStore.updateState(nextState);
+
+    if (nextState.ipcam?.rtspUrl) {
+      cameraService.updateRtspUrl(nextState.ipcam.rtspUrl);
+    }
   });
 
   // Attempt connection to printer

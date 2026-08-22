@@ -99,6 +99,17 @@ export interface FanState {
   metadata?: FieldMetadata;
 }
 
+export interface IPCamData {
+  ipcamDev?: string;
+  ipcamRecord?: string;
+  resolution?: string;
+  rtspUrl?: string;
+  brtcService?: string;
+  agoraService?: string;
+  tutkServer?: string;
+  metadata?: FieldMetadata;
+}
+
 export interface PrinterState {
   serial: string;
   online: boolean;
@@ -124,6 +135,7 @@ export interface PrinterState {
   hmsErrors?: HMSError[];
   amsActiveTrayId?: number | null;
   ams?: AMSUnit[];
+  ipcam?: IPCamData;
   rawExtensions?: Record<string, unknown>;
   lastMessageAt: string | null;
   updatedAt: string | null;

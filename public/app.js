@@ -247,7 +247,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
       if (chamber !== undefined && chamber !== null) {
         const chamberVal = typeof chamber === 'object' ? chamber.current : chamber;
-        if (chamberCurText) chamberCurText.textContent = chamberVal !== null && chamberVal !== undefined ? `${chamberVal}°C` : '--';
+        if (chamberCurText) chamberCurText.textContent = chamberVal !== null && chamberVal !== undefined ? chamberVal : '--';
       }
     }
 
@@ -299,12 +299,17 @@ document.addEventListener('DOMContentLoaded', () => {
       const traysList = unit.trays || unit.filaments || [];
       const filamentsHtml = traysList.map((fil) => {
         const hexColor = formatHexColor(fil.color || fil.rawColor);
-        const rem = fil.remain !== undefined && fil.remain !== null ? fil.remain : fil.remainingPercentage;
+        const rawRem = fil.remain !== undefined && fil.remain !== null ? fil.remain : fil.remainingPercentage;
+        let remText = '--';
+        if (rawRem !== null && rawRem !== undefined) {
+          const numRem = Number(rawRem);
+          remText = !isNaN(numRem) ? `${Math.max(0, numRem)}%` : `${rawRem}%`;
+        }
         return `
           <div class="tray-item">
             <div class="color-dot" style="background-color: ${hexColor};" title="Màu: ${hexColor}"></div>
             <span class="tray-type">${fil.type || 'N/A'}</span>
-            <span class="tray-rem">${rem !== null && rem !== undefined ? rem + '%' : '--'}</span>
+            <span class="tray-rem">${remText}</span>
           </div>
         `;
       }).join('');
@@ -398,20 +403,106 @@ document.addEventListener('DOMContentLoaded', () => {
     });
   });
 
-  // Camera Info
-  async function initCameraInfo() {
+  // Camera Info & Controls
+  const btnCopyRtsp = document.getElementById('btnCopyRtsp');
+  const btnReconnectCam = document.getElementById('btnReconnectCam');
+  const camLiveIndicator = document.getElementById('camLiveIndicator');
+  let currentRtspUrl = '';
+
+  // Camera Telemetry & Status Elements
+  const camStatConnected = document.getElementById('camStatConnected');
+  const camStatSource = document.getElementById('camStatSource');
+  const camStatRes = document.getElementById('camStatRes');
+  const camStatFps = document.getElementById('camStatFps');
+  const camStatAge = document.getElementById('camStatAge');
+  const camErrorBanner = document.getElementById('camErrorBanner');
+
+  async function fetchCameraStatus() {
     try {
-      const res = await fetch('/api/camera/info');
+      const res = await fetch('/api/camera/status');
       if (res.ok) {
         const data = await res.json();
-        if (data.rtspUrl) {
-          camRtspUrl.textContent = `RTSPS: ${data.rtspUrl}`;
+        currentRtspUrl = data.rtspUrl || '';
+
+        if (camRtspUrl) {
+          camRtspUrl.textContent = `RTSPS: ${data.rtspUrl || 'Unknown'}`;
+        }
+
+        if (camStatConnected) {
+          if (data.connected) {
+            camStatConnected.textContent = '● Connected';
+            camStatConnected.style.color = '#10b981';
+          } else {
+            camStatConnected.textContent = '❌ Disconnected';
+            camStatConnected.style.color = '#ef4444';
+          }
+        }
+
+        if (camLiveIndicator) {
+          if (data.connected && data.framesReceived > 0) {
+            camLiveIndicator.textContent = `● LIVE (${(data.source || 'RTSP').toUpperCase()})`;
+            camLiveIndicator.style.color = '#10b981';
+          } else {
+            camLiveIndicator.textContent = '❌ CAMERA DISCONNECTED';
+            camLiveIndicator.style.color = '#ef4444';
+          }
+        }
+
+        if (camStatSource) camStatSource.textContent = (data.source || 'none').toUpperCase();
+        if (camStatRes) {
+          camStatRes.textContent = data.frameWidth && data.frameHeight ? `${data.frameWidth}x${data.frameHeight}` : '1680x1080 (RTSP)';
+        }
+        if (camStatFps) camStatFps.textContent = `${data.fps || 0}`;
+
+        if (camStatAge) {
+          if (data.lastFrameAt) {
+            const ageMs = Math.max(0, Date.now() - new Date(data.lastFrameAt).getTime());
+            camStatAge.textContent = `${ageMs}ms ago`;
+          } else {
+            camStatAge.textContent = 'No frames yet';
+          }
+        }
+
+        if (camErrorBanner) {
+          if (data.lastError) {
+            camErrorBanner.style.display = 'block';
+            camErrorBanner.textContent = `❌ Error: ${data.lastError}`;
+          } else {
+            camErrorBanner.style.display = 'none';
+          }
         }
       }
     } catch (err) {
-      console.warn('Failed to fetch camera info:', err);
+      if (camStatConnected) {
+        camStatConnected.textContent = '❌ Disconnected (API Error)';
+        camStatConnected.style.color = '#ef4444';
+      }
     }
   }
+
+  btnCopyRtsp?.addEventListener('click', () => {
+    if (!currentRtspUrl) return;
+    navigator.clipboard.writeText(currentRtspUrl).then(() => {
+      showToast('Đã copy luồng RTSPS URL vào Clipboard!', 'success');
+    }).catch(() => {
+      showToast(`RTSPS URL: ${currentRtspUrl}`, 'info');
+    });
+  });
+
+  btnReconnectCam?.addEventListener('click', async () => {
+    showToast('Đang gửi lệnh Reconnect Camera TLS 6000...', 'info');
+    try {
+      const res = await fetch('/api/camera/reconnect', { method: 'POST' });
+      const data = await res.json();
+      if (res.ok && data.success) {
+        showToast(data.message || 'Đã thử kết nối lại camera!', 'success');
+        addLog('🔄 Đã gửi lệnh reconnect Camera TLS 6000.', 'info');
+        setTimeout(initCameraInfo, 2000);
+      }
+    } catch (err) {
+      showToast(`Lỗi kết nối API: ${err.message}`, 'error');
+    }
+  });
 
   // Capability Registry Explorer Modal
   openCapModalBtn?.addEventListener('click', async () => {
@@ -439,6 +530,128 @@ document.addEventListener('DOMContentLoaded', () => {
 
   closeCapModalBtn?.addEventListener('click', () => {
     capModal.classList.remove('open');
+  });
+
+  // Full Raw Data Modal Logic
+  const btnOpenRawModal = document.getElementById('btnOpenRawModal');
+  const closeRawModalBtn = document.getElementById('closeRawModalBtn');
+  const rawModal = document.getElementById('rawModal');
+  const rawSizeBadge = document.getElementById('rawSizeBadge');
+  const rawTimeBadge = document.getElementById('rawTimeBadge');
+  const rawSearchInput = document.getElementById('rawSearchInput');
+  const btnCopyRawJson = document.getElementById('btnCopyRawJson');
+  const btnDownloadRawJson = document.getElementById('btnDownloadRawJson');
+  const btnRefreshRawModal = document.getElementById('btnRefreshRawModal');
+  const fullRawJsonViewer = document.getElementById('fullRawJsonViewer');
+  const rawTabBtns = document.querySelectorAll('.raw-tab-btn');
+
+  let currentRawData = null;
+  let activeTab = 'all';
+
+  async function loadFullRawData() {
+    if (fullRawJsonViewer) fullRawJsonViewer.textContent = 'Đang tải full raw telemetry...';
+    try {
+      const res = await fetch('/api/printer/diagnostics');
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = await res.json();
+      currentRawData = data;
+
+      const payloadStr = JSON.stringify(data.rawPayload || {});
+      const kbSize = (new Blob([payloadStr]).size / 1024).toFixed(2);
+      if (rawSizeBadge) rawSizeBadge.textContent = `Payload Size: ${kbSize} KB`;
+      if (rawTimeBadge) rawTimeBadge.textContent = `Last Updated: ${new Date().toLocaleTimeString()}`;
+
+      renderRawTabContent();
+    } catch (err) {
+      if (fullRawJsonViewer) fullRawJsonViewer.textContent = `Lỗi khi tải raw telemetry: ${err.message}`;
+    }
+  }
+
+  function renderRawTabContent() {
+    if (!currentRawData || !fullRawJsonViewer) return;
+
+    let targetObj = currentRawData;
+    if (activeTab === 'all') targetObj = currentRawData.rawPayload || currentRawData;
+    else if (activeTab === 'print') targetObj = currentRawData.rawPayload?.print || {};
+    else if (activeTab === 'candidates') targetObj = currentRawData.temperatureCandidates || [];
+    else if (activeTab === 'history') targetObj = currentRawData.historyDiffs || [];
+
+    const jsonStr = JSON.stringify(targetObj, null, 2);
+    const filter = rawSearchInput?.value.trim().toLowerCase();
+
+    if (!filter) {
+      fullRawJsonViewer.textContent = jsonStr;
+    } else {
+      const escapedFilter = filter.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      const regex = new RegExp(`(${escapedFilter})`, 'gi');
+      const safeHtml = jsonStr
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(regex, '<mark>$1</mark>');
+      fullRawJsonViewer.innerHTML = safeHtml;
+    }
+  }
+
+  btnOpenRawModal?.addEventListener('click', () => {
+    rawModal.classList.add('open');
+    loadFullRawData();
+  });
+
+  closeRawModalBtn?.addEventListener('click', () => {
+    rawModal.classList.remove('open');
+  });
+
+  rawModal?.addEventListener('click', (e) => {
+    if (e.target === rawModal) rawModal.classList.remove('open');
+  });
+
+  rawTabBtns.forEach((btn) => {
+    btn.addEventListener('click', () => {
+      rawTabBtns.forEach((b) => b.classList.remove('active'));
+      btn.classList.add('active');
+      activeTab = btn.getAttribute('data-tab') || 'all';
+      renderRawTabContent();
+    });
+  });
+
+  rawSearchInput?.addEventListener('input', () => {
+    renderRawTabContent();
+  });
+
+  btnRefreshRawModal?.addEventListener('click', () => {
+    loadFullRawData();
+  });
+
+  btnCopyRawJson?.addEventListener('click', () => {
+    if (!currentRawData) return;
+    let targetObj = currentRawData.rawPayload || currentRawData;
+    if (activeTab === 'print') targetObj = currentRawData.rawPayload?.print || {};
+    if (activeTab === 'candidates') targetObj = currentRawData.temperatureCandidates || [];
+    if (activeTab === 'history') targetObj = currentRawData.historyDiffs || [];
+
+    navigator.clipboard.writeText(JSON.stringify(targetObj, null, 2)).then(() => {
+      showToast('Đã copy dữ liệu Raw JSON vào Clipboard!', 'success');
+    }).catch((err) => {
+      showToast(`Lỗi khi copy: ${err.message}`, 'error');
+    });
+  });
+
+  btnDownloadRawJson?.addEventListener('click', () => {
+    if (!currentRawData) return;
+    let targetObj = currentRawData.rawPayload || currentRawData;
+    if (activeTab === 'print') targetObj = currentRawData.rawPayload?.print || {};
+    if (activeTab === 'candidates') targetObj = currentRawData.temperatureCandidates || [];
+    if (activeTab === 'history') targetObj = currentRawData.historyDiffs || [];
+
+    const blob = new Blob([JSON.stringify(targetObj, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `bambu-raw-${activeTab}-${Date.now()}.json`;
+    a.click();
+    URL.revokeObjectURL(url);
+    showToast('Đã tải xuống file JSON raw telemetry!', 'success');
   });
 
   // WebSocket Setup
@@ -498,7 +711,7 @@ document.addEventListener('DOMContentLoaded', () => {
               }
               if (chamber && chamberCurText) {
                 const cVal = typeof chamber === 'object' ? chamber.current : chamber;
-                if (cVal !== null && cVal !== undefined) chamberCurText.textContent = `${cVal}°C`;
+                if (cVal !== null && cVal !== undefined) chamberCurText.textContent = `${cVal}`;
               }
             }
             break;
@@ -567,12 +780,14 @@ document.addEventListener('DOMContentLoaded', () => {
   connectWebSocket();
   fetchPrinterStatus();
   fetchDiagnostics();
-  initCameraInfo();
+  fetchCameraStatus();
 
-  // Refresh camera snapshot (2s)
-  setInterval(() => {
-    if (cameraImg) {
-      cameraImg.src = `/api/camera/snapshot?t=${Date.now()}`;
-    }
-  }, 2000);
+  // Handle Camera Stream Fallback
+  if (cameraImg) {
+    cameraImg.onerror = () => {
+      setTimeout(() => {
+        if (cameraImg) cameraImg.src = `/api/camera/snapshot?t=${Date.now()}`;
+      }, 3000);
+    };
+  }
 });

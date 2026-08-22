@@ -55,9 +55,9 @@ describe('End-to-End Pipeline Data Flow Debug Test', () => {
     expect(snapshot.parsed.temperatures?.nozzle.confidence).toBe('POSSIBLE');
     expect(snapshot.parsed.temperatures?.nozzles).toHaveLength(2);
     expect(snapshot.parsed.temperatures?.nozzles[0].current).toBe(36);
-    expect(snapshot.parsed.temperatures?.nozzles[0].temperatureConfidence).toBe('POSSIBLE');
+    expect(snapshot.parsed.temperatures?.nozzles[0].temperatureConfidence).toBe('CONFIRMED');
     expect(snapshot.parsed.temperatures?.nozzles[1].current).toBe(36);
-    expect(snapshot.parsed.temperatures?.nozzles[1].temperatureConfidence).toBe('POSSIBLE');
+    expect(snapshot.parsed.temperatures?.nozzles[1].temperatureConfidence).toBe('CONFIRMED');
     expect(snapshot.parsed.extruders).toHaveLength(2);
     expect(snapshot.parsed.extruders?.[0].temp).toBe(36);
     expect(snapshot.parsed.extruders?.[1].temp).toBe(36);

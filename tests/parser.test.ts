@@ -49,12 +49,12 @@ describe('BambuMessageParser & Temperature Discovery - H2D RAW Telemetry Fixture
     expect(result.temperatures?.nozzles[1].id).toBe(1);
 
     expect(result.temperatures?.nozzles[0].current).toBe(36);
-    expect(result.temperatures?.nozzles[0].temperatureConfidence).toBe('POSSIBLE');
+    expect(result.temperatures?.nozzles[0].temperatureConfidence).toBe('CONFIRMED');
     expect(result.temperatures?.nozzles[0].temperatureSource).toBe('print.extruder.info[0].temp');
     expect(result.temperatures?.nozzles[0].tm).toBe(0);
 
     expect(result.temperatures?.nozzles[1].current).toBe(36);
-    expect(result.temperatures?.nozzles[1].temperatureConfidence).toBe('POSSIBLE');
+    expect(result.temperatures?.nozzles[1].temperatureConfidence).toBe('CONFIRMED');
     expect(result.temperatures?.nozzles[1].temperatureSource).toBe('print.extruder.info[1].temp');
     expect(result.temperatures?.nozzles[1].tm).toBe(0);
 
@@ -104,5 +104,102 @@ describe('BambuMessageParser & Temperature Discovery - H2D RAW Telemetry Fixture
     expect(result.rawExtensions?.nozzle_target_temper).toBeUndefined();
     expect(result.rawExtensions?.gcode_state).toBeUndefined();
     expect(result.rawExtensions?.nozzle).toBeUndefined();
+  });
+
+  it('should map nozzle temperatures directly from print.extruder.info structure', () => {
+    const rawPayload = {
+      print: {
+        extruder: {
+          info: [
+            {
+              filam_bak: [],
+              hnow: 0,
+              hpre: 0,
+              htar: 0,
+              id: 0,
+              info: 1032,
+              snow: 65535,
+              spre: 65535,
+              star: 255,
+              stat: 0,
+              temp: 41,
+            },
+            {
+              filam_bak: [],
+              hnow: 1,
+              hpre: 1,
+              htar: 1,
+              id: 1,
+              info: 1048,
+              snow: 65279,
+              spre: 65279,
+              star: 65279,
+              stat: 0,
+              temp: 33,
+            },
+          ],
+          state: 2,
+        },
+      },
+    };
+
+    const parsed = BambuMessageParser.parseReport(rawPayload as any);
+
+    expect(parsed.temperatures?.nozzles).toBeDefined();
+    expect(parsed.temperatures?.nozzles).toHaveLength(2);
+
+    expect(parsed.temperatures?.nozzles[0].id).toBe(0);
+    expect(parsed.temperatures?.nozzles[0].current).toBe(41);
+    expect(parsed.temperatures?.nozzles[0].temperatureSource).toBe('print.extruder.info[0].temp');
+
+    expect(parsed.temperatures?.nozzles[1].id).toBe(1);
+    expect(parsed.temperatures?.nozzles[1].current).toBe(33);
+    expect(parsed.temperatures?.nozzles[1].temperatureSource).toBe('print.extruder.info[1].temp');
+  });
+
+  it('should filter out uint16 sentinel overflow values (65535, 65279) and keep valid temperatures', () => {
+    const rawPayload = {
+      print: {
+        extruder: {
+          info: [
+            {
+              filam_bak: [],
+              hnow: 0,
+              hpre: 0,
+              htar: 0,
+              id: 0,
+              info: 1032,
+              snow: 65535,
+              spre: 65535,
+              star: 255,
+              stat: 0,
+              temp: 220,
+            },
+            {
+              filam_bak: [],
+              hnow: 1,
+              hpre: 1,
+              htar: 1,
+              id: 1,
+              info: 1048,
+              snow: 65279,
+              spre: 65279,
+              star: 65279,
+              stat: 0,
+              temp: 65535, // Uncalibrated / disabled sensor value sent by firmware
+            },
+          ],
+          state: 2,
+        },
+      },
+    };
+
+    const parsed = BambuMessageParser.parseReport(rawPayload as any);
+
+    expect(parsed.temperatures?.nozzles[0].current).toBe(220);
+    expect(parsed.temperatures?.nozzles[0].target).toBe(0); // htar: 0 is ignored, target is valid number 0
+
+    expect(parsed.temperatures?.nozzles[1].current).toBeNull(); // 65535 filtered out to null instead of 65535°C
+    expect(parsed.temperatures?.nozzles[1].target).toBe(0); // htar: 1 is ignored instead of target = 1°C
   });
 });

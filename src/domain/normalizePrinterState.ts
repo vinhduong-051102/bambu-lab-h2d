@@ -180,6 +180,7 @@ export function normalizePrinterState(
     fan,
     hmsErrors: (parsed.hmsErrors && parsed.hmsErrors.length > 0) ? parsed.hmsErrors : currentState.hmsErrors,
     ams: mergedAms,
+    ipcam: parsed.ipcam ? { ...currentState.ipcam, ...parsed.ipcam } : currentState.ipcam,
     rawExtensions: parsed.rawExtensions
       ? { ...currentState.rawExtensions, ...parsed.rawExtensions }
       : currentState.rawExtensions,

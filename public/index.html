@@ -241,17 +241,39 @@
             <h2>Camera Live Stream</h2>
           </div>
           <div class="quick-links">
-            <a href="/api/camera/snapshot" target="_blank" class="api-link">GET /api/camera/snapshot</a>
-            <a href="/api/camera/info" target="_blank" class="api-link">GET /api/camera/info</a>
+            <button id="btnCopyRtsp" class="btn-copy-rtsp" title="Copy RTSPS URL cho VLC / Home Assistant">📋 Copy RTSP Link</button>
+            <button id="btnReconnectCam" class="btn-reconnect-cam" title="Thử kết nối lại camera TLS 6000">🔄 Reconnect</button>
+            <a href="/api/camera/snapshot" target="_blank" class="api-link">Snapshot</a>
+            <a href="/api/camera/mjpeg" target="_blank" class="api-link">MJPEG</a>
           </div>
         </div>
 
         <div class="camera-viewport">
-          <img id="cameraStreamImg" src="/api/camera/snapshot" alt="Bambu Camera Feed" class="camera-feed-img" />
+          <img id="cameraStreamImg" src="/api/camera/mjpeg" alt="Bambu Camera Feed" class="camera-feed-img" />
           <div class="camera-overlay">
-            <span class="cam-live-indicator">● LIVE CAMERA</span>
+            <span class="cam-live-indicator" id="camLiveIndicator">● LIVE CAMERA</span>
             <span class="cam-rtsp-url" id="camRtspUrl">RTSPS: Loading...</span>
           </div>
+        </div>
+
+        <!-- Real-time Camera Telemetry & Status Bar -->
+        <div class="camera-status-bar" id="cameraStatusBar">
+          <div class="cam-stat-item"><span class="cam-stat-label">Status:</span> <span id="camStatConnected" class="cam-stat-val">Checking...</span></div>
+          <div class="cam-stat-item"><span class="cam-stat-label">Source:</span> <span id="camStatSource" class="cam-stat-val">RTSP</span></div>
+          <div class="cam-stat-item"><span class="cam-stat-label">Resolution:</span> <span id="camStatRes" class="cam-stat-val">--</span></div>
+          <div class="cam-stat-item"><span class="cam-stat-label">FPS:</span> <span id="camStatFps" class="cam-stat-val">0</span></div>
+          <div class="cam-stat-item"><span class="cam-stat-label">Last Frame:</span> <span id="camStatAge" class="cam-stat-val">--</span></div>
+        </div>
+        <div class="cam-error-banner" id="camErrorBanner" style="display: none;"></div>
+
+        <!-- Camera Diagnostic & Troubleshooting Note -->
+        <div class="cam-help-box">
+          <div class="cam-help-header">💡 Hướng Dẫn Xem Camera Trực Tiếp:</div>
+          <ol class="cam-help-list">
+            <li><strong>Kiểm tra IP & Access Code:</strong> Đảm bảo <code>BAMBU_HOST</code> (IP máy in) và <code>BAMBU_ACCESS_CODE</code> trong file <code>.env</code> khớp với thông tin trên máy in.</li>
+            <li><strong>Bật LAN Liveview trên máy in:</strong> Mở màn hình máy in Bambu &rarr; Vào <strong>Settings</strong> &rarr; <strong>WLAN/Network</strong> &rarr; Bật <strong>LAN Mode Liveview: ON</strong>.</li>
+            <li><strong>Xem qua VLC / Home Assistant / OBS:</strong> Dùng luồng <code>rtsps://bblp:ACCESS_CODE@IP:322/streaming/live/1</code> (bấm nút "Copy RTSP Link" ở trên).</li>
+          </ol>
         </div>
       </section>
 
@@ -332,56 +354,6 @@
         </div>
       </section>
 
-      <!-- Protocol Diagnostics & Raw Data Explorer Card -->
-      <section class="card diag-card" style="grid-column: span 2;">
-        <div class="card-header">
-          <div class="header-title">
-            <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <circle cx="12" cy="12" r="10"></circle>
-              <line x1="12" y1="16" x2="12" y2="12"></line>
-              <line x1="12" y1="8" x2="12.01" y2="8"></line>
-            </svg>
-            <h2>Protocol Diagnostics & Raw Data Explorer</h2>
-          </div>
-          <div class="quick-links">
-            <a href="/api/printer/diagnostics" target="_blank" class="api-link">GET /api/printer/diagnostics</a>
-            <a href="/api/printer/raw" target="_blank" class="api-link">GET /api/printer/raw</a>
-          </div>
-        </div>
-
-        <div class="diag-body" style="padding: 1rem; display: flex; flex-direction: column; gap: 1rem;">
-          <!-- Diagnostics Grid -->
-          <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 1rem;">
-            <!-- Active Tool & Machine Temp -->
-            <div style="background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.08); border-radius: 8px; padding: 0.8rem;">
-              <h3 style="margin-bottom: 0.5rem; color: #38bdf8; font-size: 0.95rem;">🎯 Active Tool & Machine Temp</h3>
-              <div id="diagActiveTool" style="font-family: 'JetBrains Mono', monospace; font-size: 0.85rem; color: #cbd5e1;">Đang tải...</div>
-            </div>
-
-            <!-- Hardware Nozzles -->
-            <div style="background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.08); border-radius: 8px; padding: 0.8rem;">
-              <h3 style="margin-bottom: 0.5rem; color: #38bdf8; font-size: 0.95rem;">🔥 Hardware Nozzles (`nozzles[]`)</h3>
-              <div id="diagNozzles" style="font-family: 'JetBrains Mono', monospace; font-size: 0.85rem; color: #cbd5e1;">Đang tải...</div>
-            </div>
-
-            <!-- Extruders -->
-            <div style="background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.08); border-radius: 8px; padding: 0.8rem;">
-              <h3 style="margin-bottom: 0.5rem; color: #38bdf8; font-size: 0.95rem;">⚙️ Extruders (`extruders[]`)</h3>
-              <div id="diagExtruders" style="font-family: 'JetBrains Mono', monospace; font-size: 0.85rem; color: #cbd5e1;">Đang tải...</div>
-            </div>
-          </div>
-
-          <!-- Raw Data Explorer -->
-          <div style="background: rgba(0,0,0,0.3); border: 1px solid rgba(255,255,255,0.08); border-radius: 8px; padding: 0.8rem;">
-            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.5rem;">
-              <h3 style="color: #38bdf8; font-size: 0.95rem;">🌐 Raw Data Explorer (Unmapped Raw Payload & Extensions)</h3>
-              <button id="btnRefreshDiag" style="background: #0284c7; color: white; border: none; padding: 4px 10px; border-radius: 4px; cursor: pointer; font-size: 0.8rem;">Làm mới</button>
-            </div>
-            <pre id="diagRawJson" style="font-family: 'JetBrains Mono', monospace; font-size: 0.8rem; background: #0f172a; color: #38bdf8; padding: 0.8rem; border-radius: 6px; max-height: 250px; overflow-y: auto; white-space: pre-wrap; word-break: break-all;">Đang tải raw telemetry...</pre>
-          </div>
-        </div>
-      </section>
-
       <!-- Event Stream & Audit Log Console Card -->
       <section class="card console-card">
         <div class="card-header">
@@ -400,6 +372,59 @@
 
         <div class="console-body" id="consoleLogs">
           <div class="log-line info">[System] Đã kết nối giao diện Dashboard. Đang chờ dữ liệu...</div>
+        </div>
+      </section>
+
+      <!-- Protocol Diagnostics & Raw Data Explorer Card -->
+      <section class="card diag-card">
+        <div class="card-header">
+          <div class="header-title">
+            <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <circle cx="12" cy="12" r="10"></circle>
+              <line x1="12" y1="16" x2="12" y2="12"></line>
+              <line x1="12" y1="8" x2="12.01" y2="8"></line>
+            </svg>
+            <h2>Protocol Diagnostics & Raw Data Explorer</h2>
+          </div>
+          <div class="quick-links">
+            <a href="/api/printer/diagnostics" target="_blank" class="api-link">GET /api/printer/diagnostics</a>
+            <a href="/api/printer/raw" target="_blank" class="api-link">GET /api/printer/raw</a>
+          </div>
+        </div>
+
+        <div class="diag-body">
+          <!-- Diagnostics Grid -->
+          <div class="diag-grid">
+            <!-- Active Tool & Machine Temp -->
+            <div class="diag-box">
+              <h3 class="diag-box-title">🎯 Active Tool & Machine Temp</h3>
+              <div id="diagActiveTool" class="diag-code-content">Đang tải...</div>
+            </div>
+
+            <!-- Hardware Nozzles -->
+            <div class="diag-box">
+              <h3 class="diag-box-title">🔥 Hardware Nozzles (`nozzles[]`)</h3>
+              <div id="diagNozzles" class="diag-code-content">Đang tải...</div>
+            </div>
+
+            <!-- Extruders -->
+            <div class="diag-box">
+              <h3 class="diag-box-title">⚙️ Extruders (`extruders[]`)</h3>
+              <div id="diagExtruders" class="diag-code-content">Đang tải...</div>
+            </div>
+          </div>
+
+          <!-- Raw Data Explorer -->
+          <div class="diag-json-box">
+            <div class="diag-json-header">
+              <h3 class="diag-box-title">🌐 Raw Data Explorer (Unmapped Raw Payload & Extensions)</h3>
+              <div class="diag-actions">
+                <button id="btnOpenRawModal" class="btn-open-raw-modal">🔍 Xem Full Raw Data (Toàn Màn Hình)</button>
+                <button id="btnRefreshDiag" class="btn-refresh-diag">Làm mới</button>
+              </div>
+            </div>
+            <pre id="diagRawJson" class="diag-raw-json">Đang tải raw telemetry...</pre>
+          </div>
         </div>
       </section>
 
@@ -423,6 +448,67 @@
         <p class="modal-desc">Danh sách tất cả các tính năng và trạng thái hỗ trợ thực tế của máy in Bambu Lab H2D:</p>
         <div class="cap-list" id="capListContainer">
           <div class="loading-spinner">Đang tải capabilities...</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Full Raw Data Explorer Modal -->
+  <div class="modal-backdrop" id="rawModal">
+    <div class="raw-modal-content">
+      <div class="raw-modal-header">
+        <div class="raw-title-group">
+          <h3><span class="modal-icon">🌐</span> Full Telemetry Raw Data Viewer</h3>
+          <span class="raw-meta-badge" id="rawSizeBadge">Payload Size: 0 KB</span>
+          <span class="raw-meta-badge" id="rawTimeBadge">Last Updated: --:--:--</span>
+        </div>
+        <button class="btn-close-modal" id="closeRawModalBtn">&times;</button>
+      </div>
+
+      <div class="raw-modal-toolbar">
+        <div class="raw-search-box">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <circle cx="11" cy="11" r="8"></circle>
+            <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
+          </svg>
+          <input type="text" id="rawSearchInput" placeholder="Tìm kiếm key, value, hnow, temp..." />
+        </div>
+        <div class="raw-toolbar-actions">
+          <button class="raw-tool-btn" id="btnCopyRawJson">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
+              <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+            </svg>
+            Copy JSON
+          </button>
+          <button class="raw-tool-btn" id="btnDownloadRawJson">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+              <polyline points="7 10 12 15 17 10"></polyline>
+              <line x1="12" y1="15" x2="12" y2="3"></line>
+            </svg>
+            Tải File JSON
+          </button>
+          <button class="raw-tool-btn active" id="btnRefreshRawModal">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <polyline points="23 4 23 10 17 10"></polyline>
+              <path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"></path>
+            </svg>
+            Làm mới
+          </button>
+        </div>
+      </div>
+
+      <div class="raw-modal-body">
+        <div class="raw-sidebar">
+          <button class="raw-tab-btn active" data-tab="all">Tất Cả (`rawPayload`)</button>
+          <button class="raw-tab-btn" data-tab="print">Khối `print` (Status)</button>
+          <button class="raw-tab-btn" data-tab="candidates">Discovered Sensors</button>
+          <button class="raw-tab-btn" data-tab="history">History Diffs</button>
+        </div>
+
+        <div class="raw-content-area">
+          <pre id="fullRawJsonViewer" class="full-raw-json-viewer">Đang tải full raw telemetry...</pre>
         </div>
       </div>
     </div>
