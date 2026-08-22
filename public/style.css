@@ -868,23 +868,193 @@ body {
   flex-wrap: wrap;
 }
 
-/* Mobile Responsive */
+/* Mobile & Tablet Comprehensive Responsive Design */
+
 @media (max-width: 900px) {
+  .dashboard-grid {
+    gap: 16px;
+  }
+
   .job-hero-card, .temp-card, .camera-card, .fan-card, .ams-card, .console-card {
     grid-column: span 12;
   }
-  .job-body {
-    flex-direction: column;
+
+  .temp-grid {
+    grid-template-columns: 1fr;
   }
-  .control-quick-bar {
+
+  .ams-card {
+    grid-column: span 12;
+  }
+}
+
+@media (max-width: 640px) {
+  .app-container {
+    padding: 12px 10px;
+    gap: 14px;
+  }
+
+  .header-nav {
+    padding: 12px 14px;
     flex-direction: column;
     align-items: stretch;
+    gap: 12px;
   }
-  .control-actions {
+
+  .brand-section {
+    width: 100%;
+    justify-content: flex-start;
+  }
+
+  .header-badges {
+    flex-wrap: wrap;
+  }
+
+  .status-pills {
+    width: 100%;
+    flex-wrap: wrap;
     justify-content: space-between;
+    gap: 8px;
   }
-  .btn-ctrl {
-    flex: 1;
+
+  .status-pill {
+    padding: 4px 10px;
+    font-size: 0.78rem;
+    flex-grow: 1;
     justify-content: center;
+  }
+
+  .btn-cap-modal {
+    width: 100%;
+    justify-content: center;
+    padding: 8px;
+  }
+
+  .control-quick-bar {
+    padding: 14px;
+    flex-direction: column;
+    align-items: stretch;
+    gap: 12px;
+  }
+
+  .control-actions {
+    flex-direction: column;
+    width: 100%;
+    gap: 8px;
+  }
+
+  .btn-ctrl {
+    width: 100%;
+    justify-content: center;
+    padding: 12px;
+    font-size: 0.92rem;
+  }
+
+  .card {
+    padding: 14px;
+    gap: 12px;
+  }
+
+  .job-body {
+    flex-direction: column;
+    align-items: center;
+    gap: 18px;
+  }
+
+  .progress-ring-container {
+    width: 150px;
+    height: 150px;
+  }
+
+  .progress-ring {
+    width: 150px;
+    height: 150px;
+  }
+
+  .progress-overlay {
+    width: 150px;
+    height: 150px;
+  }
+
+  .progress-overlay .percentage {
+    font-size: 1.7rem;
+  }
+
+  .detail-grid {
+    grid-template-columns: 1fr;
+    gap: 8px;
+  }
+
+  .preset-btns {
+    flex-wrap: wrap;
+  }
+
+  .btn-preset {
+    flex: 1 1 calc(50% - 6px);
+    text-align: center;
+    justify-content: center;
+  }
+
+  .tray-grid {
+    grid-template-columns: repeat(2, 1fr);
+    gap: 8px;
+  }
+
+  .tray-item {
+    padding: 6px 4px;
+  }
+
+  .color-dot {
+    width: 18px;
+    height: 18px;
+  }
+
+  .tray-type {
+    font-size: 0.7rem;
+  }
+
+  .tray-rem {
+    font-size: 0.65rem;
+  }
+
+  .camera-feed-container {
+    height: 220px;
+  }
+
+  .toast-container {
+    left: 12px;
+    right: 12px;
+    bottom: 12px;
+  }
+
+  .toast {
+    width: 100%;
+    font-size: 0.82rem;
+    padding: 10px 14px;
+  }
+
+  .modal-content {
+    width: 95%;
+    padding: 16px;
+  }
+
+  .cap-item {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 4px;
+  }
+
+  .cap-status-pill {
+    align-self: flex-start;
+  }
+}
+
+@media (max-width: 380px) {
+  .brand-title h1 {
+    font-size: 1.15rem;
+  }
+
+  .tray-grid {
+    grid-template-columns: repeat(2, 1fr);
   }
 }
