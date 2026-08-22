@@ -64,11 +64,22 @@ export class BambuMessageParser {
       progress = Math.max(0, Math.min(100, Math.round(print.mc_percent)));
     }
 
-    // 3. Map temperatures
+    // 3. Map temperatures (support dual nozzles for H2D)
+    const noz2Cur = typeof print.nozzle_temper_1 === 'number'
+      ? print.nozzle_temper_1
+      : (typeof print.nozzle_temper_2 === 'number' ? print.nozzle_temper_2 : null);
+    const noz2Tar = typeof print.nozzle_target_temper_1 === 'number'
+      ? print.nozzle_target_temper_1
+      : (typeof print.nozzle_target_temper_2 === 'number' ? print.nozzle_target_temper_2 : null);
+
     const temperatures = {
       nozzle: {
         current: typeof print.nozzle_temper === 'number' ? print.nozzle_temper : null,
         target: typeof print.nozzle_target_temper === 'number' ? print.nozzle_target_temper : null,
+      },
+      nozzle2: {
+        current: noz2Cur,
+        target: noz2Tar,
       },
       bed: {
         current: typeof print.bed_temper === 'number' ? print.bed_temper : null,

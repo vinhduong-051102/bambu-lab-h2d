@@ -20,12 +20,18 @@ document.addEventListener('DOMContentLoaded', () => {
   const layersText = document.getElementById('layersText');
   const remainingTimeText = document.getElementById('remainingTimeText');
 
-  // Thermal
+  // Thermal Controls (Dual Extruder support)
   const nozzleCurText = document.getElementById('nozzleCurr');
   const nozzleTarText = document.getElementById('nozzleTarget');
   const nozzleBar = document.getElementById('nozzleBar');
   const nozzleInput = document.getElementById('nozzleInput');
   const btnSetNozzle = document.getElementById('btnSetNozzle');
+
+  const nozzle2CurText = document.getElementById('nozzle2Curr');
+  const nozzle2TarText = document.getElementById('nozzle2Target');
+  const nozzle2Bar = document.getElementById('nozzle2Bar');
+  const nozzle2Input = document.getElementById('nozzle2Input');
+  const btnSetNozzle2 = document.getElementById('btnSetNozzle2');
 
   const bedCurText = document.getElementById('bedCurr');
   const bedTarText = document.getElementById('bedTarget');
@@ -143,13 +149,20 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     if (state.temperatures) {
-      const { nozzle, bed, chamber } = state.temperatures;
+      const { nozzle, nozzle2, bed, chamber } = state.temperatures;
 
       if (nozzle) {
-        nozzleCurText.textContent = nozzle.current !== null ? nozzle.current : '0';
-        nozzleTarText.textContent = `/ ${nozzle.target !== null ? nozzle.target : 0}°C`;
+        if (nozzleCurText) nozzleCurText.textContent = nozzle.current !== null ? nozzle.current : '0';
+        if (nozzleTarText) nozzleTarText.textContent = `/ ${nozzle.target !== null ? nozzle.target : 0}°C`;
         const nozzlePct = Math.min(100, Math.max(0, ((nozzle.current || 0) / 300) * 100));
-        nozzleBar.style.width = `${nozzlePct}%`;
+        if (nozzleBar) nozzleBar.style.width = `${nozzlePct}%`;
+      }
+
+      if (nozzle2) {
+        if (nozzle2CurText) nozzle2CurText.textContent = nozzle2.current !== null ? nozzle2.current : '0';
+        if (nozzle2TarText) nozzle2TarText.textContent = `/ ${nozzle2.target !== null ? nozzle2.target : 0}°C`;
+        const nozzle2Pct = Math.min(100, Math.max(0, ((nozzle2.current || 0) / 300) * 100));
+        if (nozzle2Bar) nozzle2Bar.style.width = `${nozzle2Pct}%`;
       }
 
       if (bed) {
@@ -272,6 +285,11 @@ document.addEventListener('DOMContentLoaded', () => {
     if (!isNaN(val)) sendCommand('/api/printer/temperature/nozzle', 'POST', { target: val });
   });
 
+  btnSetNozzle2?.addEventListener('click', () => {
+    const val = Number(nozzle2Input.value);
+    if (!isNaN(val)) sendCommand('/api/printer/temperature/nozzle2', 'POST', { target: val });
+  });
+
   btnSetBed?.addEventListener('click', () => {
     const val = Number(bedInput.value);
     if (!isNaN(val)) sendCommand('/api/printer/temperature/bed', 'POST', { target: val });
@@ -282,6 +300,7 @@ document.addEventListener('DOMContentLoaded', () => {
       const type = btn.getAttribute('data-type');
       const val = Number(btn.getAttribute('data-val'));
       if (type === 'nozzle') sendCommand('/api/printer/temperature/nozzle', 'POST', { target: val });
+      if (type === 'nozzle2') sendCommand('/api/printer/temperature/nozzle2', 'POST', { target: val });
       if (type === 'bed') sendCommand('/api/printer/temperature/bed', 'POST', { target: val });
     });
   });

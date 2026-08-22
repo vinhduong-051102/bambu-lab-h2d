@@ -50,10 +50,36 @@ export async function temperatureRoutes(
     }
 
     try {
-      const res = await printerService.commandService.setNozzleTemperature(parseResult.data.target);
+      const res = await printerService.commandService.setNozzleTemperature(parseResult.data.target, 0);
       return reply.send({
         success: true,
         action: 'set_nozzle_temp',
+        target: parseResult.data.target,
+        commandId: res.commandId,
+        message: res.message,
+      });
+    } catch (err) {
+      return handleCommandError(err, reply);
+    }
+  });
+
+  // POST /api/printer/temperature/nozzle2 (Secondary Nozzle)
+  fastify.post('/api/printer/temperature/nozzle2', async (request, reply) => {
+    const parseResult = nozzleTempSchema.safeParse(request.body);
+    if (!parseResult.success) {
+      return reply.status(400).send({
+        success: false,
+        error: 'INVALID_PAYLOAD',
+        message: 'Invalid target temperature parameter',
+        details: parseResult.error.issues,
+      });
+    }
+
+    try {
+      const res = await printerService.commandService.setNozzleTemperature(parseResult.data.target, 1);
+      return reply.send({
+        success: true,
+        action: 'set_nozzle2_temp',
         target: parseResult.data.target,
         commandId: res.commandId,
         message: res.message,

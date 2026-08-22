@@ -33,6 +33,7 @@ export interface PrinterState {
   progress: number | null;
   temperatures: {
     nozzle: TemperatureSensor;
+    nozzle2?: TemperatureSensor;
     bed: TemperatureSensor;
     chamber: number | null;
   };
@@ -64,6 +65,7 @@ export function createInitialPrinterState(serial: string): PrinterState {
     progress: null,
     temperatures: {
       nozzle: { current: null, target: null },
+      nozzle2: { current: null, target: null },
       bed: { current: null, target: null },
       chamber: null,
     },

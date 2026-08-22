@@ -97,12 +97,21 @@ export class CapabilityRegistry {
       },
       {
         id: 'temperature.nozzle',
-        name: 'Điều chỉnh nhiệt độ Hotend',
+        name: 'Điều chỉnh nhiệt độ Hotend 1 (Đầu in #1)',
         category: 'temperature',
         read: true,
         write: true,
         status: 'SUPPORTED',
-        description: 'Đặt nhiệt độ mục tiêu cho đầu phun (M104 S{target})',
+        description: 'Đặt nhiệt độ mục tiêu cho đầu phun thứ nhất (M104 T0 S{target})',
+      },
+      {
+        id: 'temperature.nozzle2',
+        name: 'Điều chỉnh nhiệt độ Hotend 2 (Đầu in #2)',
+        category: 'temperature',
+        read: true,
+        write: true,
+        status: 'SUPPORTED',
+        description: 'Đặt nhiệt độ mục tiêu cho đầu phun thứ hai (M104 T1 S{target})',
       },
       {
         id: 'temperature.bed',

@@ -146,10 +146,10 @@
         </div>
 
         <div class="temp-gauge-container">
-          <!-- Nozzle Temp Control -->
+          <!-- Nozzle 1 Temp Control -->
           <div class="temp-control-group">
             <div class="gauge-head">
-              <span class="gauge-title">🔥 Đầu Phun (Hotend)</span>
+              <span class="gauge-title">🔥 Đầu Phun #1 (Hotend 1 - T0)</span>
               <span class="gauge-readout">
                 <strong id="nozzleCurr">0</strong><span class="unit">°C</span>
                 <small id="nozzleTarget">/ 0°C</small>
@@ -166,6 +166,30 @@
                 <button class="preset-btn" data-type="nozzle" data-val="240">PETG 240</button>
                 <button class="preset-btn" data-type="nozzle" data-val="250">ABS 250</button>
                 <button class="preset-btn off" data-type="nozzle" data-val="0">Tắt</button>
+              </div>
+            </div>
+          </div>
+
+          <!-- Nozzle 2 Temp Control (Dual Extruder) -->
+          <div class="temp-control-group">
+            <div class="gauge-head">
+              <span class="gauge-title">🔥 Đầu Phun #2 (Hotend 2 - T1)</span>
+              <span class="gauge-readout">
+                <strong id="nozzle2Curr">0</strong><span class="unit">°C</span>
+                <small id="nozzle2Target">/ 0°C</small>
+              </span>
+            </div>
+            <div class="bar-container">
+              <div class="bar-fill hotend-bar" id="nozzle2Bar" style="width: 0%"></div>
+            </div>
+            <div class="temp-input-row">
+              <input type="number" id="nozzle2Input" min="0" max="300" placeholder="220" class="temp-input" />
+              <button class="btn-set-temp" id="btnSetNozzle2">Đặt Nhiệt</button>
+              <div class="preset-pills">
+                <button class="preset-btn" data-type="nozzle2" data-val="200">PLA 200</button>
+                <button class="preset-btn" data-type="nozzle2" data-val="240">PETG 240</button>
+                <button class="preset-btn" data-type="nozzle2" data-val="250">ABS 250</button>
+                <button class="preset-btn off" data-type="nozzle2" data-val="0">Tắt</button>
               </div>
             </div>
           </div>

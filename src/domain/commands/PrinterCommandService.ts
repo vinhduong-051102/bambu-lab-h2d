@@ -152,12 +152,14 @@ export class PrinterCommandService extends EventEmitter {
     });
   }
 
-  public setNozzleTemperature(target: number): Promise<{ success: boolean; commandId: string; message: string }> {
+  public setNozzleTemperature(target: number, nozzleIndex = 0): Promise<{ success: boolean; commandId: string; message: string }> {
+    const capId = nozzleIndex === 1 ? 'temperature.nozzle2' : 'temperature.nozzle';
+    const cmdName = nozzleIndex === 1 ? 'set_nozzle2_temp' : 'set_nozzle_temp';
     return this.executeCommand({
-      capabilityId: 'temperature.nozzle',
-      commandName: 'set_nozzle_temp',
-      logPayload: { target },
-      payloadBuilder: () => BambuCommandBuilder.buildSetNozzleTempPayload(target),
+      capabilityId: capId,
+      commandName: cmdName,
+      logPayload: { target, nozzleIndex },
+      payloadBuilder: () => BambuCommandBuilder.buildSetNozzleTempPayload(target, nozzleIndex),
     });
   }
 

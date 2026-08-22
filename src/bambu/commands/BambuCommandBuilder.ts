@@ -42,12 +42,13 @@ export class BambuCommandBuilder {
     };
   }
 
-  public static buildSetNozzleTempPayload(target: number): Record<string, unknown> {
+  public static buildSetNozzleTempPayload(target: number, nozzleIndex = 0): Record<string, unknown> {
+    const tool = nozzleIndex === 1 ? 'T1 ' : '';
     return {
       print: {
         sequence_id: this.getNextSequenceId(),
         command: 'gcode_line',
-        param: `M104 S${Math.round(target)}\n`,
+        param: `M104 ${tool}S${Math.round(target)}\n`,
       },
     };
   }

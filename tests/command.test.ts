@@ -32,9 +32,13 @@ describe('Command Architecture & Capability System', () => {
     expect(pausePayload.print.command).toBe('pause');
     expect(pausePayload.print.sequence_id).toBeDefined();
 
-    const nozzlePayload = BambuCommandBuilder.buildSetNozzleTempPayload(230) as any;
+    const nozzlePayload = BambuCommandBuilder.buildSetNozzleTempPayload(230, 0) as any;
     expect(nozzlePayload.print.command).toBe('gcode_line');
     expect(nozzlePayload.print.param).toBe('M104 S230\n');
+
+    const nozzle2Payload = BambuCommandBuilder.buildSetNozzleTempPayload(245, 1) as any;
+    expect(nozzle2Payload.print.command).toBe('gcode_line');
+    expect(nozzle2Payload.print.param).toBe('M104 T1 S245\n');
 
     const fanPayload = BambuCommandBuilder.buildSetFanSpeedPayload('part', 80) as any;
     expect(fanPayload.print.command).toBe('gcode_line');
