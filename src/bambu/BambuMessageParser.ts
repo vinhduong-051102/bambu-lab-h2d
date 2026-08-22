@@ -102,7 +102,7 @@ export class BambuMessageParser {
       }
     }
 
-    // 3. Primary Scalar Nozzle Temperature (print.nozzle_temper & print.nozzle_target_temper)
+    // 3. Primary Scalar Machine / Active Nozzle Temperature (print.nozzle_temper & print.nozzle_target_temper)
     let nozzleCurrentTemp: number | null = null;
     let nozzleTargetTemp: number | null = null;
 
@@ -115,14 +115,18 @@ export class BambuMessageParser {
       nozzleTargetTemp = parseNum(print.nozzle_target_temper);
     }
 
+    // Inspect active nozzle indicator if present in raw payload
+    const activeNozzleId = print.nozzle?.src_id ?? print.device?.nozzle?.src_id ?? print.ext_tool ?? null;
+
     const primaryNozzleTemp: PrimaryNozzleTempState = {
       current: nozzleCurrentTemp,
       target: nozzleTargetTemp,
+      activeNozzleId,
       source: 'print.nozzle_temper',
-      confidence: 'CONFIRMED',
+      confidence: 'POSSIBLE', // Machine active nozzle temperature, exact tool mapping is POSSIBLE until telemetry sequence confirms
       metadata: {
         source: 'print.nozzle_temper',
-        confidence: 'CONFIRMED',
+        confidence: 'POSSIBLE',
         updatedAt: now,
       },
     };
@@ -133,21 +137,13 @@ export class BambuMessageParser {
       processedKeys.add('nozzle');
       if (Array.isArray(print.nozzle?.info)) {
         print.nozzle.info.forEach((item: any, idx: number) => {
-          const itemTemp = parseNum(item?.temp);
-          const itemTarget = parseNum(item?.target_temp);
+          const itemTemp = item?.temp !== undefined ? parseNum(item?.temp) : null;
+          const itemTarget = item?.target_temp !== undefined ? parseNum(item?.target_temp) : null;
 
           let current: number | null = itemTemp;
           let target: number | null = itemTarget;
           let tempSource: string | null = itemTemp !== null ? `print.nozzle.info[${idx}].temp` : null;
           let tempConfidence: 'CONFIRMED' | 'POSSIBLE' | 'UNKNOWN' = itemTemp !== null ? 'CONFIRMED' : 'UNKNOWN';
-
-          // For primary nozzle (id 0), fallback to scalar print.nozzle_temper if info array has no temp
-          if (current === null && idx === 0 && nozzleCurrentTemp !== null) {
-            current = nozzleCurrentTemp;
-            target = nozzleTargetTemp;
-            tempSource = 'print.nozzle_temper';
-            tempConfidence = 'CONFIRMED';
-          }
 
           nozzles.push({
             id: item?.id !== undefined ? item.id : idx,
@@ -171,7 +167,7 @@ export class BambuMessageParser {
       }
     }
 
-    // 5. Extruders (print.extruder.info[])
+    // 5. Extruders (print.extruder.info[]) - Extruder Telemetry (CONFIRMED for Extruder, NOT Nozzle)
     const extruders: ExtruderState[] = [];
     if (print.extruder !== undefined) {
       processedKeys.add('extruder');

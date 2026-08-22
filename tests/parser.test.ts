@@ -1,8 +1,23 @@
 import { describe, it, expect } from 'vitest';
 import { BambuMessageParser } from '../src/bambu/BambuMessageParser.js';
+import { discoverTemperatureFields } from '../src/utils/temperatureDiscovery.js';
 import h2dFixture from './fixtures/h2d_raw_payload.json';
 
-describe('BambuMessageParser - H2D RAW Telemetry Fixture', () => {
+describe('BambuMessageParser & Temperature Discovery - H2D RAW Telemetry Fixture', () => {
+  it('should discover all temperature-related fields recursively in raw payload', () => {
+    const discovered = discoverTemperatureFields(h2dFixture.print, 'print');
+    const paths = discovered.map((d) => d.path);
+
+    expect(paths).toContain('print.nozzle_temper');
+    expect(paths).toContain('print.nozzle_target_temper');
+    expect(paths).toContain('print.extruder.info[0].temp');
+    expect(paths).toContain('print.extruder.info[1].temp');
+    expect(paths).toContain('print.bed_temper');
+    expect(paths).toContain('print.bed_target_temper');
+    expect(paths).toContain('print.ams.ams[0].temp');
+    expect(paths).toContain('print.ctc.info.temp');
+  });
+
   it('should parse real Bambu Lab H2D raw payload fixture accurately per specification', () => {
     // 0. Test Mandatory RAW Fixture Keys
     const raw = h2dFixture as any;
@@ -17,11 +32,11 @@ describe('BambuMessageParser - H2D RAW Telemetry Fixture', () => {
 
     const result = BambuMessageParser.parseReport(parsedJson!);
 
-    // 1. PRIMARY SCALAR NOZZLE TEMP & NOZZLE HARDWARE INFO
+    // 1. PRIMARY SCALAR MACHINE / ACTIVE NOZZLE TEMP & HARDWARE NOZZLE INFO
     expect(result.temperatures?.nozzle.current).toBe(45);
     expect(result.temperatures?.nozzle.target).toBe(0);
     expect(result.temperatures?.nozzle.source).toBe('print.nozzle_temper');
-    expect(result.temperatures?.nozzle.confidence).toBe('CONFIRMED');
+    expect(result.temperatures?.nozzle.confidence).toBe('POSSIBLE');
 
     expect(result.temperatures?.nozzles).toBeDefined();
     expect(result.temperatures?.nozzles.length).toBe(2);
@@ -29,13 +44,11 @@ describe('BambuMessageParser - H2D RAW Telemetry Fixture', () => {
     expect(result.temperatures?.nozzles[0].id).toBe(0);
     expect(result.temperatures?.nozzles[1].id).toBe(1);
 
-    // Nozzle 0 has current=45 from scalar nozzle_temper
-    expect(result.temperatures?.nozzles[0].current).toBe(45);
-    expect(result.temperatures?.nozzles[0].target).toBe(0);
-
-    // Nozzle 1 temperature is NULL (not unconfirmedly guessed from extruder!)
+    // Nozzle 0 and Nozzle 1 hardware info do not have explicit temp in info[] telemetry
+    expect(result.temperatures?.nozzles[0].current).toBeNull();
+    expect(result.temperatures?.nozzles[0].temperatureConfidence).toBe('UNKNOWN');
     expect(result.temperatures?.nozzles[1].current).toBeNull();
-    expect(result.temperatures?.nozzles[1].target).toBeNull();
+    expect(result.temperatures?.nozzles[1].temperatureConfidence).toBe('UNKNOWN');
 
     expect(result.temperatures?.nozzles[0].diameter).toBe(0.4);
     expect(result.temperatures?.nozzles[1].diameter).toBe(0.4);

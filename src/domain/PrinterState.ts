@@ -15,6 +15,7 @@ export interface FieldMetadata {
 export interface PrimaryNozzleTempState {
   current: number | null;
   target: number | null;
+  activeNozzleId?: string | number | null;
   source: string;
   confidence: 'CONFIRMED' | 'POSSIBLE' | 'UNKNOWN';
   metadata?: FieldMetadata;
@@ -137,8 +138,9 @@ export function createInitialPrinterState(serial: string): PrinterState {
       nozzle: {
         current: null,
         target: null,
+        activeNozzleId: null,
         source: 'print.nozzle_temper',
-        confidence: 'CONFIRMED',
+        confidence: 'POSSIBLE',
       },
       nozzles: [],
       bed: { current: null, target: null },

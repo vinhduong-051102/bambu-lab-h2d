@@ -51,9 +51,12 @@ describe('End-to-End Pipeline Data Flow Debug Test', () => {
     // Check Stage 2: BambuMessageParser
     expect(snapshot.parsed.temperatures?.nozzle.current).toBe(45);
     expect(snapshot.parsed.temperatures?.nozzle.target).toBe(0);
+    expect(snapshot.parsed.temperatures?.nozzle.confidence).toBe('POSSIBLE');
     expect(snapshot.parsed.temperatures?.nozzles).toHaveLength(2);
-    expect(snapshot.parsed.temperatures?.nozzles[0].current).toBe(45);
+    expect(snapshot.parsed.temperatures?.nozzles[0].current).toBeNull();
+    expect(snapshot.parsed.temperatures?.nozzles[0].temperatureConfidence).toBe('UNKNOWN');
     expect(snapshot.parsed.temperatures?.nozzles[1].current).toBeNull();
+    expect(snapshot.parsed.temperatures?.nozzles[1].temperatureConfidence).toBe('UNKNOWN');
     expect(snapshot.parsed.extruders).toHaveLength(2);
     expect(snapshot.parsed.extruders?.[0].temp).toBe(45);
     expect(snapshot.parsed.extruders?.[1].temp).toBe(41);
@@ -91,8 +94,6 @@ describe('End-to-End Pipeline Data Flow Debug Test', () => {
     expect(apiBody.temperatures.nozzle.current).toBe(45);
     expect(apiBody.temperatures.nozzle.target).toBe(0);
     expect(apiBody.temperatures.nozzles).toHaveLength(2);
-    expect(apiBody.temperatures.nozzles[0].current).toBe(45);
-    expect(apiBody.temperatures.nozzles[1].current).toBeNull();
     expect(apiBody.extruders).toHaveLength(2);
     expect(apiBody.extruders[0].temp).toBe(45);
     expect(apiBody.extruders[1].temp).toBe(41);
