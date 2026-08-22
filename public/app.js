@@ -179,6 +179,16 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   }
 
+  // Helper Format Hex Color cho AMS Tray
+  function formatHexColor(color) {
+    if (!color) return '#374151';
+    let c = String(color).trim();
+    if (!c.startsWith('#')) {
+      c = '#' + c;
+    }
+    return c;
+  }
+
   // AMS Renderer
   function renderAMS(amsUnits) {
     if (!amsUnits || amsUnits.length === 0) {
@@ -187,13 +197,16 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     amsContainer.innerHTML = amsUnits.map((unit) => {
-      const filamentsHtml = (unit.filaments || []).map((fil) => `
-        <div class="tray-item">
-          <div class="color-dot" style="background-color: ${fil.color || '#cccccc'};"></div>
-          <span class="tray-type">${fil.type || 'N/A'}</span>
-          <span class="tray-rem">${fil.remainingPercentage !== null ? fil.remainingPercentage + '%' : '--'}</span>
-        </div>
-      `).join('');
+      const filamentsHtml = (unit.filaments || []).map((fil) => {
+        const hexColor = formatHexColor(fil.color);
+        return `
+          <div class="tray-item">
+            <div class="color-dot" style="background-color: ${hexColor};" title="Màu: ${hexColor}"></div>
+            <span class="tray-type">${fil.type || 'N/A'}</span>
+            <span class="tray-rem">${fil.remainingPercentage !== null ? fil.remainingPercentage + '%' : '--'}</span>
+          </div>
+        `;
+      }).join('');
 
       return `
         <div class="ams-unit">
