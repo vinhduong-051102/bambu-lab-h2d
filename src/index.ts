@@ -94,10 +94,11 @@ WebSocket:
   // Handle incoming MQTT messages
   mqttClient.onMessage((topic, message) => {
     const rawPayload = BambuMessageParser.parseJsonPayload(message);
-    console.log(JSON.stringify(rawPayload, null, 2))
     if (!rawPayload) {
       return;
     }
+
+    logger.info({ topic, rawPayload }, 'Received telemetry rawPayload from printer');
 
     if (env.BAMBU_DEBUG_PROTOCOL) {
       logger.info({ topic, payloadLength: message.length }, '[DEBUG PROTOCOL] Received MQTT report');

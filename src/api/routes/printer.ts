@@ -44,7 +44,21 @@ export async function printerRoutes(
     };
   });
 
-  // 3. GET /api/printer/errors - HMS & System Error Codes
+  // 3. GET /api/printer/raw - Get Raw MQTT JSON Payload for debugging
+  fastify.get('/api/printer/raw', async (request, reply) => {
+    const service = getService();
+    if (!service) {
+      return reply.status(503).send({ error: 'Service Unavailable', message: 'No printer registered' });
+    }
+    const rawPayload = service.stateStore.getRawPayload();
+    return {
+      serial: service.serial,
+      hasRawPayload: rawPayload !== null,
+      rawPayload,
+    };
+  });
+
+  // 4. GET /api/printer/errors - HMS & System Error Codes
   fastify.get('/api/printer/errors', async (request, reply) => {
     const service = getService();
     if (!service) {
