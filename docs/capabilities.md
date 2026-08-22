@@ -1,41 +1,20 @@
-# Capability System & Status Definitions
+# Bambu Lab Gateway Capability Registry & Evidence
 
-The Gateway implements a dynamic **Capability Registry** (`GET /api/capabilities`).
+This document lists supported capabilities in the `bambu-h2d-gateway`.
 
-## Capability Statuses
+---
 
-- **`SUPPORTED`**: Protocol evidence verified. Command/Telemetry is active and functional.
-- **`UNKNOWN`**: Protocol evidence incomplete or unsafe to execute without physical verification on H2D.
-- **`UNSUPPORTED`**: Feature is not supported over MQTT LAN protocol (e.g., file transfers require FTPS).
+## 1. Capability Status Summary
 
-## Full Capabilities List
-
-| Capability ID | Name | Category | Read | Write | Status |
-|---------------|------|----------|------|-------|--------|
-| `printer.status` | Trạng thái máy in | status | Yes | No | `SUPPORTED` |
-| `system.info` | Thông tin hệ thống | system | Yes | No | `SUPPORTED` |
-| `printer.errors` | Mã lỗi HMS | status | Yes | No | `SUPPORTED` |
-| `print.job` | Theo dõi tác vụ in | print | Yes | No | `SUPPORTED` |
-| `print.pause` | Tạm dừng in (Pause) | print | Yes | Yes | `SUPPORTED` |
-| `print.resume` | Tiếp tục in (Resume) | print | Yes | Yes | `SUPPORTED` |
-| `print.stop` | Hủy in (Stop) | print | Yes | Yes | `SUPPORTED` |
-| `print.start` | Bắt đầu in mới | print | No | Yes | `UNKNOWN` |
-| `temperature.read` | Đọc nhiệt độ | temperature | Yes | No | `SUPPORTED` |
-| `temperature.nozzle` | Đặt nhiệt độ Hotend | temperature | Yes | Yes | `SUPPORTED` |
-| `temperature.bed` | Đặt nhiệt độ Bàn in | temperature | Yes | Yes | `SUPPORTED` |
-| `fan.read` | Đọc quạt | fan | Yes | No | `SUPPORTED` |
-| `fan.part` | Quạt mẫu (Part Fan) | fan | Yes | Yes | `SUPPORTED` |
-| `fan.aux` | Quạt phụ (Aux Fan) | fan | Yes | Yes | `SUPPORTED` |
-| `fan.chamber` | Quạt buồng (Chamber Fan) | fan | Yes | Yes | `SUPPORTED` |
-| `ams.read` | Đọc AMS | ams | Yes | No | `SUPPORTED` |
-| `ams.control` | Điều khiển AMS | ams | No | Yes | `UNKNOWN` |
-| `camera.stream` | Live Stream Camera | camera | Yes | No | `SUPPORTED` |
-| `file.list` | Danh sách file SD Card | file | Yes | No | `UNKNOWN` |
-| `file.upload` | Upload file | file | No | Yes | `UNSUPPORTED` |
-
-## Safety Mode (`BAMBU_REAL_PRINTER`)
-
-By default, `BAMBU_REAL_PRINTER` is set to `false`. When `false`:
-- Telemetry, REST APIs, WebSocket events, and Camera streams are fully operational.
-- Destructive control commands (`pause`, `resume`, `stop`, `temperature`, `fan`) return HTTP 403 `TEST_MODE_RESTRICTED`.
-- Set `BAMBU_REAL_PRINTER=true` in `.env` to enable live printer execution.
+| Capability Key | Description | Status | Evidence / Notes |
+| :--- | :--- | :--- | :--- |
+| `printer.status` | Read printer state, progress & layers | **SUPPORTED** | Real-time MQTT telemetry normalization |
+| `temperature.nozzles` | Dynamic multi-nozzle telemetry (`NozzleState[]`) | **SUPPORTED** | Parsed from `print.nozzle.info[]` (Dual-nozzle H2D) |
+| `temperature.bed` | Heatbed temperature monitoring & control | **SUPPORTED** | `print.bed_temper` and `M140 S{target}` |
+| `temperature.chamber` | Chamber temperature telemetry | **POSSIBLE** | Read from `print.ctc.info.temp` fallback hierarchy |
+| `extruders` | Extruder state monitoring (`ExtruderState[]`) | **SUPPORTED** | `print.extruder.info[]` (`hnow`, `hpre`, `htar`) |
+| `fan.cooling` | Part cooling fan speed control | **SUPPORTED** | `print.cooling_fan_speed` and `M106 P1 S{val}` |
+| `fan.bigFan1` | Auxiliary fan speed control | **SUPPORTED** | `print.big_fan1_speed` and `M106 P2 S{val}` |
+| `fan.bigFan2` | Chamber fan speed control | **SUPPORTED** | `print.big_fan2_speed` and `M106 P3 S{val}` |
+| `ams` | Multi-AMS & Tray telemetry | **SUPPORTED** | `print.ams.ams[]` (trays, colors, remaining %) |
+| `hms` | Diagnostic error codes | **SUPPORTED** | `print.hms[]` raw `{ attr, code }` entries |

@@ -1,5 +1,6 @@
 import { FastifyInstance } from 'fastify';
 import { PrinterService } from '../../domain/PrinterService.js';
+import { AMSTray } from '../../domain/PrinterState.js';
 
 export async function amsRoutes(
   fastify: FastifyInstance,
@@ -12,11 +13,11 @@ export async function amsRoutes(
     const amsList = state.ams || [];
 
     const normalizedUnits = amsList.map((unit) => {
-      const trays = (unit.filaments || []).map((fil, idx) => ({
+      const trays = (unit.trays || []).map((fil: AMSTray, idx: number) => ({
         id: idx,
         filamentType: fil.type || 'UNKNOWN',
         color: fil.color ? (fil.color.startsWith('#') ? fil.color : `#${fil.color}`) : '#FFFFFF',
-        remaining: fil.remainingPercentage ?? null,
+        remaining: fil.remain ?? null,
       }));
 
       return {

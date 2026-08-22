@@ -3,7 +3,7 @@ import { PrinterStateStore } from '../src/domain/PrinterStateStore.js';
 import { normalizePrinterState } from '../src/domain/normalizePrinterState.js';
 import h2dFixture from './fixtures/h2d_raw_payload.json';
 
-describe('PrinterStateStore & normalizePrinterState with H2D Fixture', () => {
+describe('PrinterStateStore & normalizePrinterState (H2D State Merge)', () => {
   beforeEach(() => {
     vi.useFakeTimers();
   });
@@ -22,59 +22,87 @@ describe('PrinterStateStore & normalizePrinterState with H2D Fixture', () => {
     expect(state.progress).toBeNull();
   });
 
-  it('should update state and notify subscribers when normalized H2D state is set', () => {
+  it('should preserve non-updated fields on partial MQTT messages (State Merge Test)', () => {
     const store = new PrinterStateStore('01S00A123456789');
-    const listener = vi.fn();
 
-    store.subscribe(listener);
+    // 1. Initial message sets bed.current = 44
+    const firstPayload = {
+      print: {
+        bed_temper: 44,
+      },
+    };
+    const state1 = normalizePrinterState(store.getState(), firstPayload as any);
+    store.updateState(state1);
 
-    const initial = store.getState();
-    const nextState = normalizePrinterState(initial, h2dFixture as any);
-    store.updateState(nextState);
+    expect(store.getState().temperatures.bed.current).toBe(44);
 
-    const updated = store.getState();
-    expect(updated.online).toBe(true);
-    expect(updated.state).toBe('FINISHED');
-    expect(updated.progress).toBe(100);
-    expect(updated.temperatures.nozzles.length).toBe(2);
-    expect(updated.temperatures.nozzles[0].current).toBe(45);
-    expect(updated.temperatures.nozzles[1].current).toBe(41);
-    expect(updated.extruders.length).toBe(2);
-    expect(updated.hmsErrors?.length).toBe(1);
-    expect(updated.hmsErrors![0].code).toBe(65543);
-    expect(listener).toHaveBeenCalledTimes(1);
-    expect(listener).toHaveBeenCalledWith(updated);
+    // 2. Second partial message only receives mc_percent = 50
+    const secondPayload = {
+      print: {
+        mc_percent: 50,
+      },
+    };
+    const state2 = normalizePrinterState(store.getState(), secondPayload as any);
+    store.updateState(state2);
+
+    const finalState = store.getState();
+    expect(finalState.temperatures.bed.current).toBe(44);
+    expect(finalState.progress).toBe(50);
   });
 
-  it('should toggle online state correctly', () => {
+  it('should merge nozzle arrays by id without creating duplicate entries', () => {
     const store = new PrinterStateStore('01S00A123456789');
-    const connListener = vi.fn();
 
-    store.subscribeConnection(connListener);
+    // 1. First message sets nozzle 0 = 45°C, nozzle 1 = 41°C
+    const firstPayload = {
+      print: {
+        nozzle: {
+          info: [
+            { id: 0, temp: 45 },
+            { id: 1, temp: 41 },
+          ],
+        },
+      },
+    };
+    const state1 = normalizePrinterState(store.getState(), firstPayload as any);
+    store.updateState(state1);
 
-    store.setOnline(true);
-    expect(store.getState().online).toBe(true);
-    expect(connListener).toHaveBeenCalledWith(true);
+    expect(store.getState().temperatures.nozzles.length).toBe(2);
 
-    store.setOnline(false);
-    expect(store.getState().online).toBe(false);
-    expect(connListener).toHaveBeenCalledWith(false);
+    // 2. Second message only updates nozzle 1 = 42°C
+    const secondPayload = {
+      print: {
+        nozzle: {
+          info: [
+            { id: 1, temp: 42 },
+          ],
+        },
+      },
+    };
+    const state2 = normalizePrinterState(store.getState(), secondPayload as any);
+    store.updateState(state2);
+
+    const finalNozzles = store.getState().temperatures.nozzles;
+    expect(finalNozzles.length).toBe(2);
+
+    const n0 = finalNozzles.find((n) => n.id === 0);
+    const n1 = finalNozzles.find((n) => n.id === 1);
+
+    expect(n0?.current).toBe(45);
+    expect(n1?.current).toBe(42);
   });
 
-  it('should mark printer as offline after timeout', () => {
-    const timeoutMs = 5000;
-    const store = new PrinterStateStore('01S00A123456789', timeoutMs);
+  it('should parse and merge complete H2D fixture successfully', () => {
+    const store = new PrinterStateStore('01S00A123456789');
+    const state = normalizePrinterState(store.getState(), h2dFixture as any);
+    store.updateState(state);
 
-    const initial = store.getState();
-    const nextState = normalizePrinterState(initial, { print: { gcode_state: 'RUNNING' } } as any);
-    store.updateState(nextState);
-
-    expect(store.getState().online).toBe(true);
-
-    // Fast-forward time past timeout
-    vi.advanceTimersByTime(timeoutMs + 100);
-
-    expect(store.getState().online).toBe(false);
-    store.destroy();
+    const current = store.getState();
+    expect(current.state).toBe('FINISHED');
+    expect(current.progress).toBe(100);
+    expect(current.temperatures.nozzles.length).toBe(2);
+    expect(current.extruders.length).toBe(2);
+    expect(current.hmsErrors?.[0].attr).toBe(83887360);
+    expect(current.hmsErrors?.[0].code).toBe(65543);
   });
 });

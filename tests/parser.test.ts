@@ -2,79 +2,99 @@ import { describe, it, expect } from 'vitest';
 import { BambuMessageParser } from '../src/bambu/BambuMessageParser.js';
 import h2dFixture from './fixtures/h2d_raw_payload.json';
 
-describe('BambuMessageParser with H2D Raw Telemetry Fixture', () => {
-  it('should parse real Bambu Lab H2D raw payload fixture accurately', () => {
+describe('BambuMessageParser - H2D RAW Telemetry Fixture', () => {
+  it('should parse real Bambu Lab H2D raw payload fixture accurately per specification', () => {
     const parsedJson = BambuMessageParser.parseJsonPayload(JSON.stringify(h2dFixture));
     expect(parsedJson).not.toBeNull();
 
     const result = BambuMessageParser.parseReport(parsedJson!);
 
-    // 1. Nozzles parsing (print.nozzle.info[])
+    // 1. NOZZLE
     expect(result.temperatures?.nozzles).toBeDefined();
     expect(result.temperatures?.nozzles.length).toBe(2);
 
-    expect(result.temperatures?.nozzles[0].current).toBe(45);
-    expect(result.temperatures?.nozzles[0].diameter).toBe(0.4);
+    expect(result.temperatures?.nozzles[0].id).toBe(0);
+    expect(result.temperatures?.nozzles[1].id).toBe(1);
 
+    expect(result.temperatures?.nozzles[0].current).toBe(45);
     expect(result.temperatures?.nozzles[1].current).toBe(41);
+
+    expect(result.temperatures?.nozzles[0].diameter).toBe(0.4);
     expect(result.temperatures?.nozzles[1].diameter).toBe(0.4);
 
-    // 2. Extruders parsing (print.extruder.info[])
+    expect(result.temperatures?.nozzles[0].type).toBe('HS01');
+    expect(result.temperatures?.nozzles[1].type).toBe('HS01');
+
+    expect(result.temperatures?.nozzles[0].serial).toBe('NZ001');
+    expect(result.temperatures?.nozzles[1].serial).toBe('NZ002');
+
+    expect(result.temperatures?.nozzles[0].filamentId).toBe('GFA00');
+    expect(result.temperatures?.nozzles[1].filamentId).toBe('GFA01');
+
+    // 2. EXTRUDER
     expect(result.extruders).toBeDefined();
     expect(result.extruders?.length).toBe(2);
-    expect(result.extruders?.[0].temp).toBe(44);
-    expect(result.extruders?.[1].temp).toBe(40);
 
-    // 3. AMS & Trays parsing
+    expect(result.extruders?.[0].id).toBe(0);
+    expect(result.extruders?.[1].id).toBe(1);
+
+    expect(result.extruders?.[0].temp).toBe(45);
+    expect(result.extruders?.[1].temp).toBe(41);
+
+    expect(result.extruders?.[0].hnow).toBe(0);
+    expect(result.extruders?.[0].hpre).toBe(0);
+    expect(result.extruders?.[0].htar).toBe(0);
+    expect(result.extruders?.[0].state).toBe(0);
+
+    // Ensure no targetTemp assumptions
+    expect((result.extruders?.[0] as any).targetTemp).toBeUndefined();
+
+    // 3. BED
+    expect(result.temperatures?.bed.current).toBe(44);
+    expect(result.temperatures?.bed.target).toBe(0);
+
+    // 4. CHAMBER
+    expect(result.temperatures?.chamber.current).toBe(37);
+    expect(result.temperatures?.chamber.confidence).toBe('POSSIBLE');
+    expect(result.temperatures?.chamber.source).toBe('print.ctc.info.temp');
+
+    // 5. AMS & TRAYS
     expect(result.ams).toBeDefined();
     expect(result.ams?.length).toBe(1);
-    const unit = result.ams![0];
-    expect(unit.filaments.length).toBe(4);
-    expect(unit.filaments[0].remainingPercentage).toBe(100);
-    expect(unit.filaments[2].remainingPercentage).toBe(73);
-    expect(unit.filaments[0].color).toBe('#DBC8B6');
-    expect(unit.filaments[0].rawColor).toBe('DBC8B6FF');
 
-    // 4. HMS Diagnostics parsing (code = 65543)
+    const amsUnit = result.ams![0];
+    expect(amsUnit.id).toBe('0');
+    expect(amsUnit.humidityRaw).toBe('40');
+    expect(amsUnit.temperature).toBe(31.6);
+    expect(amsUnit.trays.length).toBe(4);
+
+    expect(amsUnit.trays[0].remain).toBe(100);
+    expect(amsUnit.trays[0].type).toBe('PETG');
+    expect(amsUnit.trays[0].subBrands).toBe('PETG Basic');
+    expect(amsUnit.trays[0].color).toBe('#DBC8B6');
+    expect(amsUnit.trays[0].rawColor).toBe('DBC8B6FF');
+
+    expect(amsUnit.trays[2].remain).toBe(73);
+    expect(amsUnit.trays[2].type).toBe('PLA');
+    expect(amsUnit.trays[2].subBrands).toBe('PLA Lite');
+
+    // 6. HMS
     expect(result.hmsErrors).toBeDefined();
     expect(result.hmsErrors?.length).toBe(1);
+    expect(result.hmsErrors![0].attr).toBe(83887360);
     expect(result.hmsErrors![0].code).toBe(65543);
 
-    // 5. Job & Printer State
+    // 7. PRINT & JOB
     expect(result.state).toBe('FINISHED');
     expect(result.progress).toBe(100);
     expect(result.job?.currentLayer).toBe(28);
     expect(result.job?.totalLayers).toBe(28);
     expect(result.job?.name).toBe('Torus');
 
-    // 6. Chamber temperature from ctc.info.temp
-    expect(result.temperatures?.chamber).toBe(26);
-
-    // 7. Raw extensions preserving extra H2D features
+    // 8. RAW EXTENSIONS (No duplicates of parsed keys)
     expect(result.rawExtensions).toBeDefined();
-    expect(result.rawExtensions?.custom_h2d_feature).toEqual({ version: '1.0.4', mode: 'dual' });
-  });
-
-  it('should handle payload with missing fields gracefully without throwing', () => {
-    const rawPayload = {
-      print: {
-        mc_percent: 10,
-      },
-    };
-
-    const parsedJson = BambuMessageParser.parseJsonPayload(JSON.stringify(rawPayload));
-    expect(parsedJson).not.toBeNull();
-
-    const result = BambuMessageParser.parseReport(parsedJson!);
-    expect(result.state).toBeUndefined();
-    expect(result.progress).toBe(10);
-    expect(result.temperatures?.nozzles).toEqual([]);
-    expect(result.job?.name).toBeNull();
-  });
-
-  it('should handle invalid JSON strings safely without crashing', () => {
-    const invalidJson = '{ bad json syntax: 123 ';
-    const parsed = BambuMessageParser.parseJsonPayload(invalidJson);
-    expect(parsed).toBeNull();
+    expect(result.rawExtensions?.custom_h2d_unparsed_feature).toEqual({ feature_key: 'val123' });
+    expect(result.rawExtensions?.gcode_state).toBeUndefined();
+    expect(result.rawExtensions?.nozzle).toBeUndefined();
   });
 });

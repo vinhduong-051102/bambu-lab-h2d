@@ -1,6 +1,6 @@
 {
   "print": {
-    "gcode_state": "FINISH",
+    "gcode_state": "FINISHED",
     "mc_percent": 100,
     "mc_remaining_time": 0,
     "layer_num": 28,
@@ -10,25 +10,25 @@
     "nozzle": {
       "info": [
         {
-          "id": "0",
+          "id": 0,
           "temp": 45,
           "target_temp": 0,
           "diameter": 0.4,
-          "type": "hardened_steel",
-          "serial": "NZ001",
-          "filament_id": "GFA00",
-          "state": "ready",
+          "type": "HS01",
+          "sn": "NZ001",
+          "fila_id": "GFA00",
+          "stat": 1,
           "wear": 12
         },
         {
-          "id": "1",
+          "id": 1,
           "temp": 41,
           "target_temp": 0,
           "diameter": 0.4,
-          "type": "stainless_steel",
-          "serial": "NZ002",
-          "filament_id": "GFA01",
-          "state": "ready",
+          "type": "HS01",
+          "sn": "NZ002",
+          "fila_id": "GFA01",
+          "stat": 1,
           "wear": 5
         }
       ]
@@ -36,20 +36,24 @@
     "extruder": {
       "info": [
         {
-          "id": "0",
-          "temp": 44,
-          "target_temp": 0,
-          "state": "idle"
+          "id": 0,
+          "temp": 45,
+          "hnow": 0,
+          "hpre": 0,
+          "htar": 0,
+          "stat": 0
         },
         {
-          "id": "1",
-          "temp": 40,
-          "target_temp": 0,
-          "state": "idle"
+          "id": 1,
+          "temp": 41,
+          "hnow": 0,
+          "hpre": 0,
+          "htar": 0,
+          "stat": 0
         }
       ]
     },
-    "bed_temper": 25,
+    "bed_temper": 44,
     "bed_target_temper": 0,
     "cooling_fan_speed": "0",
     "big_fan1_speed": "0",
@@ -58,7 +62,7 @@
     "fan_gear": 0,
     "hms": [
       {
-        "attr": 1,
+        "attr": 83887360,
         "code": 65543
       }
     ],
@@ -66,14 +70,14 @@
       "ams": [
         {
           "id": "0",
-          "humidity": "1",
-          "humidity_raw": 1,
-          "temp": 24.5,
+          "humidity": "4",
+          "humidity_raw": "40",
+          "temp": 31.6,
           "tray": [
             {
               "id": "0",
-              "tray_type": "PLA",
-              "tray_sub_brands": "Bambu Basic",
+              "tray_type": "PETG",
+              "tray_sub_brands": "PETG Basic",
               "tray_color": "DBC8B6FF",
               "remain": 100,
               "tray_diameter": 1.75,
@@ -96,9 +100,9 @@
             },
             {
               "id": "2",
-              "tray_type": "PETG",
-              "tray_sub_brands": "Bambu PETG",
-              "tray_color": "FF0000FF",
+              "tray_type": "PLA",
+              "tray_sub_brands": "PLA Lite",
+              "tray_color": "00FF00FF",
               "remain": 73,
               "tray_diameter": 1.75,
               "tray_weight": 1000,
@@ -110,7 +114,7 @@
               "id": "3",
               "tray_type": "ABS",
               "tray_sub_brands": "Bambu ABS",
-              "tray_color": "00FF00FF",
+              "tray_color": "0000FFFF",
               "remain": 50,
               "tray_diameter": 1.75,
               "tray_weight": 1000,
@@ -124,12 +128,11 @@
     },
     "ctc": {
       "info": {
-        "temp": 26
+        "temp": 37
       }
     },
-    "custom_h2d_feature": {
-      "version": "1.0.4",
-      "mode": "dual"
+    "custom_h2d_unparsed_feature": {
+      "feature_key": "val123"
     }
   }
 }

@@ -223,13 +223,15 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     amsContainer.innerHTML = amsUnits.map((unit) => {
-      const filamentsHtml = (unit.filaments || []).map((fil) => {
-        const hexColor = formatHexColor(fil.color);
+      const traysList = unit.trays || unit.filaments || [];
+      const filamentsHtml = traysList.map((fil) => {
+        const hexColor = formatHexColor(fil.color || fil.rawColor);
+        const rem = fil.remain !== undefined && fil.remain !== null ? fil.remain : fil.remainingPercentage;
         return `
           <div class="tray-item">
             <div class="color-dot" style="background-color: ${hexColor};" title="Màu: ${hexColor}"></div>
             <span class="tray-type">${fil.type || 'N/A'}</span>
-            <span class="tray-rem">${fil.remainingPercentage !== null ? fil.remainingPercentage + '%' : '--'}</span>
+            <span class="tray-rem">${rem !== null && rem !== undefined ? rem + '%' : '--'}</span>
           </div>
         `;
       }).join('');
