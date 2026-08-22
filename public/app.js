@@ -199,25 +199,6 @@ document.addEventListener('DOMContentLoaded', () => {
     return c;
   }
 
-  // Helper Format Độ Ẩm AMS (Bambu Lab giao thức trả về Level 1..5)
-  function formatAmsHumidity(val, rawVal) {
-    if (val === null || val === undefined || isNaN(Number(val))) return 'Chưa có dữ liệu';
-    const lvl = Number(val);
-    const rawInfo = rawVal !== null && rawVal !== undefined ? ` (Giá trị gốc: ${rawVal})` : '';
-
-    if (lvl >= 1 && lvl <= 5) {
-      const labels = {
-        1: 'Mức 1 (Rất khô < 20%)',
-        2: 'Mức 2 (Khô 20-30%)',
-        3: 'Mức 3 (Bình thường 30-40%)',
-        4: 'Mức 4 (Hơi ẩm 40-50%)',
-        5: 'Mức 5 (Cảnh báo ẩm > 50%)',
-      };
-      return `${labels[lvl]}${rawInfo}`;
-    }
-    return `${lvl}%${rawInfo}`;
-  }
-
   // AMS Renderer
   function renderAMS(amsUnits) {
     if (!amsUnits || amsUnits.length === 0) {
@@ -237,11 +218,9 @@ document.addEventListener('DOMContentLoaded', () => {
         `;
       }).join('');
 
-      const humidityText = formatAmsHumidity(unit.humidity, unit.rawHumidity);
-
       return `
         <div class="ams-unit">
-          <div class="ams-unit-title">AMS Unit #${unit.id} (Nhiệt độ: ${unit.temperature ?? '--'}°C | Độ ẩm: ${humidityText})</div>
+          <div class="ams-unit-title">AMS Unit #${unit.id}</div>
           <div class="tray-grid">${filamentsHtml}</div>
         </div>
       `;
