@@ -63,7 +63,7 @@ export class PrinterCommandService extends EventEmitter {
     }
 
     // 3. Printer Connection check
-    if (!this.stateStore.isOnline()) {
+    if (!this.stateStore.isOnline() && !this.mqttClient.isConnected()) {
       throw new CommandExecutionError('Printer is currently offline or disconnected from MQTT', 503, 'PRINTER_OFFLINE');
     }
 

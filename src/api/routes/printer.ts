@@ -1,6 +1,7 @@
 import { FastifyInstance } from 'fastify';
 import { PrinterService } from '../../domain/PrinterService.js';
 import { PrinterManager } from '../../domain/PrinterManager.js';
+import { env } from '../../config/env.js';
 
 export async function printerRoutes(
   fastify: FastifyInstance,
@@ -19,7 +20,10 @@ export async function printerRoutes(
     if (!service) {
       return reply.status(503).send({ error: 'Service Unavailable', message: 'No printer registered' });
     }
-    return service.stateStore.getState();
+    return {
+      ...service.stateStore.getState(),
+      realPrinterMode: env.BAMBU_REAL_PRINTER,
+    };
   });
 
   // 2. GET /api/printer/info - System Info (NO Access Code exposed)
@@ -35,6 +39,7 @@ export async function printerRoutes(
       serial: state.serial,
       firmware: state.firmware || 'Unknown',
       online: state.online,
+      realPrinterMode: env.BAMBU_REAL_PRINTER,
       updatedAt: state.updatedAt,
     };
   });

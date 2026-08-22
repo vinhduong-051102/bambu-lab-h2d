@@ -115,6 +115,16 @@ document.addEventListener('DOMContentLoaded', () => {
       serialBadge.textContent = `Serial: ${state.serial}`;
     }
 
+    if (state.realPrinterMode !== undefined) {
+      if (state.realPrinterMode) {
+        realPrinterBadge.textContent = 'Live Printer Mode';
+        realPrinterBadge.className = 'mode-badge live-mode';
+      } else {
+        realPrinterBadge.textContent = 'Safety Mode (Read-Only)';
+        realPrinterBadge.className = 'mode-badge safety-mode';
+      }
+    }
+
     printerDot.className = state.online ? 'status-dot online' : 'status-dot offline';
     printerStatusText.textContent = state.online ? 'Máy in Online' : 'Máy in Offline';
 
@@ -432,9 +442,23 @@ document.addEventListener('DOMContentLoaded', () => {
     };
   }
 
+  // REST API Status Fetch
+  async function fetchPrinterStatus() {
+    try {
+      const res = await fetch('/api/printer');
+      if (res.ok) {
+        const data = await res.json();
+        updateDashboardUI(data);
+      }
+    } catch (err) {
+      console.warn('REST API poll failed:', err);
+    }
+  }
+
   // Init
   addLog('Khởi tạo giao diện Gateway Dashboard & Camera...', 'info');
   connectWebSocket();
+  fetchPrinterStatus();
   initCameraInfo();
 
   // Refresh camera snapshot (2s)
