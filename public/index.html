@@ -3,8 +3,8 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Bambu Lab H2D Gateway - Real-time Dashboard</title>
-  <meta name="description" content="Local LAN Gateway & Real-time Dashboard for Bambu Lab H2D 3D Printer">
+  <title>Bambu Lab H2D Gateway - Real-time Dashboard & Camera</title>
+  <meta name="description" content="Local LAN Gateway, Real-time Dashboard & Live Camera Stream for Bambu Lab H2D 3D Printer">
   <!-- Google Fonts -->
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -139,6 +139,31 @@
                 <strong id="chamberCurr">--</strong><span class="unit">°C</span>
               </span>
             </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- Live Camera Stream Card -->
+      <section class="card camera-card">
+        <div class="card-header">
+          <div class="header-title">
+            <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"></path>
+              <circle cx="12" cy="13" r="4"></circle>
+            </svg>
+            <h2>Camera Live Stream</h2>
+          </div>
+          <div class="quick-links">
+            <a href="/api/camera/snapshot" target="_blank" class="api-link">GET /api/camera/snapshot</a>
+            <a href="/api/camera/info" target="_blank" class="api-link">GET /api/camera/info</a>
+          </div>
+        </div>
+
+        <div class="camera-viewport">
+          <img id="cameraStreamImg" src="/api/camera/snapshot" alt="Bambu Camera Feed" class="camera-feed-img" />
+          <div class="camera-overlay">
+            <span class="cam-live-indicator">● LIVE CAMERA</span>
+            <span class="cam-rtsp-url" id="camRtspUrl">RTSPS: Loading...</span>
           </div>
         </div>
       </section>

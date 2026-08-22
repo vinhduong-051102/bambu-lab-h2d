@@ -31,6 +31,9 @@
   const chamberFanBar = document.getElementById('chamberFanBar');
   const mainFanIcon = document.getElementById('mainFanIcon');
 
+  const cameraStreamImg = document.getElementById('cameraStreamImg');
+  const camRtspUrl = document.getElementById('camRtspUrl');
+
   const amsContainer = document.getElementById('amsContainer');
   const consoleLogs = document.getElementById('consoleLogs');
   const lastUpdateText = document.getElementById('lastUpdateText');
@@ -176,6 +179,21 @@
     }
   }
 
+  // Camera Info Fetcher
+  async function initCameraInfo() {
+    try {
+      const res = await fetch('/api/camera/info');
+      if (res.ok) {
+        const info = await res.json();
+        if (camRtspUrl && info.rtspsUrl322) {
+          camRtspUrl.textContent = `RTSPS: ${info.rtspsUrl322}`;
+        }
+      }
+    } catch (err) {
+      console.warn('Failed to fetch camera info:', err);
+    }
+  }
+
   // REST API Fallback Polling
   async function fetchPrinterStatus() {
     try {
@@ -253,9 +271,17 @@
   }
 
   // Init
-  addLog('Đang khởi tạo kết nối Gateway Web Dashboard...', 'info');
+  addLog('Đang khởi tạo kết nối Gateway Web Dashboard & Camera...', 'info');
   connectWebSocket();
   fetchPrinterStatus();
+  initCameraInfo();
+
+  // Periodically refresh camera snapshot (2s)
+  setInterval(() => {
+    if (cameraStreamImg) {
+      cameraStreamImg.src = `/api/camera/snapshot?t=${Date.now()}`;
+    }
+  }, 2000);
 
   // Fallback Polling every 5 seconds in case WS drops
   pollTimer = setInterval(fetchPrinterStatus, 5000);

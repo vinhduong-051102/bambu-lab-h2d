@@ -3,6 +3,7 @@ import { logger } from './logger/logger.js';
 import { PrinterStateStore } from './domain/PrinterStateStore.js';
 import { normalizePrinterState } from './domain/normalizePrinterState.js';
 import { BambuMqttClient } from './bambu/BambuMqttClient.js';
+import { BambuCameraService } from './bambu/BambuCameraService.js';
 import { BambuMessageParser } from './bambu/BambuMessageParser.js';
 import { createServer } from './server/server.js';
 import { BambuTopics } from './bambu/BambuTopics.js';
@@ -34,15 +35,20 @@ Web Dashboard:
 REST API:
   http://${env.HTTP_HOST}:${env.HTTP_PORT}/api/printer
 
+Camera Snapshot API:
+  http://${env.HTTP_HOST}:${env.HTTP_PORT}/api/camera/snapshot
+
 WebSocket:
   ws://${env.HTTP_HOST}:${env.HTTP_PORT}/ws
 `);
 
-  // 1. Initialize Printer State Store
+  // 1. Initialize Printer State Store & Camera Service
   const stateStore = new PrinterStateStore(env.BAMBU_SERIAL, env.PRINTER_OFFLINE_TIMEOUT_MS);
+  const cameraService = new BambuCameraService(env.BAMBU_HOST, env.BAMBU_ACCESS_CODE);
+  cameraService.start();
 
   // 2. Initialize Fastify Server
-  const server = await createServer(stateStore);
+  const server = await createServer(stateStore, cameraService);
 
   try {
     await server.listen({ host: env.HTTP_HOST, port: env.HTTP_PORT });
@@ -91,6 +97,7 @@ Subscribed:
   // Graceful shutdown handling
   const shutdown = async (signal: string) => {
     logger.info({ signal }, 'Shutting down Gateway...');
+    cameraService.stop();
     stateStore.destroy();
     await mqttClient.disconnect();
     await server.close();
