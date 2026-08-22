@@ -101,6 +101,28 @@ export class BambuMqttClient {
     this.messageCallbacks.add(callback);
   }
 
+  public async publishRequest(payload: Record<string, unknown>): Promise<boolean> {
+    if (!this.client || !this.isConnected()) {
+      logger.warn('Cannot publish MQTT request: client is not connected');
+      return false;
+    }
+
+    const topic = `device/${this.options.serial}/request`;
+    const jsonStr = JSON.stringify(payload);
+
+    return new Promise((resolve) => {
+      this.client!.publish(topic, jsonStr, { qos: 0 }, (err) => {
+        if (err) {
+          logger.error({ topic, error: err.message }, 'Failed to publish MQTT request');
+          resolve(false);
+        } else {
+          logger.info({ topic }, 'MQTT request payload published successfully');
+          resolve(true);
+        }
+      });
+    });
+  }
+
   public isConnected(): boolean {
     return this.connected && (this.client?.connected ?? false);
   }

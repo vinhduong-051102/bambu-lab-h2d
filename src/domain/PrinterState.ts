@@ -46,6 +46,10 @@ export interface PrinterState {
     aux: number | null;
     chamber: number | null;
   };
+  model?: string;
+  firmware?: string;
+  hmsErrors?: string[];
+  amsActiveTrayId?: number | null;
   ams?: AMSUnit[];
   lastMessageAt: string | null;
   updatedAt: string | null;

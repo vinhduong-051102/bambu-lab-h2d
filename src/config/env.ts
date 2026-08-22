@@ -30,6 +30,16 @@ const envSchema = z.object({
     .string()
     .optional()
     .transform((val) => val === undefined || val === '' || val.toLowerCase() === 'true'),
+  GATEWAY_API_KEY: z.string().optional(),
+  BAMBU_REAL_PRINTER: z
+    .string()
+    .optional()
+    .transform((val) => val === 'true' || val === '1'),
+  BAMBU_DEBUG_PROTOCOL: z
+    .string()
+    .optional()
+    .transform((val) => val === 'true' || val === '1'),
+  COMMAND_TIMEOUT_MS: z.coerce.number().default(10000),
 });
 
 const _env = envSchema.safeParse(process.env);

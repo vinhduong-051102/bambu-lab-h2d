@@ -20,6 +20,10 @@ export class PrinterStateStore {
     return { ...this.state };
   }
 
+  public isOnline(): boolean {
+    return this.state.online;
+  }
+
   public getRawPayload(): Record<string, unknown> | null {
     return this.rawPayload;
   }

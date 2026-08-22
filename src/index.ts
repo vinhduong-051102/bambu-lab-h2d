@@ -1,6 +1,10 @@
 import { env } from './config/env.js';
 import { logger } from './logger/logger.js';
 import { PrinterStateStore } from './domain/PrinterStateStore.js';
+import { CapabilityRegistry } from './domain/capabilities/CapabilityRegistry.js';
+import { PrinterCommandService } from './domain/commands/PrinterCommandService.js';
+import { PrinterService } from './domain/PrinterService.js';
+import { PrinterManager } from './domain/PrinterManager.js';
 import { normalizePrinterState } from './domain/normalizePrinterState.js';
 import { BambuMqttClient } from './bambu/BambuMqttClient.js';
 import { BambuCameraService } from './bambu/BambuCameraService.js';
@@ -25,6 +29,7 @@ Printer:
   Host: ${env.BAMBU_HOST}
   Port: ${env.BAMBU_PORT}
   Serial: ${maskedSerial}
+  Real Printer Mode: ${env.BAMBU_REAL_PRINTER ? 'ENABLED (Commands active)' : 'DISABLED (Read-only / Safety mode)'}
 
 MQTT:
   Status: connecting...
@@ -32,8 +37,12 @@ MQTT:
 Web Dashboard:
   http://${env.HTTP_HOST}:${env.HTTP_PORT}
 
-REST API:
-  http://${env.HTTP_HOST}:${env.HTTP_PORT}/api/printer
+REST API Endpoints:
+  - Capabilities: http://${env.HTTP_HOST}:${env.HTTP_PORT}/api/capabilities
+  - Printer State: http://${env.HTTP_HOST}:${env.HTTP_PORT}/api/printer
+  - Printer Info:  http://${env.HTTP_HOST}:${env.HTTP_PORT}/api/printer/info
+  - Printer AMS:   http://${env.HTTP_HOST}:${env.HTTP_PORT}/api/ams
+  - Audit Logs:    http://${env.HTTP_HOST}:${env.HTTP_PORT}/api/commands
 
 Camera Snapshot API:
   http://${env.HTTP_HOST}:${env.HTTP_PORT}/api/camera/snapshot
@@ -42,13 +51,36 @@ WebSocket:
   ws://${env.HTTP_HOST}:${env.HTTP_PORT}/ws
 `);
 
-  // 1. Initialize Printer State Store & Camera Service
-  const stateStore = new PrinterStateStore(env.BAMBU_SERIAL, env.PRINTER_OFFLINE_TIMEOUT_MS);
+  // 1. Initialize MQTT Client & Camera Service
+  const mqttClient = new BambuMqttClient({
+    host: env.BAMBU_HOST,
+    port: env.BAMBU_PORT,
+    serial: env.BAMBU_SERIAL,
+    accessCode: env.BAMBU_ACCESS_CODE,
+  });
+
   const cameraService = new BambuCameraService(env.BAMBU_HOST, env.BAMBU_ACCESS_CODE);
   cameraService.start();
 
-  // 2. Initialize Fastify Server
-  const server = await createServer(stateStore, cameraService);
+  // 2. Initialize Domain Services (StateStore, CapabilityRegistry, CommandService, PrinterService)
+  const stateStore = new PrinterStateStore(env.BAMBU_SERIAL, env.PRINTER_OFFLINE_TIMEOUT_MS);
+  const capabilityRegistry = new CapabilityRegistry();
+  const commandService = new PrinterCommandService(capabilityRegistry, stateStore, mqttClient);
+
+  const printerService = new PrinterService({
+    serial: env.BAMBU_SERIAL,
+    stateStore,
+    capabilityRegistry,
+    commandService,
+    cameraService,
+    mqttClient,
+  });
+
+  const printerManager = new PrinterManager();
+  printerManager.registerPrinter(env.BAMBU_SERIAL, printerService);
+
+  // 3. Initialize Fastify Server
+  const server = await createServer(printerService, printerManager);
 
   try {
     await server.listen({ host: env.HTTP_HOST, port: env.HTTP_PORT });
@@ -58,19 +90,15 @@ WebSocket:
     process.exit(1);
   }
 
-  // 3. Initialize Bambu MQTT Client
-  const mqttClient = new BambuMqttClient({
-    host: env.BAMBU_HOST,
-    port: env.BAMBU_PORT,
-    serial: env.BAMBU_SERIAL,
-    accessCode: env.BAMBU_ACCESS_CODE,
-  });
-
   // Handle incoming MQTT messages
   mqttClient.onMessage((topic, message) => {
     const rawPayload = BambuMessageParser.parseJsonPayload(message);
     if (!rawPayload) {
       return;
+    }
+
+    if (env.BAMBU_DEBUG_PROTOCOL) {
+      logger.info({ topic, payloadLength: message.length }, '[DEBUG PROTOCOL] Received MQTT report');
     }
 
     stateStore.setRawPayload(rawPayload as Record<string, unknown>);
