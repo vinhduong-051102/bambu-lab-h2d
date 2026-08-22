@@ -212,9 +212,25 @@
 
     ws.onmessage = (event) => {
       try {
-        const data = JSON.parse(event.data);
-        updateDashboardUI(data);
-        addLog(`Đã nhận dữ liệu telemetry từ máy in (Trạng thái: ${data.state})`, 'info');
+        const message = JSON.parse(event.data);
+        let printerState = null;
+
+        if (message.type === 'printer.state') {
+          printerState = message.data;
+        } else if (message.type === 'printer.connection') {
+          if (message.data && typeof message.data.online === 'boolean') {
+            printerDot.className = message.data.online ? 'status-dot online' : 'status-dot offline';
+            printerStatusText.textContent = message.data.online ? 'Máy in Online' : 'Máy in Offline';
+          }
+          return;
+        } else {
+          printerState = message;
+        }
+
+        if (printerState) {
+          updateDashboardUI(printerState);
+          addLog(`Đã nhận dữ liệu telemetry từ máy in (Trạng thái: ${printerState.state || 'UNKNOWN'})`, 'info');
+        }
       } catch (err) {
         console.error('Error parsing WS frame:', err);
       }
