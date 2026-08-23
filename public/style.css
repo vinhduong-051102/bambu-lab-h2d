@@ -25,6 +25,12 @@
   box-sizing: border-box;
   margin: 0;
   padding: 0;
+  overflow-wrap: break-word;
+}
+
+pre, code {
+  white-space: pre-wrap;
+  word-break: break-all;
 }
 
 body {
@@ -636,6 +642,39 @@ body {
   color: #60a5fa;
 }
 
+/* Compact View Mode (Ẩn Log & Hướng Dẫn) */
+.btn-compact-mode {
+  background: rgba(139, 92, 246, 0.15);
+  border: 1px solid rgba(139, 92, 246, 0.4);
+  color: #c084fc;
+  padding: 6px 12px;
+  border-radius: var(--radius-sm);
+  font-size: 0.78rem;
+  font-weight: 600;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  transition: var(--transition-fast);
+}
+
+.btn-compact-mode:hover {
+  background: rgba(139, 92, 246, 0.3);
+  border-color: #a855f7;
+  color: #e9d5ff;
+}
+
+body.compact-mode .console-card,
+body.compact-mode .diag-card,
+body.compact-mode .cam-help-box,
+body.compact-mode .header-badges,
+body.compact-mode #openApiModalBtn,
+body.compact-mode #openCapModalBtn,
+body.compact-mode #wsPill,
+body.compact-mode .app-footer {
+  display: none !important;
+}
+
 .cam-help-box {
   background: rgba(0, 0, 0, 0.25);
   border: 1px solid var(--card-border);
@@ -782,7 +821,36 @@ body {
   gap: 8px;
 }
 
+.btn-ams-action {
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid var(--card-border);
+  color: var(--text-main);
+  padding: 4px 10px;
+  border-radius: var(--radius-sm);
+  font-size: 0.76rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: var(--transition-fast);
+}
+
+.btn-ams-action:hover {
+  background: rgba(255, 255, 255, 0.16);
+  border-color: var(--primary-accent);
+}
+
+.btn-ams-primary {
+  background: rgba(59, 130, 246, 0.2);
+  border-color: #3b82f6;
+  color: #60a5fa;
+}
+
+.btn-ams-primary:hover {
+  background: rgba(59, 130, 246, 0.35);
+  color: #93c5fd;
+}
+
 .tray-item {
+  position: relative;
   background: rgba(255, 255, 255, 0.04);
   border: 1px solid var(--card-border);
   padding: 8px;
@@ -791,6 +859,33 @@ body {
   flex-direction: column;
   align-items: center;
   gap: 4px;
+  cursor: pointer;
+  transition: transform 0.15s ease, border-color 0.15s ease;
+}
+
+.tray-item:hover {
+  transform: translateY(-2px);
+  border-color: #3b82f6;
+  background: rgba(59, 130, 246, 0.08);
+}
+
+.tray-item.active-tray {
+  border-color: #10b981;
+  box-shadow: 0 0 12px rgba(16, 185, 129, 0.35);
+  background: rgba(16, 185, 129, 0.08);
+}
+
+.active-tray-badge {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  background: #10b981;
+  color: #000;
+  font-size: 0.58rem;
+  font-weight: 800;
+  padding: 1px 4px;
+  border-radius: 4px;
+  letter-spacing: 0.5px;
 }
 
 .color-dot {
@@ -1306,9 +1401,28 @@ body {
   }
 
   .btn-cap-modal {
-    width: 100%;
+    flex: 1 1 calc(50% - 6px);
     justify-content: center;
-    padding: 8px;
+    padding: 8px 10px;
+    font-size: 0.78rem;
+  }
+
+  .quick-links {
+    flex-wrap: wrap;
+    gap: 6px;
+    width: 100%;
+  }
+
+  .diag-actions {
+    flex-direction: column;
+    width: 100%;
+    gap: 6px;
+  }
+
+  .btn-open-raw-modal, .btn-refresh-diag {
+    width: 100%;
+    text-align: center;
+    justify-content: center;
   }
 
   .control-quick-bar {
@@ -1415,14 +1529,79 @@ body {
   }
 
   .modal-content {
-    width: 95%;
-    padding: 16px;
+    width: 96vw !important;
+    max-width: 96vw !important;
+    max-height: 90vh !important;
+    padding: 14px !important;
+    gap: 10px !important;
+    box-sizing: border-box !important;
+    overflow-x: hidden !important;
+  }
+
+  .modal-header h3, .modal-title h2 {
+    font-size: 0.95rem !important;
+    word-break: break-word;
+  }
+
+  .raw-modal-content {
+    width: 96vw !important;
+    max-width: 96vw !important;
+    height: 92vh !important;
+    max-height: 92vh !important;
+    padding: 10px !important;
+    gap: 8px !important;
+    box-sizing: border-box !important;
+    overflow-x: hidden !important;
+  }
+
+  .raw-modal-header {
+    flex-wrap: wrap;
+    gap: 6px;
+  }
+
+  .raw-title-group h3 {
+    font-size: 0.95rem !important;
+  }
+
+  .raw-modal-body {
+    flex-direction: column !important;
+    overflow-y: auto !important;
+    gap: 8px !important;
+  }
+
+  .raw-sidebar {
+    width: 100% !important;
+    flex-direction: row !important;
+    overflow-x: auto !important;
+    padding: 4px !important;
+    gap: 4px !important;
+    flex-shrink: 0;
+  }
+
+  .raw-tab-btn {
+    white-space: nowrap;
+    padding: 6px 10px;
+    font-size: 0.75rem;
+  }
+
+  .raw-content-area {
+    width: 100% !important;
+    box-sizing: border-box !important;
+    padding: 8px !important;
+    overflow-x: hidden !important;
+  }
+
+  .full-raw-json-viewer {
+    font-size: 0.75rem !important;
+    word-break: break-all;
+    white-space: pre-wrap;
   }
 
   .cap-item {
     flex-direction: column;
     align-items: flex-start;
     gap: 4px;
+    word-break: break-word;
   }
 
   .cap-status-pill {

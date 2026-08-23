@@ -17,6 +17,7 @@ import { amsRoutes } from '../api/routes/ams.js';
 import { fileRoutes } from '../api/routes/files.js';
 import { commandRoutes } from '../api/routes/commands.js';
 import { cameraRoutes } from '../api/routes/camera.js';
+import { docsRoutes } from '../api/routes/docs.js';
 import { websocketRoutes } from '../api/websocket.js';
 
 export async function createServer(
@@ -60,6 +61,7 @@ export async function createServer(
 
   // Register All REST API & WebSocket Routes
   await fastify.register(healthRoutes);
+  await fastify.register(docsRoutes);
   await fastify.register(capabilitiesRoutes, { capabilityRegistry: printerService.capabilityRegistry });
   await fastify.register(printerRoutes, { printerService, printerManager });
   await fastify.register(printRoutes, { printerService });

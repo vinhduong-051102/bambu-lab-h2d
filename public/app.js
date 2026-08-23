@@ -127,48 +127,6 @@ document.addEventListener('DOMContentLoaded', () => {
       if (!res.ok) return;
       const data = await res.json();
 
-      // Render Active Tool
-      if (diagActiveTool) {
-        const mnt = data.machineNozzleTemperature || {};
-        diagActiveTool.innerHTML = `
-          <div>Active Nozzle ID: <strong>${data.activeNozzleId !== null && data.activeNozzleId !== undefined ? data.activeNozzleId : 'None'}</strong></div>
-          <div>Machine Temp: <strong>${mnt.current !== null && mnt.current !== undefined ? mnt.current : '--'}°C</strong> / Target: <strong>${mnt.target ?? 0}°C</strong></div>
-          <div>Source: <code>${mnt.source || 'N/A'}</code></div>
-          <div>Confidence: <span style="color: #eab308;">${mnt.confidence || 'POSSIBLE'}</span></div>
-        `;
-      }
-
-      // Render Hardware Nozzles
-      if (diagNozzles) {
-        const nozzlesList = data.nozzles || [];
-        if (nozzlesList.length === 0) {
-          diagNozzles.innerHTML = '<div>Không có dữ liệu nozzle phần cứng</div>';
-        } else {
-          diagNozzles.innerHTML = nozzlesList.map((n) => `
-            <div style="border-bottom: 1px solid rgba(255,255,255,0.05); padding-bottom: 4px; margin-bottom: 4px;">
-              <strong>Nozzle #${n.id}</strong> (Type: ${n.type || 'N/A'}, Size: ${n.diameter || '--'}mm, SN: ${n.serial || 'N/A'})<br>
-              Temp: <strong style="color: ${n.current !== null ? '#4ade80' : '#ef4444'}">${n.current !== null && n.current !== undefined ? n.current + '°C' : '--'}</strong> | State: ${n.state ?? 0} | Wear: ${n.wear ?? 0} | TM: ${n.tm ?? 0}<br>
-              Confidence: <span style="color: ${n.temperatureConfidence === 'CONFIRMED' ? '#4ade80' : '#94a3b8'}">${n.temperatureConfidence || 'UNKNOWN'}</span>
-            </div>
-          `).join('');
-        }
-      }
-
-      // Render Extruders
-      if (diagExtruders) {
-        const extList = data.extruders || [];
-        if (extList.length === 0) {
-          diagExtruders.innerHTML = '<div>Không có dữ liệu extruder phần cứng</div>';
-        } else {
-          diagExtruders.innerHTML = extList.map((e) => `
-            <div style="border-bottom: 1px solid rgba(255,255,255,0.05); padding-bottom: 4px; margin-bottom: 4px;">
-              <strong>Extruder #${e.id}</strong> - Temp: <strong style="color: #38bdf8">${e.temp !== null && e.temp !== undefined ? e.temp + '°C' : '--'}</strong><br>
-              hnow: ${e.hnow ?? 0} | hpre: ${e.hpre ?? 0} | htar: ${e.htar ?? 0} | state: ${e.state ?? 0}
-            </div>
-          `).join('');
-        }
-      }
-
       // Render Raw Data Json
       if (diagRawJson) {
         diagRawJson.textContent = JSON.stringify({
@@ -267,7 +225,7 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     if (state.ams) {
-      renderAMS(state.ams);
+      renderAMS(state.ams, state.amsActiveTrayId);
     }
 
     if (state.updatedAt) {
@@ -289,7 +247,7 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   // AMS Renderer
-  function renderAMS(amsUnits) {
+  function renderAMS(amsUnits, activeTrayId = null) {
     if (!amsUnits || amsUnits.length === 0) {
       amsContainer.innerHTML = '<div class="empty-ams">Chưa có dữ liệu khay nhựa AMS</div>';
       return;
@@ -297,7 +255,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     amsContainer.innerHTML = amsUnits.map((unit) => {
       const traysList = unit.trays || unit.filaments || [];
-      const filamentsHtml = traysList.map((fil) => {
+      const filamentsHtml = traysList.map((fil, idx) => {
         const hexColor = formatHexColor(fil.color || fil.rawColor);
         const rawRem = fil.remain !== undefined && fil.remain !== null ? fil.remain : fil.remainingPercentage;
         let remText = '--';
@@ -305,8 +263,14 @@ document.addEventListener('DOMContentLoaded', () => {
           const numRem = Number(rawRem);
           remText = !isNaN(numRem) ? `${Math.max(0, numRem)}%` : `${rawRem}%`;
         }
+
+        const isActive = activeTrayId === idx;
+        const activeClass = isActive ? 'active-tray' : '';
+        const activeBadge = isActive ? '<span class="active-tray-badge">ACTIVE</span>' : '';
+
         return `
-          <div class="tray-item">
+          <div class="tray-item ${activeClass}" data-tray-id="${idx}" title="Bấm để NẠP khay nhựa này (Slot #${idx + 1})">
+            ${activeBadge}
             <div class="color-dot" style="background-color: ${hexColor};" title="Màu: ${hexColor}"></div>
             <span class="tray-type">${fil.type || 'N/A'}</span>
             <span class="tray-rem">${remText}</span>
@@ -321,6 +285,18 @@ document.addEventListener('DOMContentLoaded', () => {
         </div>
       `;
     }).join('');
+
+    // Attach click handlers to trays for fast loading
+    document.querySelectorAll('.tray-item').forEach((el) => {
+      el.addEventListener('click', () => {
+        const trayId = Number(el.getAttribute('data-tray-id'));
+        if (!isNaN(trayId)) {
+          if (confirm(`Bạn có muốn NẠP NHỰA từ AMS Khay #${trayId + 1} vào đầu in không?`)) {
+            sendCommand('/api/ams/load', 'POST', { target: trayId, temp: 220 });
+          }
+        }
+      });
+    });
   }
 
   // Send Command API Helper
@@ -497,10 +473,116 @@ document.addEventListener('DOMContentLoaded', () => {
       if (res.ok && data.success) {
         showToast(data.message || 'Đã thử kết nối lại camera!', 'success');
         addLog('🔄 Đã gửi lệnh reconnect Camera TLS 6000.', 'info');
-        setTimeout(initCameraInfo, 2000);
+        setTimeout(fetchCameraStatus, 2000);
       }
     } catch (err) {
       showToast(`Lỗi kết nối API: ${err.message}`, 'error');
+    }
+  });
+
+  // Compact View Toggle (Ẩn/Hiện Log & Hướng Dẫn)
+  const btnToggleCompactView = document.getElementById('btnToggleCompactView');
+  const compactIcon = document.getElementById('compactIcon');
+  const compactText = document.getElementById('compactText');
+
+  function setCompactMode(enable) {
+    if (enable) {
+      document.body.classList.add('compact-mode');
+      if (compactIcon) compactIcon.textContent = '✨';
+      if (compactText) compactText.textContent = 'Giao Diện: Đơn Giản';
+      if (btnToggleCompactView) {
+        btnToggleCompactView.style.background = 'rgba(16, 185, 129, 0.2)';
+        btnToggleCompactView.style.borderColor = '#10b981';
+        btnToggleCompactView.style.color = '#6ee7b7';
+      }
+      localStorage.setItem('bambu_compact_mode', 'true');
+    } else {
+      document.body.classList.remove('compact-mode');
+      if (compactIcon) compactIcon.textContent = '👁️';
+      if (compactText) compactText.textContent = 'Giao Diện: Đầy Đủ';
+      if (btnToggleCompactView) {
+        btnToggleCompactView.style.background = 'rgba(139, 92, 246, 0.15)';
+        btnToggleCompactView.style.borderColor = 'rgba(139, 92, 246, 0.4)';
+        btnToggleCompactView.style.color = '#c084fc';
+      }
+      localStorage.setItem('bambu_compact_mode', 'false');
+    }
+  }
+
+  // Restore saved compact mode setting
+  const savedCompact = localStorage.getItem('bambu_compact_mode') === 'true';
+  setCompactMode(savedCompact);
+
+  btnToggleCompactView?.addEventListener('click', () => {
+    const isCompact = document.body.classList.contains('compact-mode');
+    setCompactMode(!isCompact);
+    showToast(!isCompact ? 'Đã bật Chế Độ Giao Diện Đơn Giản (Đã ẩn log & hướng dẫn)' : 'Đã chuyển về Chế Độ Giao Diện Đầy Đủ', 'info');
+  });
+
+  // API Documentation Explorer Modal
+  const openApiModalBtn = document.getElementById('openApiModalBtn');
+  const closeApiModalBtn = document.getElementById('closeApiModalBtn');
+  const apiModal = document.getElementById('apiModal');
+  const apiListContainer = document.getElementById('apiListContainer');
+
+  openApiModalBtn?.addEventListener('click', async () => {
+    apiModal.classList.add('open');
+    apiListContainer.innerHTML = '<div class="loading-spinner">Đang tải danh sách API...</div>';
+
+    try {
+      const res = await fetch('/api/routes');
+      if (res.ok) {
+        const data = await res.json();
+        const routes = data.routes || [];
+
+        const categories = {};
+        routes.forEach((r) => {
+          const cat = r.category || 'Khác';
+          if (!categories[cat]) categories[cat] = [];
+          categories[cat].push(r);
+        });
+
+        let html = '';
+        for (const [catName, catRoutes] of Object.entries(categories)) {
+          html += `
+            <div class="api-category-group" style="margin-bottom: 16px;">
+              <h4 style="color: #38bdf8; font-size: 0.9rem; margin-bottom: 8px; border-bottom: 1px solid rgba(255,255,255,0.1); padding-bottom: 4px;">📂 ${catName} (${catRoutes.length})</h4>
+              <div style="display: flex; flex-direction: column; gap: 8px;">
+                ${catRoutes.map((r) => {
+                  const isPost = r.method.includes('POST');
+                  const methodColor = isPost ? '#10b981' : '#3b82f6';
+                  const methodBg = isPost ? 'rgba(16, 185, 129, 0.15)' : 'rgba(59, 130, 246, 0.15)';
+                  return `
+                    <div style="background: rgba(15, 23, 42, 0.6); border: 1px solid var(--card-border); padding: 10px 12px; border-radius: var(--radius-sm); font-size: 0.8rem; overflow-x: hidden;">
+                      <div style="display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 8px;">
+                        <div style="display: flex; flex-wrap: wrap; align-items: center; gap: 8px; font-family: var(--font-mono); word-break: break-all; max-width: 100%;">
+                          <span style="background: ${methodBg}; color: ${methodColor}; padding: 2px 6px; border-radius: 4px; font-size: 0.72rem; font-weight: bold; flex-shrink: 0;">${r.method}</span>
+                          <a href="${r.exampleUrl || '#'}" target="_blank" style="color: #f8fafc; font-weight: 600; text-decoration: none; word-break: break-all;">${r.path}</a>
+                        </div>
+                        ${r.body ? `<span style="font-family: var(--font-mono); font-size: 0.72rem; color: #94a3b8; background: rgba(255,255,255,0.05); padding: 2px 6px; border-radius: 4px; word-break: break-all;">Body: ${r.body}</span>` : ''}
+                      </div>
+                      <div style="margin-top: 4px; color: #94a3b8; font-size: 0.76rem; word-break: break-word;">${r.description}</div>
+                    </div>
+                  `;
+                }).join('')}
+              </div>
+            </div>
+          `;
+        }
+        apiListContainer.innerHTML = html;
+      }
+    } catch (err) {
+      apiListContainer.innerHTML = `<div style="color: #ef4444;">Không thể tải danh sách API: ${err.message}</div>`;
+    }
+  });
+
+  closeApiModalBtn?.addEventListener('click', () => {
+    apiModal?.classList.remove('open');
+  });
+
+  apiModal?.addEventListener('click', (e) => {
+    if (e.target === apiModal) {
+      apiModal.classList.remove('open');
     }
   });
 
@@ -781,6 +863,72 @@ document.addEventListener('DOMContentLoaded', () => {
   fetchPrinterStatus();
   fetchDiagnostics();
   fetchCameraStatus();
+
+  // AMS Control Buttons & Modal Handlers
+  const btnAmsUnload = document.getElementById('btnAmsUnload');
+  const btnAmsRetry = document.getElementById('btnAmsRetry');
+  const btnOpenAmsModal = document.getElementById('btnOpenAmsModal');
+  const closeAmsModalBtn = document.getElementById('closeAmsModalBtn');
+  const amsSettingModal = document.getElementById('amsSettingModal');
+  const btnSaveAmsSetting = document.getElementById('btnSaveAmsSetting');
+
+  const amsSelectTray = document.getElementById('amsSelectTray');
+  const amsSelectType = document.getElementById('amsSelectType');
+  const amsColorPicker = document.getElementById('amsColorPicker');
+  const amsColorHex = document.getElementById('amsColorHex');
+  const amsMinTemp = document.getElementById('amsMinTemp');
+  const amsMaxTemp = document.getElementById('amsMaxTemp');
+
+  btnAmsUnload?.addEventListener('click', () => {
+    if (confirm('Bạn có chắc chắn muốn RÚT NHỰA hiện tại khỏi đầu in về bộ AMS?')) {
+      sendCommand('/api/ams/unload', 'POST');
+    }
+  });
+
+  btnAmsRetry?.addEventListener('click', () => {
+    sendCommand('/api/ams/retry', 'POST');
+  });
+
+  btnOpenAmsModal?.addEventListener('click', () => {
+    amsSettingModal?.classList.add('open');
+  });
+
+  closeAmsModalBtn?.addEventListener('click', () => {
+    amsSettingModal?.classList.remove('open');
+  });
+
+  amsSettingModal?.addEventListener('click', (e) => {
+    if (e.target === amsSettingModal) amsSettingModal.classList.remove('open');
+  });
+
+  amsColorPicker?.addEventListener('input', (e) => {
+    if (amsColorHex) amsColorHex.value = e.target.value.toUpperCase();
+  });
+
+  amsColorHex?.addEventListener('input', (e) => {
+    if (amsColorPicker && e.target.value.startsWith('#') && e.target.value.length === 7) {
+      amsColorPicker.value = e.target.value;
+    }
+  });
+
+  btnSaveAmsSetting?.addEventListener('click', async () => {
+    const trayId = Number(amsSelectTray?.value || 0);
+    const type = amsSelectType?.value || 'PLA';
+    const color = amsColorHex?.value || '#3B82F6';
+    const minTemp = Number(amsMinTemp?.value || 190);
+    const maxTemp = Number(amsMaxTemp?.value || 240);
+
+    await sendCommand('/api/ams/setting', 'POST', {
+      amsId: 0,
+      trayId,
+      color,
+      type,
+      minTemp,
+      maxTemp,
+    });
+
+    amsSettingModal?.classList.remove('open');
+  });
 
   // Handle Camera Stream Fallback
   if (cameraImg) {

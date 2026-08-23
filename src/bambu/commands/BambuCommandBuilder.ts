@@ -83,4 +83,55 @@ export class BambuCommandBuilder {
       },
     };
   }
+
+  public static buildAmsChangeFilamentPayload(
+    target: number,
+    currTemp = 220,
+    tarTemp = 220
+  ): Record<string, unknown> {
+    return {
+      print: {
+        sequence_id: this.getNextSequenceId(),
+        command: 'ams_change_filament',
+        target,
+        curr_temp: currTemp,
+        tar_temp: tarTemp,
+      },
+    };
+  }
+
+  public static buildAmsFilamentSettingPayload(
+    amsId: number,
+    trayId: number,
+    trayInfoIdx: string,
+    trayColor: string,
+    nozzleTempMin = 190,
+    nozzleTempMax = 240
+  ): Record<string, unknown> {
+    const formattedColor = trayColor.replace('#', '').toUpperCase();
+    const colorHex = formattedColor.length === 6 ? `${formattedColor}FF` : formattedColor;
+
+    return {
+      print: {
+        sequence_id: this.getNextSequenceId(),
+        command: 'ams_filament_setting',
+        ams_id: amsId,
+        tray_id: trayId,
+        tray_info_idx: trayInfoIdx,
+        tray_color: colorHex,
+        nozzle_temp_min: nozzleTempMin,
+        nozzle_temp_max: nozzleTempMax,
+      },
+    };
+  }
+
+  public static buildAmsControlPayload(param: 'retry' | 'reset' | 'resume' | 'pause'): Record<string, unknown> {
+    return {
+      print: {
+        sequence_id: this.getNextSequenceId(),
+        command: 'ams_control',
+        param,
+      },
+    };
+  }
 }
