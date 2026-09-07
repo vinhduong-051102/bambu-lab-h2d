@@ -55,7 +55,17 @@ export class BambuMessageParser {
       remainingTimeMinutes: number | null;
     };
     fan?: FanState;
+    amsActiveTrayId?: number | null;
+    amsTargetTrayId?: number | null;
+    amsCurrentTrayId?: number | null;
+    amsTrayNow?: string | number | null;
+    amsTrayTar?: string | number | null;
+    amsTrayPre?: string | number | null;
+    amsExistBits?: string | number | null;
+    trayExistBits?: string | number | null;
+    trayIsBblBits?: string | number | null;
     ams?: AMSUnit[];
+    rawAmsPayload?: Record<string, unknown>;
     hmsErrors?: HMSError[];
     ipcam?: IPCamData;
     rawExtensions?: Record<string, unknown>;
@@ -365,8 +375,11 @@ export class BambuMessageParser {
     };
 
     // 10. AMS
-    if (print.ams !== undefined) processedKeys.add('ams');
-    const ams = this.parseAmsData(print.ams, now);
+    let amsResult: ReturnType<typeof BambuMessageParser.parseAmsData> | undefined;
+    if (print.ams !== undefined) {
+      processedKeys.add('ams');
+      amsResult = this.parseAmsData(print.ams, now);
+    }
 
     // 11. HMS Errors
     if (print.hms !== undefined) processedKeys.add('hms');
@@ -427,7 +440,17 @@ export class BambuMessageParser {
       extruders,
       job,
       fan,
-      ams,
+      amsActiveTrayId: amsResult?.activeTrayId,
+      amsTargetTrayId: amsResult?.targetTrayId,
+      amsCurrentTrayId: amsResult?.currentTrayId,
+      amsTrayNow: amsResult?.amsTrayNow,
+      amsTrayTar: amsResult?.amsTrayTar,
+      amsTrayPre: amsResult?.amsTrayPre,
+      amsExistBits: amsResult?.amsExistBits,
+      trayExistBits: amsResult?.trayExistBits,
+      trayIsBblBits: amsResult?.trayIsBblBits,
+      ams: amsResult?.units,
+      rawAmsPayload: amsResult?.rawAmsPayload,
       hmsErrors,
       ipcam,
       rawExtensions: Object.keys(rawExtensions).length > 0 ? rawExtensions : undefined,
@@ -499,10 +522,36 @@ export class BambuMessageParser {
     }
   }
 
-  private static parseAmsData(amsObj: unknown, now: number): AMSUnit[] {
-    if (!amsObj || typeof amsObj !== 'object') return [];
-    const amsWrapper = amsObj as { ams?: unknown[] };
-    if (!Array.isArray(amsWrapper.ams)) return [];
+  private static parseAmsData(amsObj: unknown, now: number): {
+    units: AMSUnit[];
+    activeTrayId: number | null;
+    targetTrayId: number | null;
+    currentTrayId: number | null;
+    amsTrayNow: string | number | null;
+    amsTrayTar: string | number | null;
+    amsTrayPre: string | number | null;
+    amsExistBits: string | number | null;
+    trayExistBits: string | number | null;
+    trayIsBblBits: string | number | null;
+    rawAmsPayload?: Record<string, unknown>;
+  } {
+    if (!amsObj || typeof amsObj !== 'object') {
+      return {
+        units: [],
+        activeTrayId: null,
+        targetTrayId: null,
+        currentTrayId: null,
+        amsTrayNow: null,
+        amsTrayTar: null,
+        amsTrayPre: null,
+        amsExistBits: null,
+        trayExistBits: null,
+        trayIsBblBits: null,
+      };
+    }
+
+    const amsWrapper = amsObj as Record<string, any>;
+    const rawAmsPayload = { ...amsWrapper };
 
     const parseNum = (v: unknown): number | null => {
       if (typeof v === 'number') return isNaN(v) ? null : v;
@@ -513,29 +562,72 @@ export class BambuMessageParser {
       return null;
     };
 
-    return amsWrapper.ams.map((unit: any, idx: number) => {
+    const amsTrayNow = amsWrapper.tray_now ?? null;
+    const amsTrayTar = amsWrapper.tray_tar ?? null;
+    const amsTrayPre = amsWrapper.tray_pre ?? null;
+    const amsExistBits = amsWrapper.ams_exist_bits ?? null;
+    const trayExistBits = amsWrapper.tray_exist_bits ?? null;
+    const trayIsBblBits = amsWrapper.tray_is_bbl_bits ?? null;
+
+    const trayNowNum = parseNum(amsTrayNow);
+    const trayTarNum = parseNum(amsTrayTar);
+    const trayPreNum = parseNum(amsTrayPre);
+
+    // CRITICAL (Req 3, Req 11): 255 is sentinel value meaning UNLOADED / NO TRAY / INACTIVE
+    const activeTrayId = (trayNowNum !== null && trayNowNum !== 255 && trayNowNum >= 0 && trayNowNum < 254)
+      ? trayNowNum
+      : null;
+    const targetTrayId = (trayTarNum !== null && trayTarNum !== 255 && trayTarNum >= 0 && trayTarNum < 254)
+      ? trayTarNum
+      : null;
+    const currentTrayId = (trayPreNum !== null && trayPreNum !== 255 && trayPreNum >= 0 && trayPreNum < 254)
+      ? trayPreNum
+      : null;
+
+    const amsUnitsList = Array.isArray(amsWrapper.ams) ? amsWrapper.ams : [];
+
+    const units: AMSUnit[] = amsUnitsList.map((unit: any, unitIdx: number) => {
+      const unitIdNum = parseNum(unit?.id) ?? unitIdx;
       const trays: AMSTray[] = Array.isArray(unit.tray)
         ? unit.tray.map((tray: any, trayIdx: number) => {
             const rawColor = typeof tray?.tray_color === 'string' ? tray.tray_color : null;
             let color: string | null = null;
             if (rawColor) {
               const clean = rawColor.startsWith('#') ? rawColor.slice(1) : rawColor;
-              color = '#' + clean.slice(0, 6);
+              color = '#' + clean.slice(0, 6).toUpperCase();
             }
+
+            const trayIdNum = parseNum(tray?.id) ?? trayIdx;
+            const trayType = typeof tray?.tray_type === 'string' ? tray.tray_type : null;
+            const subBrand = typeof tray?.tray_sub_brands === 'string' ? tray.tray_sub_brands : null;
+            const remain = parseNum(tray?.remain);
+            const state = tray?.state !== undefined ? tray.state : null;
+
+            const isActive = activeTrayId !== null && activeTrayId === trayIdNum;
+            const isTarget = targetTrayId !== null && targetTrayId === trayIdNum;
+            const isEmpty = state === 0 || remain === 0 || (!trayType && remain === null);
+            const isLoaded = isActive || state === 11 || state === '11';
+
             return {
-              id: String(tray?.id ?? trayIdx),
-              type: typeof tray?.tray_type === 'string' ? tray.tray_type : null,
-              subBrands: typeof tray?.tray_sub_brands === 'string' ? tray.tray_sub_brands : null,
+              id: String(trayIdNum),
+              type: trayType,
+              subBrand,
+              subBrands: subBrand,
               color,
               rawColor,
-              remain: parseNum(tray?.remain),
+              remain,
               diameter: parseNum(tray?.tray_diameter),
               weight: parseNum(tray?.tray_weight),
               uuid: tray?.tray_uuid ? String(tray.tray_uuid) : null,
               tagUid: tray?.tag_uid ? String(tray.tag_uid) : null,
+              state,
+              isActive,
+              isTarget,
+              isEmpty,
+              isLoaded,
               infoIdx: parseNum(tray?.tray_info_idx),
               metadata: {
-                source: `print.ams.ams[${idx}].tray[${trayIdx}]`,
+                source: `print.ams.ams[${unitIdx}].tray[${trayIdx}]`,
                 confidence: 'CONFIRMED',
                 updatedAt: now,
               },
@@ -544,17 +636,36 @@ export class BambuMessageParser {
         : [];
 
       return {
-        id: String(unit?.id ?? idx),
+        id: String(unitIdNum),
+        temperature: parseNum(unit?.temp),
         humidity: parseNum(unit?.humidity),
         humidityRaw: unit?.humidity_raw ?? unit?.humidity ?? null,
-        temperature: parseNum(unit?.temp),
+        status: unit?.status ?? null,
         trays,
+        activeTrayId: activeTrayId,
+        targetTrayId: targetTrayId,
+        currentTrayId: currentTrayId,
+        exists: true,
         metadata: {
-          source: `print.ams.ams[${idx}]`,
+          source: `print.ams.ams[${unitIdx}]`,
           confidence: 'CONFIRMED',
           updatedAt: now,
         },
       };
     });
+
+    return {
+      units,
+      activeTrayId,
+      targetTrayId,
+      currentTrayId,
+      amsTrayNow,
+      amsTrayTar,
+      amsTrayPre,
+      amsExistBits,
+      trayExistBits,
+      trayIsBblBits,
+      rawAmsPayload,
+    };
   }
 }

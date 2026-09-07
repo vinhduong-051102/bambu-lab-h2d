@@ -69,24 +69,35 @@ export interface HMSError {
 export interface AMSTray {
   id: string;
   type: string | null;
-  subBrands: string | null;
-  color: string | null;
-  rawColor: string | null;
+  subBrand: string | null;
+  subBrands?: string | null; // Alias for backward compatibility
+  color: string | null;      // Normalized hex e.g. "#DBC8B6"
+  rawColor: string | null;   // Full raw hex e.g. "DBC8B6FF"
   remain: number | null;
   diameter: number | null;
   weight: number | null;
   uuid: string | null;
   tagUid: string | null;
+  state: number | string | null;
+  isActive: boolean;
+  isTarget: boolean;
+  isEmpty: boolean;
+  isLoaded: boolean;
   infoIdx: number | null;
   metadata?: FieldMetadata;
 }
 
 export interface AMSUnit {
   id: string;
+  temperature: number | null;
   humidity: number | null;
   humidityRaw: string | number | null;
-  temperature: number | null;
+  status: number | string | null;
   trays: AMSTray[];
+  activeTrayId: number | null;
+  targetTrayId: number | null;
+  currentTrayId: number | null;
+  exists: boolean;
   metadata?: FieldMetadata;
 }
 
@@ -134,8 +145,17 @@ export interface PrinterState {
   firmware?: string;
   hmsErrors?: HMSError[];
   amsActiveTrayId?: number | null;
+  amsTargetTrayId?: number | null;
+  amsCurrentTrayId?: number | null;
+  amsTrayNow?: string | number | null;
+  amsTrayTar?: string | number | null;
+  amsTrayPre?: string | number | null;
+  amsExistBits?: string | number | null;
+  trayExistBits?: string | number | null;
+  trayIsBblBits?: string | number | null;
   ams?: AMSUnit[];
   ipcam?: IPCamData;
+  rawAmsPayload?: Record<string, unknown>;
   rawExtensions?: Record<string, unknown>;
   lastMessageAt: string | null;
   updatedAt: string | null;

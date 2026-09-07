@@ -106,10 +106,12 @@ export class BambuCommandBuilder {
     trayInfoIdx: string,
     trayColor: string,
     nozzleTempMin = 190,
-    nozzleTempMax = 240
+    nozzleTempMax = 240,
+    trayType?: string
   ): Record<string, unknown> {
     const formattedColor = trayColor.replace('#', '').toUpperCase();
     const colorHex = formattedColor.length === 6 ? `${formattedColor}FF` : formattedColor;
+    const materialType = trayType || trayInfoIdx;
 
     return {
       print: {
@@ -118,9 +120,21 @@ export class BambuCommandBuilder {
         ams_id: amsId,
         tray_id: trayId,
         tray_info_idx: trayInfoIdx,
+        tray_type: materialType,
         tray_color: colorHex,
         nozzle_temp_min: nozzleTempMin,
         nozzle_temp_max: nozzleTempMax,
+      },
+    };
+  }
+
+  public static buildAmsGetRfidPayload(amsId: number, slotId: number): Record<string, unknown> {
+    return {
+      print: {
+        sequence_id: this.getNextSequenceId(),
+        command: 'ams_get_rfid',
+        ams_id: amsId,
+        slot_id: slotId,
       },
     };
   }

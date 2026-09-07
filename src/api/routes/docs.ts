@@ -25,6 +25,8 @@ export const GATEWAY_ROUTES: RouteDoc[] = [
   { method: 'POST', path: '/api/ams/unload', category: 'AMS Control', description: 'Rút nhựa hiện tại khỏi đầu in về bộ AMS', body: '{}' },
   { method: 'POST', path: '/api/ams/setting', category: 'AMS Control', description: 'Cài đặt loại nhựa, màu sắc hex & giới hạn nhiệt độ cho khay AMS', body: '{"amsId": 0, "trayId": 0, "color": "#FF0000", "type": "PLA"}' },
   { method: 'POST', path: '/api/ams/retry', category: 'AMS Control', description: 'Thử lại lệnh đùn/kéo nhựa AMS sau khi gặp lỗi rối nhựa', body: '{}' },
+  { method: 'GET', path: '/api/ams/debug', category: 'AMS Control', description: 'Debug protocol AMS thô (Raw Payload -> Parser -> State -> Command status)', exampleUrl: '/api/ams/debug' },
+  { method: 'GET', path: '/api/ams/0/tray/0/rfid', category: 'AMS Control', description: 'Đọc thông tin chip RFID từ khay nhựa AMS chỉ định', exampleUrl: '/api/ams/0/tray/0/rfid' },
 
   // 3. Camera Live Stream & Telemetry
   { method: 'GET', path: '/api/camera/status', category: 'Camera Stream', description: 'Trạng thái luồng RTSP camera, FPS, độ phân giải & frame count', exampleUrl: '/api/camera/status' },

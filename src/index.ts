@@ -12,6 +12,7 @@ import { BambuMessageParser } from './bambu/BambuMessageParser.js';
 import { BambuCommandBuilder } from './bambu/commands/BambuCommandBuilder.js';
 import { createServer } from './server/server.js';
 import { BambuTopics } from './bambu/BambuTopics.js';
+import { AmsCommandTracker } from './domain/commands/AmsCommandTracker.js';
 
 function maskString(str: string): string {
   if (!str) return '********';
@@ -102,10 +103,13 @@ WebSocket:
       logger.info({ topic, payloadLength: message.length }, '[DEBUG PROTOCOL] Received MQTT report');
     }
 
-    stateStore.setRawPayload(rawPayload as Record<string, unknown>);
+    const payloadObj = rawPayload as Record<string, unknown>;
+    AmsCommandTracker.getInstance().recordRawResponse(payloadObj, topic);
+    stateStore.setRawPayload(payloadObj);
     const currentState = stateStore.getState();
     const nextState = normalizePrinterState(currentState, rawPayload);
     stateStore.updateState(nextState);
+    AmsCommandTracker.getInstance().verifyTelemetry(nextState);
 
     if (nextState.ipcam?.rtspUrl) {
       cameraService.updateRtspUrl(nextState.ipcam.rtspUrl);

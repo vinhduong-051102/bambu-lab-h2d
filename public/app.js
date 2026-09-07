@@ -121,7 +121,12 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   // Diagnostics Explorer Fetcher
-  async function fetchDiagnostics() {
+  async function fetchDiagnostics(triggerBtn = null) {
+    if (triggerBtn) {
+      if (triggerBtn.disabled || triggerBtn.classList.contains('is-loading')) return;
+      triggerBtn.disabled = true;
+      triggerBtn.classList.add('is-loading');
+    }
     try {
       const res = await fetch('/api/printer/diagnostics');
       if (!res.ok) return;
@@ -136,10 +141,15 @@ document.addEventListener('DOMContentLoaded', () => {
       }
     } catch (err) {
       console.warn('Diagnostics fetch failed:', err);
+    } finally {
+      if (triggerBtn) {
+        triggerBtn.disabled = false;
+        triggerBtn.classList.remove('is-loading');
+      }
     }
   }
 
-  btnRefreshDiag?.addEventListener('click', fetchDiagnostics);
+  btnRefreshDiag?.addEventListener('click', (e) => fetchDiagnostics(e.currentTarget));
 
   // Dashboard UI Updater
   function updateDashboardUI(state) {
@@ -232,8 +242,6 @@ document.addEventListener('DOMContentLoaded', () => {
       const timeStr = new Date(state.updatedAt).toLocaleTimeString();
       lastUpdateText.textContent = `Cập nhật lần cuối: ${timeStr}`;
     }
-
-    fetchDiagnostics();
   }
 
   // Helper Format Hex Color cho AMS Tray
@@ -247,6 +255,135 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   // AMS Renderer
+  async function trackAmsCommandLifecycle(commandId, btnElement, defaultLabel = 'Load', successLabel = 'Loaded', failLabel = 'Failed', loadingText = '⏳ Processing...') {
+    if (!commandId) return;
+
+    if (btnElement) {
+      btnElement.disabled = true;
+      btnElement.classList.add('is-loading');
+      btnElement.style.pointerEvents = 'none';
+      if (!btnElement.hasAttribute('data-original-html')) {
+        btnElement.setAttribute('data-original-html', btnElement.innerHTML);
+      }
+      if (btnElement.tagName === 'BUTTON') {
+        btnElement.innerHTML = loadingText;
+      }
+    }
+
+    addLog(`[COMMAND AUDIT] ⏳ Bắt đầu theo dõi kết quả lệnh ${commandId} từ MQTT telemetry...`, 'info');
+
+    const start = Date.now();
+    const maxWaitMs = 30000;
+
+    const restoreBtn = (label, border) => {
+      if (btnElement) {
+        if (btnElement.tagName === 'BUTTON') {
+          btnElement.innerHTML = label;
+        }
+        if (border) btnElement.style.borderColor = border;
+        setTimeout(() => {
+          btnElement.disabled = false;
+          btnElement.classList.remove('is-loading');
+          btnElement.style.pointerEvents = '';
+          if (btnElement.tagName === 'BUTTON') {
+            const orig = btnElement.getAttribute('data-original-html') || defaultLabel;
+            btnElement.innerHTML = orig;
+          }
+          btnElement.style.borderColor = '';
+        }, 3000);
+      }
+    };
+
+    const poll = async () => {
+      try {
+        const res = await fetch(`/api/ams/command/${commandId}`);
+        if (res.ok) {
+          const data = await res.json();
+          const record = data.record;
+          const status = record?.status;
+
+          if (status === 'COMPLETED') {
+            const successMsg = `[KẾT QUẢ MÁY IN] ✅ Lệnh ${commandId} (${record.type.toUpperCase()}) HOÀN TẤT THÀNH CÔNG! (Xác nhận từ MQTT Telemetry real-time)`;
+            showToast(successMsg, 'success');
+            addLog(successMsg, 'success');
+            restoreBtn(successLabel, '#10b981');
+            return;
+          }
+
+          if (status === 'FAILED' || status === 'TIMEOUT') {
+            const failMsg = `[KẾT QUẢ MÁY IN] ❌ Lệnh ${commandId} ${status === 'TIMEOUT' ? 'HẾT GIỜ (TIMEOUT 30s)' : 'THẤT BẠI'}: ${record?.error || 'Máy in không phản hồi'}`;
+            showToast(failMsg, 'warn');
+            addLog(failMsg, 'warn');
+            restoreBtn(failLabel, '#ef4444');
+            return;
+          }
+        }
+      } catch (e) {
+        console.warn('Command poll error:', e);
+      }
+
+      if (Date.now() - start < maxWaitMs) {
+        setTimeout(poll, 1500);
+      } else {
+        addLog(`[KẾT QUẢ MÁY IN] ⚠️ Dừng theo dõi lệnh ${commandId} sau 30 giây.`, 'warn');
+        restoreBtn(defaultLabel, '');
+      }
+    };
+
+    setTimeout(poll, 1000);
+  }
+
+  async function triggerAmsLoad(trayId, trayElement = null) {
+    if (trayElement && (trayElement.classList.contains('is-loading') || trayElement.style.pointerEvents === 'none')) {
+      showToast('⚠️ Đang thực thi lệnh nạp nhựa, vui lòng chờ...', 'warn');
+      return;
+    }
+
+    if (!confirm(`Bạn có muốn NẠP NHỰA từ AMS Khay #${trayId + 1} vào đầu in không?`)) return;
+
+    if (trayElement) {
+      trayElement.classList.add('is-loading');
+      trayElement.style.pointerEvents = 'none';
+    }
+
+    addLog(`[LỆNH NẠP NHỰA] ⏩ Gửi yêu cầu nạp nhựa từ AMS khay #${trayId + 1} (target: ${trayId})...`, 'info');
+    showToast(`Đang gửi lệnh nạp khay #${trayId + 1}...`, 'info');
+    try {
+      const res = await fetch('/api/ams/load', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ amsId: 0, trayId, target: trayId, temp: 220 }),
+      });
+      const data = await res.json();
+      if (res.ok && data.success) {
+        addLog(`[HTTP ${res.status}] ✅ Đã phát lệnh MQTT load khay #${trayId} (Command ID: ${data.commandId})`, 'success');
+        showToast(data.message || 'Đã gửi lệnh nạp nhựa, đang chờ xác nhận từ máy in...', 'info');
+        trackAmsCommandLifecycle(data.commandId, trayElement, `AMS #0 • Tray #${trayId}`, 'Loaded', 'Failed');
+      } else if (res.status === 409) {
+        showToast(`⚠️ Lệnh bị hoãn: ${data.message}`, 'warn');
+        addLog(`[HTTP 409 CONFLICT] ⚠️ AMS đang có lệnh chạy: ${data.message}`, 'warn');
+        if (trayElement) {
+          trayElement.classList.remove('is-loading');
+          trayElement.style.pointerEvents = '';
+        }
+      } else {
+        showToast(`Lỗi: ${data.message || data.error}`, 'error');
+        addLog(`[HTTP ${res.status}] ❌ Lỗi gửi lệnh: ${data.message || data.error}`, 'warn');
+        if (trayElement) {
+          trayElement.classList.remove('is-loading');
+          trayElement.style.pointerEvents = '';
+        }
+      }
+    } catch (err) {
+      showToast(`Lỗi kết nối: ${err.message}`, 'error');
+      addLog(`[ERROR] ❌ Lỗi kết nối mạng: ${err.message}`, 'warn');
+      if (trayElement) {
+        trayElement.classList.remove('is-loading');
+        trayElement.style.pointerEvents = '';
+      }
+    }
+  }
+
   function renderAMS(amsUnits, activeTrayId = null) {
     if (!amsUnits || amsUnits.length === 0) {
       amsContainer.innerHTML = '<div class="empty-ams">Chưa có dữ liệu khay nhựa AMS</div>';
@@ -255,7 +392,11 @@ document.addEventListener('DOMContentLoaded', () => {
 
     amsContainer.innerHTML = amsUnits.map((unit) => {
       const traysList = unit.trays || unit.filaments || [];
+      const unitTemp = unit.temperature !== null && unit.temperature !== undefined ? `${unit.temperature}°C` : '--';
+      const unitHum = unit.humidityRaw !== null && unit.humidityRaw !== undefined ? `${unit.humidityRaw}%` : (unit.humidity !== null ? `${unit.humidity}%` : '--');
+
       const filamentsHtml = traysList.map((fil, idx) => {
+        const trayIdNum = Number(fil.id ?? idx);
         const hexColor = formatHexColor(fil.color || fil.rawColor);
         const rawRem = fil.remain !== undefined && fil.remain !== null ? fil.remain : fil.remainingPercentage;
         let remText = '--';
@@ -264,48 +405,80 @@ document.addEventListener('DOMContentLoaded', () => {
           remText = !isNaN(numRem) ? `${Math.max(0, numRem)}%` : `${rawRem}%`;
         }
 
-        const isActive = activeTrayId === idx;
+        const isActive = fil.isActive ?? (activeTrayId === trayIdNum);
+        const isTarget = fil.isTarget ?? false;
+        const activeStatusText = isActive ? 'ACTIVE' : 'INACTIVE';
         const activeClass = isActive ? 'active-tray' : '';
         const activeBadge = isActive ? '<span class="active-tray-badge">ACTIVE</span>' : '';
+        const targetText = isTarget ? 'YES' : 'NO';
 
         return `
-          <div class="tray-item ${activeClass}" data-tray-id="${idx}" title="Bấm để NẠP khay nhựa này (Slot #${idx + 1})">
+          <div class="tray-item ${activeClass}" data-tray-id="${trayIdNum}" title="AMS #${unit.id} Slot #${trayIdNum + 1} - ${fil.type || 'N/A'}">
             ${activeBadge}
+            <div style="font-size: 0.72rem; font-weight: 700; color: var(--primary-accent); margin-bottom: 2px;">AMS #${unit.id} • Tray #${trayIdNum}</div>
             <div class="color-dot" style="background-color: ${hexColor};" title="Màu: ${hexColor}"></div>
-            <span class="tray-type">${fil.type || 'N/A'}</span>
-            <span class="tray-rem">${remText}</span>
+            <div style="font-size: 0.76rem; font-weight: 700; color: #f8fafc;">${fil.type || 'N/A'}</div>
+            <div style="font-size: 0.68rem; color: #94a3b8;">${fil.subBrand || fil.subBrands || 'Generic'}</div>
+            <div style="font-size: 0.7rem; font-weight: 600; color: #34d399; margin-top: 2px;">Remain: ${remText}</div>
+            <div style="font-size: 0.65rem; color: #64748b; margin-top: 2px; text-align: center;">
+              State: ${fil.state ?? '--'} | Active: <strong style="color: ${isActive ? '#34d399' : '#94a3b8'}">${activeStatusText}</strong> (Target: ${targetText})
+            </div>
           </div>
         `;
       }).join('');
 
       return `
-        <div class="ams-unit">
-          <div class="ams-unit-title">AMS Unit #${unit.id}</div>
+        <div class="ams-unit" style="background: rgba(15, 23, 42, 0.6); padding: 12px; border-radius: 8px; margin-bottom: 12px; border: 1px solid rgba(255,255,255,0.06);">
+          <div class="ams-unit-header" style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+            <div class="ams-unit-title" style="font-weight: 700; color: #38bdf8;">AMS Unit #${unit.id}</div>
+            <div style="font-size: 0.75rem; color: #94a3b8; font-family: var(--font-mono);">
+              Temp: <strong style="color: #4ade80;">${unitTemp}</strong> | Humidity: <strong style="color: #60a5fa;">${unitHum}</strong>
+            </div>
+          </div>
           <div class="tray-grid">${filamentsHtml}</div>
         </div>
       `;
     }).join('');
 
-    // Attach click handlers to trays for fast loading
+    // Attach click handlers to trays for fast loading with anti-spam check
     document.querySelectorAll('.tray-item').forEach((el) => {
       el.addEventListener('click', () => {
         const trayId = Number(el.getAttribute('data-tray-id'));
         if (!isNaN(trayId)) {
-          if (confirm(`Bạn có muốn NẠP NHỰA từ AMS Khay #${trayId + 1} vào đầu in không?`)) {
-            sendCommand('/api/ams/load', 'POST', { target: trayId, temp: 220 });
-          }
+          triggerAmsLoad(trayId, el);
         }
       });
     });
   }
 
-  // Send Command API Helper
-  async function sendCommand(url, method = 'POST', body = null) {
+  // Send Command API Helper with Universal Loading State & Anti-Spam Single-Click Protection
+  async function sendCommand(url, method = 'POST', body = null, triggerBtn = null) {
+    if (triggerBtn) {
+      if (triggerBtn.disabled || triggerBtn.classList.contains('is-loading')) {
+        showToast('⚠️ Lệnh đang được xử lý, vui lòng chờ...', 'warn');
+        return;
+      }
+    }
+
+    const payloadStr = body ? JSON.stringify(body) : '{}';
+    addLog(`[OUTGOING LỆNH API] ${method} ${url} - Body: ${payloadStr}`, 'info');
+
+    let originalHtml = '';
+    if (triggerBtn) {
+      triggerBtn.disabled = true;
+      triggerBtn.classList.add('is-loading');
+      triggerBtn.style.pointerEvents = 'none';
+      originalHtml = triggerBtn.innerHTML;
+      if (triggerBtn.tagName === 'BUTTON') {
+        triggerBtn.innerHTML = '⏳ Đang gửi...';
+      }
+    }
+
     try {
       const options = {
         method,
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(body || {}),
+        body: payloadStr,
       };
 
       const res = await fetch(url, options);
@@ -313,60 +486,118 @@ document.addEventListener('DOMContentLoaded', () => {
 
       if (res.ok && data.success) {
         showToast(data.message || 'Lệnh đã được gửi thành công!', 'success');
-        addLog(`✅ ${data.message || 'Lệnh thành công'}`, 'success');
+        addLog(`[HTTP ${res.status}] ✅ Gateway nhận lệnh thành công: ${data.message || 'SUCCESS'} ${data.commandId ? `(Command ID: ${data.commandId})` : ''}`, 'success');
+
+        if (data.commandId) {
+          let loadingLabel = '⏳ Đang xử lý...';
+          let successText = '✅ Hoàn tất';
+          if (url.includes('/unload')) {
+            loadingLabel = '⏳ Đang rút nhựa...';
+            successText = '✅ Đã rút nhựa';
+          } else if (url.includes('/load')) {
+            loadingLabel = '⏳ Đang nạp nhựa...';
+            successText = '✅ Đã nạp nhựa';
+          } else if (url.includes('/retry')) {
+            loadingLabel = '⏳ Đang thử lại...';
+            successText = '✅ Retry xong';
+          } else if (url.includes('/setting')) {
+            loadingLabel = '⏳ Đang lưu...';
+            successText = '✅ Đã lưu';
+          }
+
+          trackAmsCommandLifecycle(data.commandId, triggerBtn, originalHtml, successText, '❌ Thất bại', loadingLabel);
+          return;
+        }
+
+        if (triggerBtn) {
+          if (triggerBtn.tagName === 'BUTTON') {
+            triggerBtn.innerHTML = '✅ Thành công';
+          }
+          triggerBtn.style.borderColor = '#10b981';
+          setTimeout(() => {
+            triggerBtn.disabled = false;
+            triggerBtn.classList.remove('is-loading');
+            triggerBtn.style.pointerEvents = '';
+            if (originalHtml) triggerBtn.innerHTML = originalHtml;
+            triggerBtn.style.borderColor = '';
+          }, 1800);
+        }
       } else {
         if (res.status === 403 && data.error === 'TEST_MODE_RESTRICTED') {
           showToast('Chế độ Read-Only: Đặt BAMBU_REAL_PRINTER=true để bật máy thật.', 'warn');
           addLog(`⚠️ Lệnh bị chặn (Safety Mode): ${data.message}`, 'warn');
+        } else if (res.status === 409) {
+          showToast(`⚠️ Lệnh bị hoãn (409 Conflict): ${data.message}`, 'warn');
+          addLog(`[HTTP 409 CONFLICT] ⚠️ Thao tác AMS đang bận: ${data.message}`, 'warn');
         } else {
           showToast(`Lỗi (${res.status}): ${data.message || data.error}`, 'error');
-          addLog(`❌ Lỗi lệnh (${res.status}): ${data.message}`, 'warn');
+          addLog(`[HTTP ${res.status}] ❌ Lỗi phản hồi API: ${data.message || data.error}`, 'warn');
+        }
+
+        if (triggerBtn) {
+          if (triggerBtn.tagName === 'BUTTON') {
+            triggerBtn.innerHTML = '❌ Thất bại';
+          }
+          triggerBtn.style.borderColor = '#ef4444';
+          setTimeout(() => {
+            triggerBtn.disabled = false;
+            triggerBtn.classList.remove('is-loading');
+            triggerBtn.style.pointerEvents = '';
+            if (originalHtml) triggerBtn.innerHTML = originalHtml;
+            triggerBtn.style.borderColor = '';
+          }, 2200);
         }
       }
     } catch (err) {
       showToast(`Không thể kết nối API: ${err.message}`, 'error');
-      addLog(`❌ Lỗi mạng API: ${err.message}`, 'warn');
+      addLog(`[ERROR] ❌ Lỗi mạng API: ${err.message}`, 'warn');
+      if (triggerBtn) {
+        triggerBtn.disabled = false;
+        triggerBtn.classList.remove('is-loading');
+        triggerBtn.style.pointerEvents = '';
+        if (originalHtml) triggerBtn.innerHTML = originalHtml;
+      }
     }
   }
 
-  // Event Listeners for Quick Controls
-  btnPause?.addEventListener('click', () => sendCommand('/api/printer/actions/pause'));
-  btnResume?.addEventListener('click', () => sendCommand('/api/printer/actions/resume'));
-  btnStop?.addEventListener('click', () => {
+  // Event Listeners for Quick Controls with Loading State
+  btnPause?.addEventListener('click', (e) => sendCommand('/api/printer/actions/pause', 'POST', null, e.currentTarget));
+  btnResume?.addEventListener('click', (e) => sendCommand('/api/printer/actions/resume', 'POST', null, e.currentTarget));
+  btnStop?.addEventListener('click', (e) => {
     if (confirm('Bạn có chắc chắn muốn HỦY tác vụ in hiện tại?')) {
-      sendCommand('/api/printer/actions/stop');
+      sendCommand('/api/printer/actions/stop', 'POST', null, e.currentTarget);
     }
   });
 
-  // Temperature Controls
-  btnSetNozzle?.addEventListener('click', () => {
+  // Temperature Controls with Loading State
+  btnSetNozzle?.addEventListener('click', (e) => {
     const val = Number(nozzleInput.value);
-    if (!isNaN(val)) sendCommand('/api/printer/temperature/nozzle', 'POST', { target: val });
+    if (!isNaN(val)) sendCommand('/api/printer/temperature/nozzle', 'POST', { target: val }, e.currentTarget);
   });
 
-  btnSetNozzle2?.addEventListener('click', () => {
+  btnSetNozzle2?.addEventListener('click', (e) => {
     const val = Number(nozzle2Input.value);
-    if (!isNaN(val)) sendCommand('/api/printer/temperature/nozzle2', 'POST', { target: val });
+    if (!isNaN(val)) sendCommand('/api/printer/temperature/nozzle2', 'POST', { target: val }, e.currentTarget);
   });
 
-  btnSetBed?.addEventListener('click', () => {
+  btnSetBed?.addEventListener('click', (e) => {
     const val = Number(bedInput.value);
-    if (!isNaN(val)) sendCommand('/api/printer/temperature/bed', 'POST', { target: val });
+    if (!isNaN(val)) sendCommand('/api/printer/temperature/bed', 'POST', { target: val }, e.currentTarget);
   });
 
   document.querySelectorAll('.preset-btn').forEach((btn) => {
-    btn.addEventListener('click', () => {
+    btn.addEventListener('click', (e) => {
       const type = btn.getAttribute('data-type');
       const val = Number(btn.getAttribute('data-val'));
-      if (type === 'nozzle') sendCommand('/api/printer/temperature/nozzle', 'POST', { target: val });
-      if (type === 'nozzle2') sendCommand('/api/printer/temperature/nozzle2', 'POST', { target: val });
-      if (type === 'bed') sendCommand('/api/printer/temperature/bed', 'POST', { target: val });
+      if (type === 'nozzle') sendCommand('/api/printer/temperature/nozzle', 'POST', { target: val }, e.currentTarget);
+      if (type === 'nozzle2') sendCommand('/api/printer/temperature/nozzle2', 'POST', { target: val }, e.currentTarget);
+      if (type === 'bed') sendCommand('/api/printer/temperature/bed', 'POST', { target: val }, e.currentTarget);
     });
   });
 
-  // Fan Controls
+  // Fan Controls with Loading State
   document.querySelectorAll('.btn-fan-set').forEach((btn) => {
-    btn.addEventListener('click', () => {
+    btn.addEventListener('click', (e) => {
       const fanType = btn.getAttribute('data-fan');
       let slider = null;
       if (fanType === 'part') slider = sliderPartFan;
@@ -374,7 +605,7 @@ document.addEventListener('DOMContentLoaded', () => {
       if (fanType === 'chamber') slider = sliderChamberFan;
 
       if (slider) {
-        sendCommand(`/api/printer/fans/${fanType}`, 'POST', { speed: Number(slider.value) });
+        sendCommand(`/api/printer/fans/${fanType}`, 'POST', { speed: Number(slider.value) }, e.currentTarget);
       }
     });
   });
@@ -465,19 +696,9 @@ document.addEventListener('DOMContentLoaded', () => {
     });
   });
 
-  btnReconnectCam?.addEventListener('click', async () => {
-    showToast('Đang gửi lệnh Reconnect Camera TLS 6000...', 'info');
-    try {
-      const res = await fetch('/api/camera/reconnect', { method: 'POST' });
-      const data = await res.json();
-      if (res.ok && data.success) {
-        showToast(data.message || 'Đã thử kết nối lại camera!', 'success');
-        addLog('🔄 Đã gửi lệnh reconnect Camera TLS 6000.', 'info');
-        setTimeout(fetchCameraStatus, 2000);
-      }
-    } catch (err) {
-      showToast(`Lỗi kết nối API: ${err.message}`, 'error');
-    }
+  btnReconnectCam?.addEventListener('click', (e) => {
+    sendCommand('/api/camera/reconnect', 'POST', {}, e.currentTarget);
+    setTimeout(fetchCameraStatus, 2500);
   });
 
   // Compact View Toggle (Ẩn/Hiện Log & Hướng Dẫn)
@@ -765,7 +986,6 @@ document.addEventListener('DOMContentLoaded', () => {
           case 'printer.state': {
             if (message.data) {
               updateDashboardUI(message.data);
-              addLog(`Đã nhận dữ liệu telemetry (Trạng thái: ${message.data.state || 'UNKNOWN'})`, 'info');
             }
             break;
           }
@@ -879,14 +1099,13 @@ document.addEventListener('DOMContentLoaded', () => {
   const amsMinTemp = document.getElementById('amsMinTemp');
   const amsMaxTemp = document.getElementById('amsMaxTemp');
 
-  btnAmsUnload?.addEventListener('click', () => {
-    if (confirm('Bạn có chắc chắn muốn RÚT NHỰA hiện tại khỏi đầu in về bộ AMS?')) {
-      sendCommand('/api/ams/unload', 'POST');
-    }
+  btnAmsUnload?.addEventListener('click', (e) => {
+    if (!confirm('Bạn có chắc chắn muốn RÚT NHỰA hiện tại khỏi đầu in về bộ AMS?')) return;
+    sendCommand('/api/ams/unload', 'POST', {}, e.currentTarget);
   });
 
-  btnAmsRetry?.addEventListener('click', () => {
-    sendCommand('/api/ams/retry', 'POST');
+  btnAmsRetry?.addEventListener('click', (e) => {
+    sendCommand('/api/ams/retry', 'POST', {}, e.currentTarget);
   });
 
   btnOpenAmsModal?.addEventListener('click', () => {
@@ -911,21 +1130,21 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   });
 
-  btnSaveAmsSetting?.addEventListener('click', async () => {
+  btnSaveAmsSetting?.addEventListener('click', (e) => {
     const trayId = Number(amsSelectTray?.value || 0);
     const type = amsSelectType?.value || 'PLA';
     const color = amsColorHex?.value || '#3B82F6';
     const minTemp = Number(amsMinTemp?.value || 190);
     const maxTemp = Number(amsMaxTemp?.value || 240);
 
-    await sendCommand('/api/ams/setting', 'POST', {
+    sendCommand('/api/ams/setting', 'POST', {
       amsId: 0,
       trayId,
       color,
       type,
       minTemp,
       maxTemp,
-    });
+    }, e.currentTarget);
 
     amsSettingModal?.classList.remove('open');
   });
