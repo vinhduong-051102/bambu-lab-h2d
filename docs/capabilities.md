@@ -18,3 +18,6 @@ This document lists supported capabilities in the `bambu-h2d-gateway`.
 | `fan.bigFan2` | Chamber fan speed control | **SUPPORTED** | `print.big_fan2_speed` and `M106 P3 S{val}` |
 | `ams` | Multi-AMS & Tray telemetry | **SUPPORTED** | `print.ams.ams[]` (trays, colors, remaining %) |
 | `hms` | Diagnostic error codes | **SUPPORTED** | `print.hms[]` raw `{ attr, code }` entries |
+| `print.start` | Start a sliced 3MF plate over LAN | **SUPPORTED** | FTPS upload + `print.project_file` (`url: ftp:///…`, `ams_mapping` + `ams_mapping2`); confirmed by `gcode_state` PREPARE → RUNNING. Needs Developer Mode on firmware with signed MQTT |
+| `file.list` | List printer storage | **SUPPORTED** | FTPS 990 implicit TLS, `LIST /` and `/cache` |
+| `file.upload` | Upload 3MF to printer | **SUPPORTED** | FTPS `STOR` to root with TLS session reuse; remote size verified |

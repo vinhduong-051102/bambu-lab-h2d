@@ -1,7 +1,5 @@
-import { FastifyInstance } from 'fastify';
 import { z } from 'zod';
-import { PrinterService } from '../../domain/PrinterService.js';
-import { CommandExecutionError } from '../../domain/commands/PrinterCommandService.js';
+import { commandErrorResponse, handler, json, readJsonBody } from '../http';
 
 const fanSpeedSchema = z.object({
   speed: z
@@ -11,57 +9,41 @@ const fanSpeedSchema = z.object({
     .max(100, 'Speed percentage cannot exceed 100%'),
 });
 
-export async function fanRoutes(
-  fastify: FastifyInstance,
-  options: { printerService: PrinterService }
-): Promise<void> {
-  const { printerService } = options;
+const FAN_TYPES = ['part', 'aux', 'chamber'] as const;
+type FanType = (typeof FAN_TYPES)[number];
 
-  const handleCommandError = (err: unknown, reply: any) => {
-    if (err instanceof CommandExecutionError) {
-      return reply.status(err.statusCode).send({
+const isFanType = (value: string): value is FanType => (FAN_TYPES as readonly string[]).includes(value);
+
+// POST /api/printer/fans/:fan (part | aux | chamber)
+export const setFanSpeed = handler<{ fan: string }>(async ({ printerService, request, params }) => {
+  const fanType = params.fan;
+  if (!isFanType(fanType)) {
+    return json({ error: 'Not Found', message: `Route POST /api/printer/fans/${fanType} not found` }, 404);
+  }
+
+  const parseResult = fanSpeedSchema.safeParse(await readJsonBody(request));
+  if (!parseResult.success) {
+    return json(
+      {
         success: false,
-        error: err.errorCode,
-        message: err.message,
-      });
-    }
-    const message = err instanceof Error ? err.message : String(err);
-    return reply.status(500).send({ success: false, error: 'INTERNAL_ERROR', message });
-  };
+        error: 'INVALID_PAYLOAD',
+        message: 'Invalid fan speed parameter',
+        details: parseResult.error.issues,
+      },
+      400
+    );
+  }
 
-  const createFanHandler = (fanType: 'part' | 'aux' | 'chamber') => {
-    return async (request: any, reply: any) => {
-      const parseResult = fanSpeedSchema.safeParse(request.body);
-      if (!parseResult.success) {
-        return reply.status(400).send({
-          success: false,
-          error: 'INVALID_PAYLOAD',
-          message: 'Invalid fan speed parameter',
-          details: parseResult.error.issues,
-        });
-      }
-
-      try {
-        const res = await printerService.commandService.setFanSpeed(fanType, parseResult.data.speed);
-        return reply.send({
-          success: true,
-          action: `set_${fanType}_fan_speed`,
-          speed: parseResult.data.speed,
-          commandId: res.commandId,
-          message: res.message,
-        });
-      } catch (err) {
-        return handleCommandError(err, reply);
-      }
-    };
-  };
-
-  // POST /api/printer/fans/part
-  fastify.post('/api/printer/fans/part', createFanHandler('part'));
-
-  // POST /api/printer/fans/aux
-  fastify.post('/api/printer/fans/aux', createFanHandler('aux'));
-
-  // POST /api/printer/fans/chamber
-  fastify.post('/api/printer/fans/chamber', createFanHandler('chamber'));
-}
+  try {
+    const res = await printerService.commandService.setFanSpeed(fanType, parseResult.data.speed);
+    return json({
+      success: true,
+      action: `set_${fanType}_fan_speed`,
+      speed: parseResult.data.speed,
+      commandId: res.commandId,
+      message: res.message,
+    });
+  } catch (err) {
+    return commandErrorResponse(err);
+  }
+});

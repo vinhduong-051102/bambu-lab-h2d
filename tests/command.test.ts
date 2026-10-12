@@ -1,8 +1,8 @@
 import { describe, it, expect, beforeEach } from 'vitest';
-import { CapabilityRegistry } from '../src/domain/capabilities/CapabilityRegistry.js';
-import { BambuCommandBuilder } from '../src/bambu/commands/BambuCommandBuilder.js';
-import { CommandQueue } from '../src/domain/commands/CommandQueue.js';
-import { CommandAuditLog } from '../src/domain/commands/CommandAuditLog.js';
+import { CapabilityRegistry } from '../src/domain/capabilities/CapabilityRegistry';
+import { BambuCommandBuilder } from '../src/bambu/commands/BambuCommandBuilder';
+import { CommandQueue } from '../src/domain/commands/CommandQueue';
+import { CommandAuditLog } from '../src/domain/commands/CommandAuditLog';
 
 describe('Command Architecture & Capability System', () => {
   let capabilityRegistry: CapabilityRegistry;
@@ -20,10 +20,10 @@ describe('Command Architecture & Capability System', () => {
     expect(pauseCap?.status).toBe('SUPPORTED');
 
     const startCap = capabilityRegistry.getCapability('print.start');
-    expect(startCap?.status).toBe('UNKNOWN');
+    expect(startCap?.status).toBe('SUPPORTED');
 
     const uploadCap = capabilityRegistry.getCapability('file.upload');
-    expect(uploadCap?.status).toBe('UNSUPPORTED');
+    expect(uploadCap?.status).toBe('SUPPORTED');
   });
 
   it('BambuCommandBuilder should build valid Bambu LAN MQTT JSON payloads', () => {

@@ -25,7 +25,7 @@ PrinterService (PrinterManager)
  ├── PrinterCommandService (CommandQueue, Validation, Safety Checks)
  └── CapabilityRegistry (SUPPORTED / UNKNOWN / UNSUPPORTED capability definitions)
        │
-       ├── Fastify REST API & Web Dashboard
+       ├── Next.js Route Handlers (REST API) & Dashboard (custom server: server.ts)
        └── WebSocket Server (/ws real-time event stream)
 ```
 
@@ -60,10 +60,13 @@ npm run typecheck
 # Run unit tests
 npm test
 
-# Build production bundle
+# Development server (Next.js dev + gateway, restarts on backend changes)
+npm run dev
+
+# Build production bundle (next build)
 npm run build
 
-# Start server
+# Start production server (custom Next.js server with MQTT, camera & /ws)
 npm start
 ```
 

@@ -24,9 +24,23 @@ PrinterService (PrinterManager)
  ├── PrinterCommandService (CommandQueue, Validation, Safety Checks)
  └── CapabilityRegistry (SUPPORTED / UNKNOWN / UNSUPPORTED capability definitions)
        │
-       ├── Fastify REST API
-       └── WebSocket Server (/ws real-time events)
+       ├── Next.js Route Handlers (app/api/**/route.ts → src/api/routes/*)
+       ├── Next.js Dashboard page (app/page.tsx → src/ui/*)
+       └── WebSocket Server (/ws real-time events, src/server/websocket.ts)
 ```
+
+### 1.1 Next.js Custom Server (`server.ts`)
+
+The gateway keeps long-lived connections (MQTT, camera FFmpeg pipeline, WebSocket clients), so it runs
+Next.js through a custom Node.js HTTP server instead of `next start`:
+
+1. `startGateway()` (`src/runtime/bootstrap.ts`) creates the printer services, connects MQTT and starts the camera.
+2. The services are registered as the shared runtime (`src/runtime/runtime.ts`), which Route Handlers read via `getRuntime()`.
+3. Requests to `/api/*` and `/ws` pass the `GATEWAY_API_KEY` check, then go to Next.js or the WebSocket hub.
+   Other upgrade requests (Next.js HMR in development) go to Next.js.
+
+Next.js bundles Route Handlers separately from the custom server, so process-wide singletons
+(the runtime, `AmsCommandTracker`, the MQTT `sequence_id` counter) are stored on `globalThis`.
 
 ## 2. Core Modules
 

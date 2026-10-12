@@ -1,34 +1,24 @@
-import { FastifyInstance } from 'fastify';
-import { PrinterService } from '../../domain/PrinterService.js';
+import { handler, json } from '../http';
 
-export async function commandRoutes(
-  fastify: FastifyInstance,
-  options: { printerService: PrinterService }
-): Promise<void> {
-  const { printerService } = options;
-
-  // GET /api/commands - Audit Log list
-  fastify.get('/api/commands', async () => {
-    const log = printerService.commandService.getAuditLog();
-    return {
-      count: log.getEntries().length,
-      commands: log.getEntries(),
-    };
+// GET /api/commands - Audit Log list
+export const getCommands = handler(({ printerService }) => {
+  const log = printerService.commandService.getAuditLog();
+  return json({
+    count: log.getEntries().length,
+    commands: log.getEntries(),
   });
+});
 
-  // GET /api/commands/:id - Get specific command entry by ID
-  fastify.get('/api/commands/:id', async (request, reply) => {
-    const { id } = request.params as { id: string };
-    const log = printerService.commandService.getAuditLog();
-    const entry = log.getEntryById(id);
+// GET /api/commands/:id - Get specific command entry by ID
+export const getCommandById = handler<{ id: string }>(({ printerService, params }) => {
+  const entry = printerService.commandService.getAuditLog().getEntryById(params.id);
 
-    if (!entry) {
-      return reply.status(404).send({
-        error: 'Not Found',
-        message: `Command audit entry with id '${id}' not found`,
-      });
-    }
+  if (!entry) {
+    return json(
+      { error: 'Not Found', message: `Command audit entry with id '${params.id}' not found` },
+      404
+    );
+  }
 
-    return entry;
-  });
-}
+  return json(entry);
+});

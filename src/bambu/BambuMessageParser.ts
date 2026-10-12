@@ -1,5 +1,5 @@
-import { logger } from '../logger/logger.js';
-import { BambuRawReportPayload } from './types.js';
+import { logger } from '../logger/logger';
+import { BambuRawReportPayload } from './types';
 import {
   PrinterStateStatus,
   PrimaryNozzleTempState,
@@ -13,7 +13,7 @@ import {
   FanState,
   FieldMetadata,
   IPCamData,
-} from '../domain/PrinterState.js';
+} from '../domain/PrinterState';
 
 export class BambuMessageParser {
   /**

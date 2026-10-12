@@ -1,15 +1,14 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { FastifyInstance } from 'fastify';
-import { PrinterStateStore } from '../src/domain/PrinterStateStore.js';
-import { CapabilityRegistry } from '../src/domain/capabilities/CapabilityRegistry.js';
-import { PrinterCommandService } from '../src/domain/commands/PrinterCommandService.js';
-import { PrinterService } from '../src/domain/PrinterService.js';
-import { normalizePrinterState } from '../src/domain/normalizePrinterState.js';
-import { env } from '../src/config/env.js';
-import { createServer } from '../src/server/server.js';
+import { PrinterStateStore } from '../src/domain/PrinterStateStore';
+import { CapabilityRegistry } from '../src/domain/capabilities/CapabilityRegistry';
+import { PrinterCommandService } from '../src/domain/commands/PrinterCommandService';
+import { PrinterService } from '../src/domain/PrinterService';
+import { normalizePrinterState } from '../src/domain/normalizePrinterState';
+import { env } from '../src/config/env';
+import { createTestApp, type TestApp } from './helpers/testApp';
 
-describe('Fastify REST API & Capability Routes', () => {
-  let app: FastifyInstance;
+describe('Next.js REST API & Capability Routes', () => {
+  let app: TestApp;
   let stateStore: PrinterStateStore;
   let capabilityRegistry: CapabilityRegistry;
   let commandService: PrinterCommandService;
@@ -30,13 +29,12 @@ describe('Fastify REST API & Capability Routes', () => {
       commandService,
     });
 
-    app = await createServer(printerService);
-    await app.ready();
+    app = createTestApp(printerService);
   });
 
   afterEach(async () => {
     stateStore.destroy();
-    await app.close();
+    app.close();
   });
 
   it('GET /api/health should return { status: "ok" }', async () => {

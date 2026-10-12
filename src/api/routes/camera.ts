@@ -1,79 +1,90 @@
-import { FastifyInstance } from 'fastify';
-import { BambuCameraService } from '../../bambu/BambuCameraService.js';
+import type { BambuCameraService } from '../../bambu/BambuCameraService';
+import { handler, json, type HandlerArgs } from '../http';
 
-export async function cameraRoutes(
-  fastify: FastifyInstance,
-  options: { cameraService: BambuCameraService }
-): Promise<void> {
-  const { cameraService } = options;
-
-  // 1. GET /api/camera/status (Requirement 9)
-  fastify.get('/api/camera/status', async () => {
-    return cameraService.getStatus();
-  });
-
-  // Backward compatibility alias for info
-  fastify.get('/api/camera/info', async () => {
-    return cameraService.getStatus();
-  });
-
-  // 2. GET /api/camera/snapshot (Requirement 8)
-  fastify.get('/api/camera/snapshot', async (request, reply) => {
-    const frame = cameraService.getLatestFrame();
-    if (frame) {
-      reply.header('Content-Type', 'image/jpeg');
-      reply.header('Cache-Control', 'no-cache, no-store, must-revalidate');
-      return reply.send(frame);
+// Camera routes are only available when the gateway was started with a camera service
+const cameraHandler = (fn: (cameraService: BambuCameraService, args: HandlerArgs) => Response) =>
+  handler((args) => {
+    const { cameraService } = args.printerService;
+    if (!cameraService) {
+      return json({ error: 'Not Found', message: 'Camera service is not available' }, 404);
     }
+    return fn(cameraService, args);
+  });
 
-    return reply.status(503).send({
+// 1. GET /api/camera/status (Requirement 9) and backward compatible /api/camera/info
+export const getCameraStatus = cameraHandler((cameraService) => json(cameraService.getStatus()));
+
+// 2. GET /api/camera/snapshot (Requirement 8)
+export const getCameraSnapshot = cameraHandler((cameraService) => {
+  const frame = cameraService.getLatestFrame();
+  if (frame) {
+    return new Response(new Uint8Array(frame), {
+      headers: {
+        'Content-Type': 'image/jpeg',
+        'Cache-Control': 'no-cache, no-store, must-revalidate',
+      },
+    });
+  }
+
+  return json(
+    {
       error: 'camera_frame_not_available',
       message: 'No JPEG camera frame decoded yet from RTSP stream',
-    });
+    },
+    503
+  );
+});
+
+// 3. GET /api/camera/mjpeg (Requirement 7)
+export const getCameraMjpeg = cameraHandler((cameraService, { request }) => {
+  const encoder = new TextEncoder();
+  let cleanup = () => {};
+
+  const stream = new ReadableStream<Uint8Array>({
+    start(controller) {
+      const sendFrame = (frameBuf: Buffer) => {
+        try {
+          controller.enqueue(
+            encoder.encode(`--frame\r\nContent-Type: image/jpeg\r\nContent-Length: ${frameBuf.length}\r\n\r\n`)
+          );
+          controller.enqueue(new Uint8Array(frameBuf));
+          controller.enqueue(encoder.encode('\r\n'));
+        } catch {
+          cleanup();
+        }
+      };
+
+      cleanup = () => {
+        cameraService.off('frame', sendFrame);
+        request.signal.removeEventListener('abort', cleanup);
+      };
+
+      // Send initial frame if available
+      const initialFrame = cameraService.getLatestFrame();
+      if (initialFrame) {
+        sendFrame(initialFrame);
+      }
+
+      cameraService.on('frame', sendFrame);
+      request.signal.addEventListener('abort', cleanup);
+    },
+    cancel() {
+      cleanup();
+    },
   });
 
-  // 3. GET /api/camera/mjpeg (Requirement 7)
-  fastify.get('/api/camera/mjpeg', (request, reply) => {
-    reply.raw.writeHead(200, {
+  return new Response(stream, {
+    headers: {
       'Content-Type': 'multipart/x-mixed-replace; boundary=frame',
       'Cache-Control': 'no-cache, no-store, must-revalidate',
-      'Connection': 'close',
-      'Pragma': 'no-cache',
-    });
-
-    const sendFrame = (frameBuf: Buffer) => {
-      try {
-        reply.raw.write(`--frame\r\nContent-Type: image/jpeg\r\nContent-Length: ${frameBuf.length}\r\n\r\n`);
-        reply.raw.write(frameBuf);
-        reply.raw.write('\r\n');
-      } catch (err) {
-        cleanup();
-      }
-    };
-
-    // Send initial frame if available
-    const initialFrame = cameraService.getLatestFrame();
-    if (initialFrame) {
-      sendFrame(initialFrame);
-    }
-
-    const onFrame = (newFrame: Buffer) => {
-      sendFrame(newFrame);
-    };
-
-    const cleanup = () => {
-      cameraService.off('frame', onFrame);
-    };
-
-    cameraService.on('frame', onFrame);
-
-    request.raw.on('close', cleanup);
-    reply.raw.on('close', cleanup);
+      Connection: 'close',
+      Pragma: 'no-cache',
+    },
   });
+});
 
-  // 4. POST /api/camera/reconnect
-  fastify.post('/api/camera/reconnect', async (request, reply) => {
-    cameraService.forceReconnect();
-    return reply.send({ success: true, message: 'Đã gửi lệnh thử lại kết nối Camera RTSP FFmpeg' });
-  });
-}
+// 4. POST /api/camera/reconnect
+export const reconnectCamera = cameraHandler((cameraService) => {
+  cameraService.forceReconnect();
+  return json({ success: true, message: 'Đã gửi lệnh thử lại kết nối Camera RTSP FFmpeg' });
+});

@@ -1,5 +1,5 @@
-import { logger } from '../../logger/logger.js';
-import { PrinterState } from '../PrinterState.js';
+import { logger } from '../../logger/logger';
+import { PrinterState } from '../PrinterState';
 
 export type AmsCommandType = 'load' | 'unload' | 'setting' | 'retry' | 'rfid';
 
@@ -30,18 +30,20 @@ export interface AmsCommandRecord {
   error?: string | null;
 }
 
+// Stored on globalThis so the custom server and Next.js route bundles share one tracker
+const globalForTracker = globalThis as unknown as { __bambuAmsCommandTracker?: AmsCommandTracker };
+
 export class AmsCommandTracker {
-  private static instance: AmsCommandTracker;
   private commands: Map<string, AmsCommandRecord> = new Map();
   private lastCommandId: string | null = null;
   private lastResponse: Record<string, unknown> | null = null;
   private idCounter = 1;
 
   public static getInstance(): AmsCommandTracker {
-    if (!AmsCommandTracker.instance) {
-      AmsCommandTracker.instance = new AmsCommandTracker();
+    if (!globalForTracker.__bambuAmsCommandTracker) {
+      globalForTracker.__bambuAmsCommandTracker = new AmsCommandTracker();
     }
-    return AmsCommandTracker.instance;
+    return globalForTracker.__bambuAmsCommandTracker;
   }
 
   /**

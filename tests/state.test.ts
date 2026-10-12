@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { PrinterStateStore } from '../src/domain/PrinterStateStore.js';
-import { normalizePrinterState } from '../src/domain/normalizePrinterState.js';
+import { PrinterStateStore } from '../src/domain/PrinterStateStore';
+import { normalizePrinterState } from '../src/domain/normalizePrinterState';
 import h2dFixture from './fixtures/h2d_raw_payload.json';
 
 describe('PrinterStateStore & normalizePrinterState (H2D State Merge)', () => {

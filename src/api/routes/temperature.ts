@@ -1,7 +1,5 @@
-import { FastifyInstance } from 'fastify';
 import { z } from 'zod';
-import { PrinterService } from '../../domain/PrinterService.js';
-import { CommandExecutionError } from '../../domain/commands/PrinterCommandService.js';
+import { commandErrorResponse, handler, json, readJsonBody } from '../http';
 
 const nozzleTempSchema = z.object({
   target: z
@@ -19,99 +17,61 @@ const bedTempSchema = z.object({
     .max(120, 'Target Heatbed temperature cannot exceed 120°C'),
 });
 
-export async function temperatureRoutes(
-  fastify: FastifyInstance,
-  options: { printerService: PrinterService }
-): Promise<void> {
-  const { printerService } = options;
+const invalidPayload = (issues: z.ZodIssue[]) =>
+  json(
+    {
+      success: false,
+      error: 'INVALID_PAYLOAD',
+      message: 'Invalid target temperature parameter',
+      details: issues,
+    },
+    400
+  );
 
-  const handleCommandError = (err: unknown, reply: any) => {
-    if (err instanceof CommandExecutionError) {
-      return reply.status(err.statusCode).send({
-        success: false,
-        error: err.errorCode,
-        message: err.message,
-      });
-    }
-    const message = err instanceof Error ? err.message : String(err);
-    return reply.status(500).send({ success: false, error: 'INTERNAL_ERROR', message });
-  };
-
-  // POST /api/printer/temperature/nozzle
-  fastify.post('/api/printer/temperature/nozzle', async (request, reply) => {
-    const parseResult = nozzleTempSchema.safeParse(request.body);
+const createNozzleHandler = (nozzleIndex: 0 | 1, action: string) =>
+  handler(async ({ printerService, request }) => {
+    const parseResult = nozzleTempSchema.safeParse(await readJsonBody(request));
     if (!parseResult.success) {
-      return reply.status(400).send({
-        success: false,
-        error: 'INVALID_PAYLOAD',
-        message: 'Invalid target temperature parameter',
-        details: parseResult.error.issues,
-      });
+      return invalidPayload(parseResult.error.issues);
     }
 
     try {
-      const res = await printerService.commandService.setNozzleTemperature(parseResult.data.target, 0);
-      return reply.send({
+      const res = await printerService.commandService.setNozzleTemperature(parseResult.data.target, nozzleIndex);
+      return json({
         success: true,
-        action: 'set_nozzle_temp',
+        action,
         target: parseResult.data.target,
         commandId: res.commandId,
         message: res.message,
       });
     } catch (err) {
-      return handleCommandError(err, reply);
+      return commandErrorResponse(err);
     }
   });
 
-  // POST /api/printer/temperature/nozzle2 (Secondary Nozzle)
-  fastify.post('/api/printer/temperature/nozzle2', async (request, reply) => {
-    const parseResult = nozzleTempSchema.safeParse(request.body);
-    if (!parseResult.success) {
-      return reply.status(400).send({
-        success: false,
-        error: 'INVALID_PAYLOAD',
-        message: 'Invalid target temperature parameter',
-        details: parseResult.error.issues,
-      });
-    }
+// POST /api/printer/temperature/nozzle
+export const setNozzleTemperature = createNozzleHandler(0, 'set_nozzle_temp');
 
-    try {
-      const res = await printerService.commandService.setNozzleTemperature(parseResult.data.target, 1);
-      return reply.send({
-        success: true,
-        action: 'set_nozzle2_temp',
-        target: parseResult.data.target,
-        commandId: res.commandId,
-        message: res.message,
-      });
-    } catch (err) {
-      return handleCommandError(err, reply);
-    }
-  });
+// POST /api/printer/temperature/nozzle2 (Secondary Nozzle)
+export const setNozzle2Temperature = createNozzleHandler(1, 'set_nozzle2_temp');
 
-  // POST /api/printer/temperature/bed
-  fastify.post('/api/printer/temperature/bed', async (request, reply) => {
-    const parseResult = bedTempSchema.safeParse(request.body);
-    if (!parseResult.success) {
-      return reply.status(400).send({
-        success: false,
-        error: 'INVALID_PAYLOAD',
-        message: 'Invalid target temperature parameter',
-        details: parseResult.error.issues,
-      });
-    }
+// POST /api/printer/temperature/bed
+export const setBedTemperature = handler(async ({ printerService, request }) => {
+  const parseResult = bedTempSchema.safeParse(await readJsonBody(request));
+  if (!parseResult.success) {
+    return invalidPayload(parseResult.error.issues);
+  }
 
-    try {
-      const res = await printerService.commandService.setBedTemperature(parseResult.data.target);
-      return reply.send({
-        success: true,
-        action: 'set_bed_temp',
-        target: parseResult.data.target,
-        commandId: res.commandId,
-        message: res.message,
-      });
-    } catch (err) {
-      return handleCommandError(err, reply);
-    }
-  });
-}
+  try {
+    const res = await printerService.commandService.setBedTemperature(parseResult.data.target);
+    return json({
+      success: true,
+      action: 'set_bed_temp',
+      target: parseResult.data.target,
+      commandId: res.commandId,
+      message: res.message,
+    });
+  } catch (err) {
+    return commandErrorResponse(err);
+  }
+});

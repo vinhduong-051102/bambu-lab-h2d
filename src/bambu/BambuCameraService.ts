@@ -2,7 +2,7 @@ import tls from 'tls';
 import { EventEmitter } from 'events';
 import { spawn, ChildProcess } from 'child_process';
 import ffmpegInstaller from '@ffmpeg-installer/ffmpeg';
-import { logger } from '../logger/logger.js';
+import { logger } from '../logger/logger';
 
 export interface CameraStatus {
   connected: boolean;

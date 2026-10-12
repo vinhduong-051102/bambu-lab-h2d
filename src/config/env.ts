@@ -3,8 +3,12 @@ import { z } from 'zod';
 
 config();
 
-// Provide fallback values in test environment if env vars are missing
-const isTestEnv = process.env.NODE_ENV === 'test' || process.env.VITEST === 'true';
+// Provide fallback values in test environment and during `next build` (route modules are
+// evaluated while collecting page data, when printer credentials may not be present)
+const isTestEnv =
+  process.env.NODE_ENV === 'test' ||
+  process.env.VITEST === 'true' ||
+  process.env.NEXT_PHASE === 'phase-production-build';
 
 const envSchema = z.object({
   BAMBU_HOST: z.string({
@@ -12,6 +16,7 @@ const envSchema = z.object({
   }).default(isTestEnv ? '127.0.0.1' : undefined as any),
 
   BAMBU_PORT: z.coerce.number().default(8883),
+  BAMBU_FTP_PORT: z.coerce.number().default(990),
 
   BAMBU_SERIAL: z.string({
     required_error: 'BAMBU_SERIAL environment variable is required (e.g. 01S00A123456789)',

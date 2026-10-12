@@ -57,3 +57,7 @@ Thumbs.db
 .temp/
 tmp/
 .eslintcache
+
+# Next.js
+.next/
+next-env.d.ts
