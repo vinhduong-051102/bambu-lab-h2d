@@ -1,6 +1,6 @@
-import { PrinterState, NozzleState, ExtruderState, AMSUnit, AMSTray } from './PrinterState.js';
-import { BambuRawReportPayload } from '../bambu/types.js';
-import { BambuMessageParser } from '../bambu/BambuMessageParser.js';
+import { PrinterState, NozzleState, ExtruderState, AMSUnit, AMSTray } from './PrinterState';
+import { BambuRawReportPayload } from '../bambu/types';
+import { BambuMessageParser } from '../bambu/BambuMessageParser';
 
 export function normalizePrinterState(
   currentState: PrinterState,

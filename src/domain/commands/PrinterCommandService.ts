@@ -1,12 +1,12 @@
 import { EventEmitter } from 'events';
-import { CapabilityRegistry } from '../capabilities/CapabilityRegistry.js';
-import { CommandAuditLog } from './CommandAuditLog.js';
-import { CommandQueue } from './CommandQueue.js';
-import { PrinterStateStore } from '../PrinterStateStore.js';
-import { BambuMqttClient } from '../../bambu/BambuMqttClient.js';
-import { BambuCommandBuilder } from '../../bambu/commands/BambuCommandBuilder.js';
-import { logger } from '../../logger/logger.js';
-import { env } from '../../config/env.js';
+import { CapabilityRegistry } from '../capabilities/CapabilityRegistry';
+import { CommandAuditLog } from './CommandAuditLog';
+import { CommandQueue } from './CommandQueue';
+import { PrinterStateStore } from '../PrinterStateStore';
+import { BambuMqttClient } from '../../bambu/BambuMqttClient';
+import { BambuCommandBuilder } from '../../bambu/commands/BambuCommandBuilder';
+import { logger } from '../../logger/logger';
+import { env } from '../../config/env';
 
 export interface ExecuteCommandOptions {
   capabilityId: string;

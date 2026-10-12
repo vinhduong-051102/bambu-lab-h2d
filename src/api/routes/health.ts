@@ -1,7 +1,5 @@
-import { FastifyInstance } from 'fastify';
+import { json } from '../http';
 
-export async function healthRoutes(fastify: FastifyInstance): Promise<void> {
-  fastify.get('/api/health', async () => {
-    return { status: 'ok' };
-  });
+export function getHealth(): Response {
+  return json({ status: 'ok' });
 }

@@ -1,40 +1,63 @@
-import { FastifyInstance } from 'fastify';
+import { z } from 'zod';
+import { PrintJobManager } from '../../domain/print/PrintJobManager';
+import type { PrinterFileEntry } from '../../bambu/BambuFtpClient';
+import { handler, json } from '../http';
 
-export async function fileRoutes(fastify: FastifyInstance): Promise<void> {
-  // GET /api/files
-  fastify.get('/api/files', async (request, reply) => {
-    return reply.status(501).send({
-      status: 'UNKNOWN',
-      capability: 'file.list',
-      message: 'SD Card File listing requires FTPS port 990 connection. File list is not exposed over LAN MQTT protocol.',
-      files: [],
-    });
-  });
+// Bambu Studio uploads to /cache, OrcaSlicer and this gateway to the FTPS root
+const LIST_DIRECTORIES = ['/', '/cache'];
 
-  // POST /api/files/upload
-  fastify.post('/api/files/upload', async (request, reply) => {
-    return reply.status(501).send({
-      status: 'UNSUPPORTED',
-      capability: 'file.upload',
-      message: 'Direct Gcode/3MF file uploads require explicit FTPS (Port 990 TLS) upload sessions. Uploads over MQTT LAN protocol are unsupported.',
-    });
-  });
+const remotePathSchema = z
+  .string()
+  .regex(/^\/[^\0]+$/, 'Path must be absolute')
+  .refine((p) => !p.split('/').includes('..'), 'Invalid path');
 
-  // DELETE /api/files/:id
-  fastify.delete('/api/files/:id', async (request, reply) => {
-    return reply.status(501).send({
-      status: 'UNSUPPORTED',
-      capability: 'file.delete',
-      message: 'File deletion requires FTPS session.',
-    });
-  });
+const ftpError = (err: unknown) =>
+  json(
+    {
+      success: false,
+      error: 'FTPS_ERROR',
+      message: `Không kết nối được bộ nhớ máy in qua FTPS (cổng 990): ${err instanceof Error ? err.message : String(err)}`,
+    },
+    502
+  );
 
-  // POST /api/files/:id/print
-  fastify.post('/api/files/:id/print', async (request, reply) => {
-    return reply.status(501).send({
-      status: 'UNKNOWN',
-      capability: 'print.start',
-      message: 'Print start from SD Card file requires verified project 3MF metadata parameters.',
-    });
-  });
-}
+// GET /api/files - files on the printer storage (FTPS root and /cache)
+export const getFiles = handler(async () => {
+  const storage = PrintJobManager.getInstance().storage();
+  const files: (PrinterFileEntry & { printable: boolean })[] = [];
+
+  for (const dir of LIST_DIRECTORIES) {
+    try {
+      const entries = await storage.list(dir);
+      for (const entry of entries) {
+        if (!entry.isDirectory) files.push({ ...entry, printable: /\.3mf$/i.test(entry.name) });
+      }
+    } catch (err) {
+      // /cache does not exist on every printer; the root must be reachable
+      if (dir === '/') return ftpError(err);
+    }
+  }
+
+  files.sort((a, b) => (b.modifiedAt ?? '').localeCompare(a.modifiedAt ?? ''));
+  return json({ count: files.length, files });
+});
+
+// DELETE /api/files/:id - id is the URL-encoded absolute path, e.g. %2Fpart.gcode.3mf
+export const deleteFile = handler<{ id: string }>(async ({ params }) => {
+  const parsed = remotePathSchema.safeParse(decodeURIComponent(params.id));
+  if (!parsed.success) {
+    return json({ success: false, error: 'INVALID_PAYLOAD', message: 'Invalid file path', details: parsed.error.issues }, 400);
+  }
+
+  const active = PrintJobManager.getInstance().getActiveJob();
+  if (active?.remotePath === parsed.data) {
+    return json({ success: false, error: 'FILE_IN_USE', message: 'File đang được dùng cho lệnh in hiện tại.' }, 409);
+  }
+
+  try {
+    await PrintJobManager.getInstance().storage().remove(parsed.data);
+    return json({ success: true, path: parsed.data });
+  } catch (err) {
+    return ftpError(err);
+  }
+});

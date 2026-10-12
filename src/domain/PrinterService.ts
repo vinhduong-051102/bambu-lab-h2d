@@ -1,8 +1,8 @@
-import { PrinterStateStore } from './PrinterStateStore.js';
-import { CapabilityRegistry } from './capabilities/CapabilityRegistry.js';
-import { PrinterCommandService } from './commands/PrinterCommandService.js';
-import { BambuCameraService } from '../bambu/BambuCameraService.js';
-import { BambuMqttClient } from '../bambu/BambuMqttClient.js';
+import { PrinterStateStore } from './PrinterStateStore';
+import { CapabilityRegistry } from './capabilities/CapabilityRegistry';
+import { PrinterCommandService } from './commands/PrinterCommandService';
+import { BambuCameraService } from '../bambu/BambuCameraService';
+import { BambuMqttClient } from '../bambu/BambuMqttClient';
 
 export class PrinterService {
   public readonly serial: string;

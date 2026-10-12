@@ -1,4 +1,4 @@
-import { PrinterCapability } from './PrinterCapability.js';
+import { PrinterCapability } from './PrinterCapability';
 
 export class CapabilityRegistry {
   private capabilities: Map<string, PrinterCapability> = new Map();
@@ -81,8 +81,8 @@ export class CapabilityRegistry {
         category: 'print',
         read: false,
         write: true,
-        status: 'UNKNOWN',
-        description: 'Cần xác nhận chính xác cấu trúc project 3MF/SD Card payload trên H2D',
+        status: 'SUPPORTED',
+        description: 'Upload 3MF đã slice qua FTPS rồi gửi print.project_file (url ftp:///, ams_mapping + ams_mapping2). Yêu cầu Developer Mode trên firmware có xác thực MQTT.',
       },
 
       // Temperature Read & Control
@@ -199,8 +199,8 @@ export class CapabilityRegistry {
         category: 'file',
         read: true,
         write: false,
-        status: 'UNKNOWN',
-        description: 'Yêu cầu kết nối giao thức FTPS cổng 990',
+        status: 'SUPPORTED',
+        description: 'FTPS cổng 990 (implicit TLS, user bblp, mật khẩu = Access Code)',
       },
       {
         id: 'file.upload',
@@ -208,8 +208,8 @@ export class CapabilityRegistry {
         category: 'file',
         read: false,
         write: true,
-        status: 'UNSUPPORTED',
-        description: 'Yêu cầu kết nối FTPS TLS, không thực hiện qua MQTT LAN',
+        status: 'SUPPORTED',
+        description: 'Upload qua FTPS cổng 990 vào thư mục gốc, kiểm tra kích thước sau khi tải',
       },
     ];
 

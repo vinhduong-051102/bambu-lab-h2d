@@ -1,4 +1,4 @@
-import { logger } from '../../logger/logger.js';
+import { logger } from '../../logger/logger';
 
 export type QueueTask<T> = () => Promise<T>;
 

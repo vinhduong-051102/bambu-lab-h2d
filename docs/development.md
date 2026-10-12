@@ -19,13 +19,13 @@ npm run typecheck
 # Run vitest unit tests
 npm test
 
-# Build production TypeScript bundle
+# Build the Next.js production bundle
 npm run build
 
-# Start production server
+# Start production server (custom server: server.ts)
 npm start
 
-# Development watch mode
+# Development mode (Next.js dev server + gateway; tsx restarts it on backend changes)
 npm run dev
 ```
 
@@ -45,3 +45,18 @@ npm run dev
 npm test
 ```
 Tests mock MQTT connection automatically and verify state normalization, capability registry, command validation, safety mode, and REST endpoints.
+
+## 5. Project Layout (Next.js)
+
+| Path | Purpose |
+|------|---------|
+| `server.ts` | Custom Next.js server: boots the gateway, API key check, `/ws` WebSocket upgrades |
+| `app/page.tsx`, `app/layout.tsx`, `app/globals.css` | Dashboard page |
+| `app/api/**/route.ts` | Route Handlers; thin re-exports of `src/api/routes/*` |
+| `src/api/routes/*` | REST endpoint logic (framework-agnostic `Request` → `Response`) |
+| `src/runtime/` | Gateway bootstrap and the shared runtime registry |
+| `src/ui/` | Dashboard client component, markup and browser script |
+
+Adding an endpoint: write the handler in `src/api/routes/<area>.ts` using `handler()` from `src/api/http.ts`,
+then add `app/api/<path>/route.ts` exporting it as `GET`/`POST`/... with `export const dynamic = 'force-dynamic'`.
+Tests call the real route files through `tests/helpers/testApp.ts`.

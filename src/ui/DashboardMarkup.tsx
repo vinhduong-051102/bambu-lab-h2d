@@ -1,0 +1,1027 @@
+// Dashboard markup ported from the former public/index.html. Element ids are the contract
+// with ./dashboard.js, which wires up live data and controls.
+export function DashboardMarkup() {
+  return (
+    <>
+      <div className="app-container">
+        {/* Top Navigation Header */}
+        <header className="header-nav">
+          <div className="brand-section">
+            <div className="logo-icon">
+              <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z">
+                </path>
+                <polyline points="3.27 6.96 12 12.01 20.73 6.96">
+                </polyline>
+                <line x1="12" y1="22.08" x2="12" y2="12">
+                </line>
+              </svg>
+            </div>
+            <div className="brand-title">
+              <h1>
+                {"Bambu Lab H2D "}
+                <span>
+                  Gateway
+                </span>
+              </h1>
+              <div className="header-badges">
+                <span className="sub-badge" id="serialBadge">
+                  Serial: Offline
+                </span>
+                <span className="mode-badge safety-mode" id="realPrinterBadge">
+                  Safety Mode (Read-Only)
+                </span>
+              </div>
+            </div>
+          </div>
+          <div className="status-pills">
+            <button className="btn-compact-mode" id="btnToggleCompactView" title={"Chuyển chế độ Giao Diện Đơn Giản (Ẩn log & hướng dẫn)"}>
+              <span id="compactIcon">
+                ✨
+              </span>
+              <span id="compactText">
+                Giao Diện: Đầy Đủ
+              </span>
+            </button>
+            <button className="btn-cap-modal" id="openApiModalBtn" style={{ background: "rgba(59, 130, 246, 0.2)", borderColor: "#3b82f6", color: "#60a5fa" }}>
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z">
+                </path>
+                <polyline points="14 2 14 8 20 8">
+                </polyline>
+                <line x1="16" y1="13" x2="8" y2="13">
+                </line>
+                <line x1="16" y1="17" x2="8" y2="17">
+                </line>
+              </svg>
+              {" ⚡ API "}
+            </button>
+            <button className="btn-cap-modal" id="openCapModalBtn">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                <rect x="2" y="3" width="20" height="14" rx="2" ry="2">
+                </rect>
+                <line x1="8" y1="21" x2="16" y2="21">
+                </line>
+                <line x1="12" y1="17" x2="12" y2="21">
+                </line>
+              </svg>
+              {" Capabilities "}
+            </button>
+            <div className="status-pill" id="printerPill">
+              <span className="status-dot offline" id="printerDot">
+              </span>
+              <span className="status-text" id="printerStatusText">
+                Offline
+              </span>
+            </div>
+            <div className="status-pill" id="wsPill">
+              <span className="status-dot connecting" id="wsDot">
+              </span>
+              <span className="status-text" id="wsStatusText">
+                WS Connecting...
+              </span>
+            </div>
+          </div>
+        </header>
+        {/* Control Plane Quick Bar */}
+        <section className="control-quick-bar">
+          <div className="control-title">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+              <circle cx="12" cy="12" r="10">
+              </circle>
+              <polygon points="10 8 16 12 10 16 10 8">
+              </polygon>
+            </svg>
+            <span>
+              Điều Khiển Máy In
+            </span>
+          </div>
+          <div className="control-actions">
+            <button className="btn-ctrl btn-pause" id="btnPause" title="Tạm dừng in (Pause)">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                <rect x="6" y="4" width="4" height="16">
+                </rect>
+                <rect x="14" y="4" width="4" height="16">
+                </rect>
+              </svg>
+              {" Tạm Dừng "}
+            </button>
+            <button className="btn-ctrl btn-resume" id="btnResume" title="Tiếp tục in (Resume)">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                <polygon points="5 3 19 12 5 21 5 3">
+                </polygon>
+              </svg>
+              {" Tiếp Tục "}
+            </button>
+            <button className="btn-ctrl btn-stop" id="btnStop" title="Hủy tác vụ in (Stop)">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                <rect x="4" y="4" width="16" height="16" rx="2">
+                </rect>
+              </svg>
+              {" Hủy In "}
+            </button>
+          </div>
+        </section>
+        {/* Main Grid Content */}
+        <main className="dashboard-grid">
+          {/* Hero Card: Active Job & Progress */}
+          <section className="card job-hero-card">
+            <div className="card-header">
+              <div className="header-title">
+                <svg className="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                  <polygon points="12 2 2 7 12 12 22 7 12 2">
+                  </polygon>
+                  <polyline points="2 17 12 22 22 17">
+                  </polyline>
+                  <polyline points="2 12 12 17 22 12">
+                  </polyline>
+                </svg>
+                <h2>
+                  Trạng Thái In Real-Time
+                </h2>
+              </div>
+              <span className="badge state-badge unknown" id="jobStateBadge">
+                UNKNOWN
+              </span>
+            </div>
+            <div className="job-body">
+              <div className="progress-ring-container">
+                <svg className="progress-ring" viewBox="0 0 180 180" width="180" height="180">
+                  <circle className="ring-bg" cx="90" cy="90" r="76" />
+                  <circle className="ring-progress" id="progressRing" cx="90" cy="90" r="76" />
+                </svg>
+                <div className="progress-overlay">
+                  <span className="percentage" id="progressVal">
+                    0%
+                  </span>
+                  <span className="progress-label">
+                    Tiến Độ
+                  </span>
+                </div>
+              </div>
+              <div className="job-details">
+                <div className="job-filename">
+                  <span className="label">
+                    File Đang In
+                  </span>
+                  <span className="value filename-text" id="jobNameText">
+                    Chưa có tác vụ
+                  </span>
+                </div>
+                <div className="job-metrics-grid">
+                  <div className="metric-box">
+                    <span className="metric-label">
+                      Lớp in (Layer)
+                    </span>
+                    <span className="metric-value" id="layersText">
+                      0 / 0
+                    </span>
+                  </div>
+                  <div className="metric-box">
+                    <span className="metric-label">
+                      Thời gian còn lại
+                    </span>
+                    <span className="metric-value" id="remainingTimeText">
+                      --:--
+                    </span>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </section>
+          {/* Thermal Control Card */}
+          <section className="card temp-card">
+            <div className="card-header">
+              <div className="header-title">
+                <svg className="icon temp-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                  <path d="M14 14.76V3.5a2.5 2.5 0 0 0-5 0v11.26a4.5 4.5 0 1 0 5 0z">
+                  </path>
+                </svg>
+                <h2>
+                  Điều Chỉnh Nhiệt Độ
+                </h2>
+              </div>
+            </div>
+            <div className="temp-gauge-container">
+              {/* Nozzle 1 Temp Control */}
+              <div className="temp-control-group">
+                <div className="gauge-head">
+                  <span className="gauge-title">
+                    🔥 Đầu Phun #1 (Hotend 1 - T0)
+                  </span>
+                  <span className="gauge-readout">
+                    <strong id="nozzleCurr">
+                      0
+                    </strong>
+                    <span className="unit">
+                      °C
+                    </span>
+                    <small id="nozzleTarget">
+                      / 0°C
+                    </small>
+                  </span>
+                </div>
+                <div className="bar-container">
+                  <div className="bar-fill hotend-bar" id="nozzleBar" style={{ width: "0%" }}>
+                  </div>
+                </div>
+                <div className="temp-input-row">
+                  <input type="number" id="nozzleInput" min="0" max="300" placeholder="220" className="temp-input" />
+                  <button className="btn-set-temp" id="btnSetNozzle">
+                    Đặt Nhiệt
+                  </button>
+                  <div className="preset-pills">
+                    <button className="preset-btn" data-type="nozzle" data-val="200">
+                      PLA 200
+                    </button>
+                    <button className="preset-btn" data-type="nozzle" data-val="240">
+                      PETG 240
+                    </button>
+                    <button className="preset-btn" data-type="nozzle" data-val="250">
+                      ABS 250
+                    </button>
+                    <button className="preset-btn off" data-type="nozzle" data-val="0">
+                      Tắt
+                    </button>
+                  </div>
+                </div>
+              </div>
+              {/* Nozzle 2 Temp Control (Dual Extruder) */}
+              <div className="temp-control-group">
+                <div className="gauge-head">
+                  <span className="gauge-title">
+                    🔥 Đầu Phun #2 (Hotend 2 - T1)
+                  </span>
+                  <span className="gauge-readout">
+                    <strong id="nozzle2Curr">
+                      0
+                    </strong>
+                    <span className="unit">
+                      °C
+                    </span>
+                    <small id="nozzle2Target">
+                      / 0°C
+                    </small>
+                  </span>
+                </div>
+                <div className="bar-container">
+                  <div className="bar-fill hotend-bar" id="nozzle2Bar" style={{ width: "0%" }}>
+                  </div>
+                </div>
+                <div className="temp-input-row">
+                  <input type="number" id="nozzle2Input" min="0" max="300" placeholder="220" className="temp-input" />
+                  <button className="btn-set-temp" id="btnSetNozzle2">
+                    Đặt Nhiệt
+                  </button>
+                  <div className="preset-pills">
+                    <button className="preset-btn" data-type="nozzle2" data-val="200">
+                      PLA 200
+                    </button>
+                    <button className="preset-btn" data-type="nozzle2" data-val="240">
+                      PETG 240
+                    </button>
+                    <button className="preset-btn" data-type="nozzle2" data-val="250">
+                      ABS 250
+                    </button>
+                    <button className="preset-btn off" data-type="nozzle2" data-val="0">
+                      Tắt
+                    </button>
+                  </div>
+                </div>
+              </div>
+              {/* Bed Temp Control */}
+              <div className="temp-control-group">
+                <div className="gauge-head">
+                  <span className="gauge-title">
+                    ♨️ Bàn In (Heatbed)
+                  </span>
+                  <span className="gauge-readout">
+                    <strong id="bedCurr">
+                      0
+                    </strong>
+                    <span className="unit">
+                      °C
+                    </span>
+                    <small id="bedTarget">
+                      / 0°C
+                    </small>
+                  </span>
+                </div>
+                <div className="bar-container">
+                  <div className="bar-fill bed-bar" id="bedBar" style={{ width: "0%" }}>
+                  </div>
+                </div>
+                <div className="temp-input-row">
+                  <input type="number" id="bedInput" min="0" max="120" placeholder="60" className="temp-input" />
+                  <button className="btn-set-temp" id="btnSetBed">
+                    Đặt Nhiệt
+                  </button>
+                  <div className="preset-pills">
+                    <button className="preset-btn" data-type="bed" data-val="60">
+                      PLA 60
+                    </button>
+                    <button className="preset-btn" data-type="bed" data-val="80">
+                      PETG 80
+                    </button>
+                    <button className="preset-btn" data-type="bed" data-val="100">
+                      ABS 100
+                    </button>
+                    <button className="preset-btn off" data-type="bed" data-val="0">
+                      Tắt
+                    </button>
+                  </div>
+                </div>
+              </div>
+              {/* Chamber Temp */}
+              <div className="temp-gauge-item chamber-item">
+                <div className="gauge-head">
+                  <span className="gauge-title">
+                    🌡️ Buồng In (Chamber)
+                  </span>
+                  <span className="gauge-readout">
+                    <strong id="chamberCurr">
+                      --
+                    </strong>
+                    <span className="unit">
+                      °C
+                    </span>
+                  </span>
+                </div>
+              </div>
+            </div>
+          </section>
+          {/* Live Camera Stream Card */}
+          <section className="card camera-card">
+            <div className="card-header">
+              <div className="header-title">
+                <svg className="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                  <path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z">
+                  </path>
+                  <circle cx="12" cy="13" r="4">
+                  </circle>
+                </svg>
+                <h2>
+                  Camera Live Stream
+                </h2>
+              </div>
+              <div className="quick-links">
+                <button id="btnCopyRtsp" className="btn-copy-rtsp" title="Copy RTSPS URL cho VLC / Home Assistant">
+                  📋 Copy RTSP Link
+                </button>
+                <button id="btnReconnectCam" className="btn-reconnect-cam" title="Thử kết nối lại camera TLS 6000">
+                  🔄 Reconnect
+                </button>
+                <a href="/api/camera/snapshot" target="_blank" className="api-link">
+                  Snapshot
+                </a>
+                <a href="/api/camera/mjpeg" target="_blank" className="api-link">
+                  MJPEG
+                </a>
+              </div>
+            </div>
+            <div className="camera-viewport">
+              <img id="cameraStreamImg" src="/api/camera/mjpeg" alt="Bambu Camera Feed" className="camera-feed-img" />
+              <div className="camera-overlay">
+                <span className="cam-live-indicator" id="camLiveIndicator">
+                  ● LIVE CAMERA
+                </span>
+                <span className="cam-rtsp-url" id="camRtspUrl">
+                  RTSPS: Loading...
+                </span>
+              </div>
+            </div>
+            {/* Real-time Camera Telemetry & Status Bar */}
+            <div className="camera-status-bar" id="cameraStatusBar">
+              <div className="cam-stat-item">
+                <span className="cam-stat-label">
+                  Status:
+                </span>
+                <span id="camStatConnected" className="cam-stat-val">
+                  Checking...
+                </span>
+              </div>
+              <div className="cam-stat-item">
+                <span className="cam-stat-label">
+                  Source:
+                </span>
+                <span id="camStatSource" className="cam-stat-val">
+                  RTSP
+                </span>
+              </div>
+              <div className="cam-stat-item">
+                <span className="cam-stat-label">
+                  Resolution:
+                </span>
+                <span id="camStatRes" className="cam-stat-val">
+                  --
+                </span>
+              </div>
+              <div className="cam-stat-item">
+                <span className="cam-stat-label">
+                  FPS:
+                </span>
+                <span id="camStatFps" className="cam-stat-val">
+                  0
+                </span>
+              </div>
+              <div className="cam-stat-item">
+                <span className="cam-stat-label">
+                  Last Frame:
+                </span>
+                <span id="camStatAge" className="cam-stat-val">
+                  --
+                </span>
+              </div>
+            </div>
+            <div className="cam-error-banner" id="camErrorBanner" style={{ display: "none" }}>
+            </div>
+            {/* Camera Diagnostic & Troubleshooting Note */}
+            <div className="cam-help-box">
+              <div className="cam-help-header">
+                💡 Hướng Dẫn Xem Camera Trực Tiếp:
+              </div>
+              <ol className="cam-help-list">
+                <li>
+                  <strong>
+                    {"Kiểm tra IP & Access Code:"}
+                  </strong>
+                  {" Đảm bảo "}
+                  <code>
+                    BAMBU_HOST
+                  </code>
+                  {" (IP máy in) và "}
+                  <code>
+                    BAMBU_ACCESS_CODE
+                  </code>
+                  {" trong file "}
+                  <code>
+                    .env
+                  </code>
+                  {" khớp với thông tin trên máy in."}
+                </li>
+                <li>
+                  <strong>
+                    Bật LAN Liveview trên máy in:
+                  </strong>
+                  {" Mở màn hình máy in Bambu → Vào "}
+                  <strong>
+                    Settings
+                  </strong>
+                  {" → "}
+                  <strong>
+                    WLAN/Network
+                  </strong>
+                  {" → Bật "}
+                  <strong>
+                    LAN Mode Liveview: ON
+                  </strong>
+                  .
+                </li>
+                <li>
+                  <strong>
+                    Xem qua VLC / Home Assistant / OBS:
+                  </strong>
+                  {" Dùng luồng "}
+                  <code>
+                    rtsps://bblp:ACCESS_CODE@IP:322/streaming/live/1
+                  </code>
+                  {" (bấm nút \"Copy RTSP Link\" ở trên)."}
+                </li>
+              </ol>
+            </div>
+          </section>
+          {/* Cooling & Fans Control Card */}
+          <section className="card fan-card">
+            <div className="card-header">
+              <div className="header-title">
+                <svg className="icon fan-svg-icon" id="mainFanIcon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                  <path d="M12 12c-2 0-4-2-4-4s2-4 4-4 4 2 4 4-2 4-4 4zm0 0c0 2 2 4 4 4s4-2 4-4-2-4-4-4-4 2-4 4zm0 0c-2 0-4 2-4 4s2 4 4 4 4-2 4-4-2-4-4-4zm0 0c0-2-2-4-4-4s-4 2-4 4 2 4 4 4 4-2 4-4z">
+                  </path>
+                  <circle cx="12" cy="12" r="2">
+                  </circle>
+                </svg>
+                <h2>
+                  Điều Chỉnh Quạt (Fans)
+                </h2>
+              </div>
+            </div>
+            <div className="fan-grid">
+              {/* Part Fan */}
+              <div className="fan-box">
+                <div className="fan-info">
+                  <span className="fan-name">
+                    Quạt Mẫu (Part Fan)
+                  </span>
+                  <span className="fan-pct" id="partFanPct">
+                    0%
+                  </span>
+                </div>
+                <div className="bar-container">
+                  <div className="bar-fill fan-bar" id="partFanBar" style={{ width: "0%" }}>
+                  </div>
+                </div>
+                <div className="fan-ctrl-row">
+                  <input type="range" min="0" max="100" defaultValue="0" className="fan-slider" id="sliderPartFan" />
+                  <button className="btn-fan-set" data-fan="part">
+                    Lưu
+                  </button>
+                </div>
+              </div>
+              {/* Aux Fan */}
+              <div className="fan-box">
+                <div className="fan-info">
+                  <span className="fan-name">
+                    Quạt Phụ (Aux Fan)
+                  </span>
+                  <span className="fan-pct" id="auxFanPct">
+                    0%
+                  </span>
+                </div>
+                <div className="bar-container">
+                  <div className="bar-fill fan-bar" id="auxFanBar" style={{ width: "0%" }}>
+                  </div>
+                </div>
+                <div className="fan-ctrl-row">
+                  <input type="range" min="0" max="100" defaultValue="0" className="fan-slider" id="sliderAuxFan" />
+                  <button className="btn-fan-set" data-fan="aux">
+                    Lưu
+                  </button>
+                </div>
+              </div>
+              {/* Chamber Fan */}
+              <div className="fan-box">
+                <div className="fan-info">
+                  <span className="fan-name">
+                    Quạt Buồng (Chamber Fan)
+                  </span>
+                  <span className="fan-pct" id="chamberFanPct">
+                    0%
+                  </span>
+                </div>
+                <div className="bar-container">
+                  <div className="bar-fill fan-bar" id="chamberFanBar" style={{ width: "0%" }}>
+                  </div>
+                </div>
+                <div className="fan-ctrl-row">
+                  <input type="range" min="0" max="100" defaultValue="0" className="fan-slider" id="sliderChamberFan" />
+                  <button className="btn-fan-set" data-fan="chamber">
+                    Lưu
+                  </button>
+                </div>
+              </div>
+            </div>
+          </section>
+          {/* LAN Print Job Card: 3MF upload → FTPS → print.project_file */}
+          <section className="card print-card" id="printCard">
+            <div className="card-header">
+              <div className="header-title">
+                <svg className="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                  <polyline points="6 9 6 2 18 2 18 9" />
+                  <path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2" />
+                  <rect x="6" y="14" width="12" height="8" />
+                </svg>
+                <h2>In File 3MF Qua LAN</h2>
+              </div>
+              <div className="quick-links">
+                <a href="/api/print/jobs" target="_blank" className="api-link">GET /api/print/jobs</a>
+                <a href="/api/files" target="_blank" className="api-link">GET /api/files</a>
+              </div>
+            </div>
+
+            <div className="print-layout">
+              <div className="print-step">
+                <h3 className="print-step-title">1. Chọn file đã slice</h3>
+                <label className="print-dropzone" htmlFor="printFileInput">
+                  <input type="file" id="printFileInput" accept=".3mf" />
+                  <span className="print-dropzone-main" id="printFileLabel">Chọn file .gcode.3mf từ máy tính</span>
+                  <span className="print-dropzone-sub">Bambu Studio → Export plate sliced file</span>
+                </label>
+                <div className="print-upload-progress" id="printPrepareProgress" hidden>
+                  <div className="print-progress-track"><div className="print-progress-fill" id="printPrepareBar" /></div>
+                  <span id="printPrepareText">0%</span>
+                </div>
+
+                <div className="print-remote">
+                  <div className="print-remote-header">
+                    <span>Hoặc chọn file có sẵn trên máy in</span>
+                    <button type="button" className="btn-ams-action" id="btnPrintListFiles">🔄 Tải danh sách</button>
+                  </div>
+                  <ul className="print-remote-list" id="printRemoteList">
+                    <li className="print-muted">Bấm “Tải danh sách” để đọc bộ nhớ máy in qua FTPS.</li>
+                  </ul>
+                </div>
+              </div>
+
+              <div className="print-step" id="printConfigStep">
+                <h3 className="print-step-title">2. Kiểm tra &amp; ánh xạ nhựa</h3>
+                <div className="print-muted" id="printConfigEmpty">Chưa có file nào được phân tích.</div>
+                <div id="printConfig" hidden>
+                  <div className="print-file-summary" id="printFileSummary" />
+                  <div className="print-plate-row">
+                    <img id="printPlateThumb" className="print-plate-thumb" alt="Plate preview" hidden />
+                    <div className="print-plate-meta">
+                      <label className="print-field-label" htmlFor="printPlateSelect">Plate</label>
+                      <select id="printPlateSelect" className="print-select" />
+                      <div className="print-muted" id="printPlateInfo" />
+                    </div>
+                  </div>
+                  <table className="print-mapping-table">
+                    <thead>
+                      <tr><th>Filament</th><th>Đầu phun (slice)</th><th>Khay AMS</th></tr>
+                    </thead>
+                    <tbody id="printMappingBody" />
+                  </table>
+                  <div className="print-options">
+                    <label><input type="checkbox" id="printOptBedLeveling" defaultChecked /> Cân bàn tự động</label>
+                    <label><input type="checkbox" id="printOptFlowCali" defaultChecked /> Hiệu chỉnh flow</label>
+                    <label><input type="checkbox" id="printOptVibrationCali" defaultChecked /> Hiệu chỉnh rung</label>
+                    <label><input type="checkbox" id="printOptLayerInspect" defaultChecked /> Kiểm tra lớp đầu</label>
+                    <label><input type="checkbox" id="printOptTimelapse" /> Timelapse</label>
+                  </div>
+                  <ul className="print-warnings" id="printWarnings" hidden />
+                  <div className="print-actions">
+                    <button type="button" className="btn-ams-action" id="btnPrintDiscard">Bỏ file</button>
+                    <button type="button" className="btn-print-start" id="btnPrintStart">▶ Bắt đầu in</button>
+                  </div>
+                </div>
+              </div>
+
+              <div className="print-step">
+                <h3 className="print-step-title">3. Trạng thái lệnh in</h3>
+                <div className="print-muted" id="printJobEmpty">Chưa có lệnh in nào.</div>
+                <div id="printJob" hidden>
+                  <div className="print-job-head">
+                    <span className="print-job-badge" id="printJobBadge">—</span>
+                    <span className="print-job-file" id="printJobFile" />
+                  </div>
+                  <div className="print-job-message" id="printJobMessage" />
+                  <div className="print-upload-progress" id="printJobUpload" hidden>
+                    <div className="print-progress-track"><div className="print-progress-fill" id="printJobUploadBar" /></div>
+                    <span id="printJobUploadText">0%</span>
+                  </div>
+                  <ul className="print-job-codes" id="printJobCodes" hidden />
+                  <ol className="print-job-history" id="printJobHistory" />
+                </div>
+              </div>
+            </div>
+          </section>
+          {/* AMS System Card */}
+          <section className="card ams-card">
+            <div className="card-header">
+              <div className="header-title">
+                <svg className="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                  <rect x="2" y="7" width="20" height="14" rx="2" ry="2">
+                  </rect>
+                  <path d="M16 21V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v16">
+                  </path>
+                </svg>
+                <h2>
+                  Hệ Thống Khay Nhựa AMS
+                </h2>
+              </div>
+              <div className="quick-links ams-toolbar">
+                <button className="btn-ams-action" id="btnAmsUnload" title="Rút nhựa hiện tại về AMS">
+                  ⏫ Rút Nhựa
+                </button>
+                <button className="btn-ams-action" id="btnAmsRetry" title="Thử lại thao tác đùn/kéo nhựa">
+                  🔄 Retry
+                </button>
+                <button className="btn-ams-action btn-ams-primary" id="btnOpenAmsModal" title={"Đổi màu & loại nhựa khay AMS"}>
+                  ⚙️ Đổi Màu/Loại Nhựa
+                </button>
+              </div>
+            </div>
+            <div className="ams-container" id="amsContainer">
+              <div className="empty-ams">
+                Chưa có thông tin dữ liệu AMS
+              </div>
+            </div>
+          </section>
+          {/* Event Stream & Audit Log Console Card */}
+          <section className="card console-card">
+            <div className="card-header">
+              <div className="header-title">
+                <svg className="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                  <polyline points="4 17 10 11 4 5">
+                  </polyline>
+                  <line x1="12" y1="19" x2="20" y2="19">
+                  </line>
+                </svg>
+                <h2>
+                  {"Console Log & Command Audit"}
+                </h2>
+              </div>
+              <div className="quick-links">
+                <a href="/api/commands" target="_blank" className="api-link">
+                  GET /api/commands
+                </a>
+                <a href="/api/capabilities" target="_blank" className="api-link">
+                  GET /api/capabilities
+                </a>
+              </div>
+            </div>
+            <div className="console-body" id="consoleLogs">
+              <div className="log-line info">
+                [System] Đã kết nối giao diện Dashboard. Đang chờ dữ liệu...
+              </div>
+            </div>
+          </section>
+          {/* Protocol Diagnostics & Raw Data Explorer Card */}
+          <section className="card diag-card">
+            <div className="card-header">
+              <div className="header-title">
+                <svg className="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                  <circle cx="12" cy="12" r="10">
+                  </circle>
+                  <line x1="12" y1="16" x2="12" y2="12">
+                  </line>
+                  <line x1="12" y1="8" x2="12.01" y2="8">
+                  </line>
+                </svg>
+                <h2>
+                  {"Protocol Diagnostics & Raw Data Explorer"}
+                </h2>
+              </div>
+              <div className="quick-links">
+                <a href="/api/printer/diagnostics" target="_blank" className="api-link">
+                  GET /api/printer/diagnostics
+                </a>
+                <a href="/api/printer/raw" target="_blank" className="api-link">
+                  GET /api/printer/raw
+                </a>
+              </div>
+            </div>
+            <div className="diag-body">
+              {/* Raw Data Explorer */}
+              <div className="diag-json-box">
+                <div className="diag-json-header">
+                  <h3 className="diag-box-title">
+                    {"🌐 Raw Data Explorer (Unmapped Raw Payload & Extensions)"}
+                  </h3>
+                  <div className="diag-actions">
+                    <button id="btnOpenRawModal" className="btn-open-raw-modal">
+                      🔍 Xem Full Raw Data (Toàn Màn Hình)
+                    </button>
+                    <button id="btnRefreshDiag" className="btn-refresh-diag">
+                      Làm mới
+                    </button>
+                  </div>
+                </div>
+                <pre id="diagRawJson" className="diag-raw-json">
+                  Đang tải raw telemetry...
+                </pre>
+              </div>
+            </div>
+          </section>
+        </main>
+        {/* Footer */}
+        <footer className="app-footer">
+          <span>
+            Bambu Lab H2D Gateway • Enterprise Local Bridge
+          </span>
+          <span id="lastUpdateText">
+            Cập nhật lần cuối: Chưa có dữ liệu
+          </span>
+        </footer>
+      </div>
+      {/* Capabilities Registry Modal */}
+      <div className="modal-backdrop" id="capModal">
+        <div className="modal-content">
+          <div className="modal-header">
+            <h3>
+              <span className="modal-icon">
+                ⚙️
+              </span>
+              {" Capability Registry Explorer"}
+            </h3>
+            <button className="btn-close-modal" id="closeCapModalBtn">
+              ×
+            </button>
+          </div>
+          <div className="modal-body">
+            <p className="modal-desc">
+              Danh sách tất cả các tính năng và trạng thái hỗ trợ thực tế của máy in Bambu Lab H2D:
+            </p>
+            <div className="cap-list" id="capListContainer">
+              <div className="loading-spinner">
+                Đang tải capabilities...
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+      {/* API Documentation Modal */}
+      <div className="modal-backdrop" id="apiModal">
+        <div className="modal-content" style={{ maxWidth: "900px", width: "90vw" }}>
+          <div className="modal-header">
+            <h3>
+              <span className="modal-icon">
+                ⚡
+              </span>
+              {" Danh Sách Gateway REST API & WebSocket Endpoints"}
+            </h3>
+            <button className="btn-close-modal" id="closeApiModalBtn">
+              ×
+            </button>
+          </div>
+          <div className="modal-body">
+            <p className="modal-desc">
+              {"Danh sách đầy đủ tất cả REST API endpoints & luồng WebSocket hỗ trợ điều khiển máy in Bambu Lab H2D, xem camera, kiểm tra telemetry và gửi lệnh G-code/MQTT:"}
+            </p>
+            <div className="api-list-container" id="apiListContainer">
+              <div className="loading-spinner">
+                Đang tải danh sách API...
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+      {/* Full Raw Data Explorer Modal */}
+      <div className="modal-backdrop" id="rawModal">
+        <div className="raw-modal-content">
+          <div className="raw-modal-header">
+            <div className="raw-title-group">
+              <h3>
+                <span className="modal-icon">
+                  🌐
+                </span>
+                {" Full Telemetry Raw Data Viewer"}
+              </h3>
+              <span className="raw-meta-badge" id="rawSizeBadge">
+                Payload Size: 0 KB
+              </span>
+              <span className="raw-meta-badge" id="rawTimeBadge">
+                Last Updated: --:--:--
+              </span>
+            </div>
+            <button className="btn-close-modal" id="closeRawModalBtn">
+              ×
+            </button>
+          </div>
+          <div className="raw-modal-toolbar">
+            <div className="raw-search-box">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                <circle cx="11" cy="11" r="8">
+                </circle>
+                <line x1="21" y1="21" x2="16.65" y2="16.65">
+                </line>
+              </svg>
+              <input type="text" id="rawSearchInput" placeholder="Tìm kiếm key, value, hnow, temp..." />
+            </div>
+            <div className="raw-toolbar-actions">
+              <button className="raw-tool-btn" id="btnCopyRawJson">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                  <rect x="9" y="9" width="13" height="13" rx="2" ry="2">
+                  </rect>
+                  <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1">
+                  </path>
+                </svg>
+                {" Copy JSON "}
+              </button>
+              <button className="raw-tool-btn" id="btnDownloadRawJson">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                  <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4">
+                  </path>
+                  <polyline points="7 10 12 15 17 10">
+                  </polyline>
+                  <line x1="12" y1="15" x2="12" y2="3">
+                  </line>
+                </svg>
+                {" Tải File JSON "}
+              </button>
+              <button className="raw-tool-btn active" id="btnRefreshRawModal">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                  <polyline points="23 4 23 10 17 10">
+                  </polyline>
+                  <path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10">
+                  </path>
+                </svg>
+                {" Làm mới "}
+              </button>
+            </div>
+          </div>
+          <div className="raw-modal-body">
+            <div className="raw-sidebar">
+              <button className="raw-tab-btn active" data-tab="all">
+                Tất Cả (`rawPayload`)
+              </button>
+              <button className="raw-tab-btn" data-tab="print">
+                Khối `print` (Status)
+              </button>
+              <button className="raw-tab-btn" data-tab="candidates">
+                Discovered Sensors
+              </button>
+              <button className="raw-tab-btn" data-tab="history">
+                History Diffs
+              </button>
+            </div>
+            <div className="raw-content-area">
+              <pre id="fullRawJsonViewer" className="full-raw-json-viewer">
+                Đang tải full raw telemetry...
+              </pre>
+            </div>
+          </div>
+        </div>
+      </div>
+      {/* AMS Setting Modal */}
+      <div className="modal-backdrop" id="amsSettingModal">
+        <div className="modal-content" style={{ maxWidth: "500px", width: "92vw" }}>
+          <div className="modal-header">
+            <h3>
+              <span className="modal-icon">
+                ⚙️
+              </span>
+              {" Cài Đặt Khay Nhựa AMS & Loại Nhựa"}
+            </h3>
+            <button className="btn-close-modal" id="closeAmsModalBtn">
+              ×
+            </button>
+          </div>
+          <div className="modal-body" style={{ display: "flex", flexDirection: "column", gap: "14px" }}>
+            <div style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
+              <label style={{ fontSize: "0.8rem", color: "#9ca3af", fontWeight: "600" }}>
+                Chọn Khay AMS:
+              </label>
+              <select id="amsSelectTray" style={{ background: "rgba(0,0,0,0.4)", border: "1px solid var(--card-border)", color: "var(--text-main)", padding: "8px", borderRadius: "var(--radius-sm)", fontSize: "0.85rem" }}>
+                <option value="0">
+                  Khay #1 (A1 - Slot 0)
+                </option>
+                <option value="1">
+                  Khay #2 (A2 - Slot 1)
+                </option>
+                <option value="2">
+                  Khay #3 (A3 - Slot 2)
+                </option>
+                <option value="3">
+                  Khay #4 (A4 - Slot 3)
+                </option>
+              </select>
+            </div>
+            <div style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
+              <label style={{ fontSize: "0.8rem", color: "#9ca3af", fontWeight: "600" }}>
+                Loại Nhựa (Filament Material):
+              </label>
+              <select id="amsSelectType" style={{ background: "rgba(0,0,0,0.4)", border: "1px solid var(--card-border)", color: "var(--text-main)", padding: "8px", borderRadius: "var(--radius-sm)", fontSize: "0.85rem" }}>
+                <option value="PLA">
+                  PLA (Bambu PLA Basic)
+                </option>
+                <option value="PLA-CF">
+                  PLA-CF (PLA Carbon Fiber)
+                </option>
+                <option value="PETG">
+                  PETG (Bambu PETG Basic)
+                </option>
+                <option value="ABS">
+                  ABS (Bambu ABS)
+                </option>
+                <option value="ASA">
+                  ASA (Bambu ASA)
+                </option>
+                <option value="TPU">
+                  TPU (Bambu TPU 95A)
+                </option>
+                <option value="PC">
+                  PC (Polycarbonate)
+                </option>
+                <option value="PVA">
+                  PVA (Support for PLA)
+                </option>
+              </select>
+            </div>
+            <div style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
+              <label style={{ fontSize: "0.8rem", color: "#9ca3af", fontWeight: "600" }}>
+                Màu Sắc Nhựa:
+              </label>
+              <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
+                <input type="color" id="amsColorPicker" defaultValue="#3B82F6" style={{ width: "42px", height: "38px", border: "1px solid var(--card-border)", borderRadius: "6px", background: "transparent", cursor: "pointer" }} />
+                <input type="text" id="amsColorHex" defaultValue="#3B82F6" placeholder="#FF0000" style={{ background: "rgba(0,0,0,0.4)", border: "1px solid var(--card-border)", color: "var(--text-main)", padding: "8px", borderRadius: "var(--radius-sm)", fontFamily: "var(--font-mono)", fontSize: "0.85rem", flexGrow: "1" }} />
+              </div>
+            </div>
+            <div style={{ display: "flex", gap: "10px" }}>
+              <div style={{ flex: "1", display: "flex", flexDirection: "column", gap: "4px" }}>
+                <label style={{ fontSize: "0.78rem", color: "#9ca3af" }}>
+                  Nhiệt độ tối thiểu (°C):
+                </label>
+                <input type="number" id="amsMinTemp" defaultValue="190" style={{ background: "rgba(0,0,0,0.4)", border: "1px solid var(--card-border)", color: "var(--text-main)", padding: "8px", borderRadius: "var(--radius-sm)", fontSize: "0.85rem" }} />
+              </div>
+              <div style={{ flex: "1", display: "flex", flexDirection: "column", gap: "4px" }}>
+                <label style={{ fontSize: "0.78rem", color: "#9ca3af" }}>
+                  Nhiệt độ tối đa (°C):
+                </label>
+                <input type="number" id="amsMaxTemp" defaultValue="240" style={{ background: "rgba(0,0,0,0.4)", border: "1px solid var(--card-border)", color: "var(--text-main)", padding: "8px", borderRadius: "var(--radius-sm)", fontSize: "0.85rem" }} />
+              </div>
+            </div>
+            <div style={{ display: "flex", justifyContent: "flex-end", gap: "10px", marginTop: "10px" }}>
+              <button id="btnSaveAmsSetting" style={{ background: "#3b82f6", color: "#fff", border: "none", padding: "10px 18px", borderRadius: "var(--radius-sm)", fontSize: "0.85rem", fontWeight: "600", cursor: "pointer" }}>
+                Lưu Cài Đặt Khay
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+      {/* Toast Notification */}
+      <div className="toast-container" id="toastContainer">
+      </div>
+    </>
+  );
+}

@@ -1,15 +1,14 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { FastifyInstance } from 'fastify';
-import { PrinterStateStore } from '../src/domain/PrinterStateStore.js';
-import { CapabilityRegistry } from '../src/domain/capabilities/CapabilityRegistry.js';
-import { PrinterCommandService } from '../src/domain/commands/PrinterCommandService.js';
-import { PrinterService } from '../src/domain/PrinterService.js';
-import { createServer } from '../src/server/server.js';
-import { debugPrinterPipeline } from '../src/utils/debugPipeline.js';
+import { PrinterStateStore } from '../src/domain/PrinterStateStore';
+import { CapabilityRegistry } from '../src/domain/capabilities/CapabilityRegistry';
+import { PrinterCommandService } from '../src/domain/commands/PrinterCommandService';
+import { PrinterService } from '../src/domain/PrinterService';
+import { createTestApp, type TestApp } from './helpers/testApp';
+import { debugPrinterPipeline } from '../src/utils/debugPipeline';
 import h2dFixture from './fixtures/h2d_raw_payload.json';
 
 describe('End-to-End Pipeline Data Flow Debug Test', () => {
-  let app: FastifyInstance;
+  let app: TestApp;
   let stateStore: PrinterStateStore;
   let capabilityRegistry: CapabilityRegistry;
   let commandService: PrinterCommandService;
@@ -30,13 +29,12 @@ describe('End-to-End Pipeline Data Flow Debug Test', () => {
       commandService,
     });
 
-    app = await createServer(printerService);
-    await app.ready();
+    app = createTestApp(printerService);
   });
 
   afterEach(async () => {
     stateStore.destroy();
-    await app.close();
+    app.close();
   });
 
   it('should preserve all mapped fields across the entire pipeline (Raw -> Parser -> Normalizer -> Store -> API)', async () => {

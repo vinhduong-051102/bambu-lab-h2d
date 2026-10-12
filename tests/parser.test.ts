@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
-import { BambuMessageParser } from '../src/bambu/BambuMessageParser.js';
-import { discoverTemperatureFields } from '../src/utils/temperatureDiscovery.js';
+import { BambuMessageParser } from '../src/bambu/BambuMessageParser';
+import { discoverTemperatureFields } from '../src/utils/temperatureDiscovery';
 import h2dFixture from './fixtures/h2d_raw_payload.json';
 
 describe('BambuMessageParser & Temperature Discovery - H2D RAW Telemetry Fixture', () => {

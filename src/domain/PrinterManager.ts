@@ -1,4 +1,4 @@
-import { PrinterService } from './PrinterService.js';
+import { PrinterService } from './PrinterService';
 
 export class PrinterManager {
   private printers: Map<string, PrinterService> = new Map();

@@ -1,106 +1,215 @@
-import { FastifyInstance } from 'fastify';
+import { promises as fs } from 'fs';
+import os from 'os';
+import path from 'path';
 import { z } from 'zod';
-import { PrinterService } from '../../domain/PrinterService.js';
-import { CommandExecutionError } from '../../domain/commands/PrinterCommandService.js';
+import { PrintJobManager } from '../../domain/print/PrintJobManager';
+import { commandErrorResponse, handler, json, readJsonBody } from '../http';
+
+const MAX_PROJECT_BYTES = 1024 * 1024 * 1024;
 
 const startPrintSchema = z.object({
-  fileId: z.string({ required_error: 'fileId or project identifier is required' }),
-  useAms: z.boolean().optional().default(true),
-  trayMapping: z.array(z.number()).optional(),
-  plateIndex: z.number().optional().default(1),
+  stagedId: z.string({ required_error: 'stagedId is required (from POST /api/print/prepare)' }).min(1),
+  plateIndex: z.number().int().min(1).default(1),
+  // project filament index (0-based, as string key) → absolute tray index, 254 = external spool
+  amsMapping: z.record(z.string().regex(/^\d+$/), z.number().int().min(-1).max(255).nullable()).default({}),
+  options: z
+    .object({
+      timelapse: z.boolean().default(false),
+      bedLeveling: z.boolean().default(true),
+      flowCalibration: z.boolean().default(true),
+      vibrationCalibration: z.boolean().default(true),
+      layerInspect: z.boolean().default(true),
+    })
+    .default({}),
 });
 
-export async function printRoutes(
-  fastify: FastifyInstance,
-  options: { printerService: PrinterService }
-): Promise<void> {
-  const { printerService } = options;
+const prepareRemoteSchema = z.object({
+  path: z
+    .string({ required_error: 'path is required' })
+    .regex(/^\/?[^\0]*\.3mf$/i, 'Only .3mf project files can be printed')
+    .refine((p) => !p.split('/').includes('..'), 'Invalid path'),
+});
 
-  const handleCommandError = (err: unknown, reply: any) => {
-    if (err instanceof CommandExecutionError) {
-      return reply.status(err.statusCode).send({
-        success: false,
-        error: err.errorCode,
-        message: err.message,
-      });
-    }
-    const message = err instanceof Error ? err.message : String(err);
-    return reply.status(500).send({ success: false, error: 'INTERNAL_ERROR', message });
-  };
+const invalidPayload = (message: string, issues: z.ZodIssue[]) =>
+  json({ success: false, error: 'INVALID_PAYLOAD', message, details: issues }, 400);
 
-  // 1. GET /api/print/current - Current Print Job Status
-  fastify.get('/api/print/current', async () => {
-    const state = printerService.stateStore.getState();
-    return {
-      state: state.state,
-      jobName: state.job?.name ?? null,
-      progress: state.progress,
-      currentLayer: state.job?.currentLayer ?? 0,
-      totalLayers: state.job?.totalLayers ?? 0,
-      remainingTimeMinutes: state.job?.remainingTimeMinutes ?? null,
-      online: state.online,
-    };
+// ThreeMfParseError, matched by name (see commandErrorResponse for why not instanceof)
+const parseErrorResponse = (err: unknown): Response | null => {
+  if (err instanceof Error && err.name === 'ThreeMfParseError') {
+    return json({ success: false, error: (err as { code?: string }).code, message: err.message }, 422);
+  }
+  return null;
+};
+
+// GET /api/print/current - Current Print Job Status
+export const getCurrentPrint = handler(({ printerService }) => {
+  const state = printerService.stateStore.getState();
+  return json({
+    state: state.state,
+    jobName: state.job?.name ?? null,
+    progress: state.progress,
+    currentLayer: state.job?.currentLayer ?? 0,
+    totalLayers: state.job?.totalLayers ?? 0,
+    remainingTimeMinutes: state.job?.remainingTimeMinutes ?? null,
+    online: state.online,
   });
+});
 
-  // 2. POST /api/printer/actions/pause & POST /api/print/pause
-  const handlePause = async (request: any, reply: any) => {
-    try {
-      const res = await printerService.commandService.pausePrint();
-      return reply.send({ success: true, action: 'pause', commandId: res.commandId, message: res.message });
-    } catch (err) {
-      return handleCommandError(err, reply);
-    }
-  };
-  fastify.post('/api/printer/actions/pause', handlePause);
-  fastify.post('/api/print/pause', handlePause);
+// POST /api/printer/actions/pause & POST /api/print/pause
+export const pausePrint = handler(async ({ printerService }) => {
+  try {
+    const res = await printerService.commandService.pausePrint();
+    return json({ success: true, action: 'pause', commandId: res.commandId, message: res.message });
+  } catch (err) {
+    return commandErrorResponse(err);
+  }
+});
 
-  // 3. POST /api/printer/actions/resume & POST /api/print/resume
-  const handleResume = async (request: any, reply: any) => {
-    try {
-      const res = await printerService.commandService.resumePrint();
-      return reply.send({ success: true, action: 'resume', commandId: res.commandId, message: res.message });
-    } catch (err) {
-      return handleCommandError(err, reply);
-    }
-  };
-  fastify.post('/api/printer/actions/resume', handleResume);
-  fastify.post('/api/print/resume', handleResume);
+// POST /api/printer/actions/resume & POST /api/print/resume
+export const resumePrint = handler(async ({ printerService }) => {
+  try {
+    const res = await printerService.commandService.resumePrint();
+    return json({ success: true, action: 'resume', commandId: res.commandId, message: res.message });
+  } catch (err) {
+    return commandErrorResponse(err);
+  }
+});
 
-  // 4. POST /api/printer/actions/stop, /api/print/stop & /api/print/cancel
-  const handleStop = async (request: any, reply: any) => {
-    try {
-      const res = await printerService.commandService.stopPrint();
-      return reply.send({ success: true, action: 'stop', commandId: res.commandId, message: res.message });
-    } catch (err) {
-      return handleCommandError(err, reply);
-    }
-  };
-  fastify.post('/api/printer/actions/stop', handleStop);
-  fastify.post('/api/print/stop', handleStop);
-  fastify.post('/api/print/cancel', handleStop);
+// POST /api/printer/actions/stop, /api/print/stop & /api/print/cancel
+export const stopPrint = handler(async ({ printerService }) => {
+  try {
+    const res = await printerService.commandService.stopPrint();
+    return json({ success: true, action: 'stop', commandId: res.commandId, message: res.message });
+  } catch (err) {
+    return commandErrorResponse(err);
+  }
+});
 
-  // 5. POST /api/print/start
-  fastify.post('/api/print/start', async (request, reply) => {
-    const parseResult = startPrintSchema.safeParse(request.body);
-    if (!parseResult.success) {
-      return reply.status(400).send({
+// POST /api/print/prepare - multipart upload of a sliced 3MF to the gateway; returns plates + AMS suggestions
+export const preparePrint = handler(async ({ printerService, request }) => {
+  const length = Number(request.headers.get('content-length') ?? 0);
+  if (length > MAX_PROJECT_BYTES) {
+    return json({ success: false, error: 'FILE_TOO_LARGE', message: 'File vượt quá 1 GB.' }, 413);
+  }
+
+  let form: FormData;
+  try {
+    form = await request.formData();
+  } catch {
+    return json({ success: false, error: 'INVALID_PAYLOAD', message: 'Expected multipart/form-data with a "file" field.' }, 400);
+  }
+  const file = form.get('file');
+  if (!(file instanceof File)) {
+    return json({ success: false, error: 'INVALID_PAYLOAD', message: 'Missing "file" field.' }, 400);
+  }
+  if (!/\.3mf$/i.test(file.name)) {
+    return json(
+      {
         success: false,
-        error: 'INVALID_PAYLOAD',
-        message: 'Invalid start print request',
-        details: parseResult.error.issues,
-      });
-    }
+        error: 'UNSUPPORTED_FILE_TYPE',
+        message: 'Chỉ hỗ trợ file .3mf đã slice (Bambu Studio: "Export plate sliced file" → .gcode.3mf).',
+      },
+      415
+    );
+  }
 
-    // Check capability status (SUPPORTED vs UNKNOWN)
-    const cap = printerService.capabilityRegistry.getCapability('print.start');
-    if (!cap || cap.status !== 'SUPPORTED') {
-      return reply.status(501).send({
-        success: false,
-        error: 'NOT_SUPPORTED',
-        message: 'Starting print jobs over raw LAN MQTT requires precise SD card project file verification (Status: UNKNOWN). To prevent unintended printer moves, print start is marked UNKNOWN.',
-      });
-    }
+  const manager = PrintJobManager.getInstance();
+  try {
+    const staged = await manager.stage({
+      fileName: file.name,
+      data: new Uint8Array(await file.arrayBuffer()),
+      source: 'local',
+    });
+    return json({ success: true, staged: manager.describeStaged(staged, printerService) }, 201);
+  } catch (err) {
+    return parseErrorResponse(err) ?? commandErrorResponse(err);
+  }
+});
 
-    return reply.status(501).send({ success: false, error: 'NOT_IMPLEMENTED' });
-  });
-}
+// POST /api/print/prepare-remote - inspect a 3MF already stored on the printer (downloaded via FTPS)
+export const prepareRemotePrint = handler(async ({ printerService, request }) => {
+  const parsed = prepareRemoteSchema.safeParse(await readJsonBody(request));
+  if (!parsed.success) return invalidPayload('Invalid remote file path', parsed.error.issues);
+
+  const remotePath = parsed.data.path.startsWith('/') ? parsed.data.path : `/${parsed.data.path}`;
+  const manager = PrintJobManager.getInstance();
+  const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'bambu-h2d-download-'));
+  const tempFile = path.join(tempDir, 'project.3mf');
+
+  try {
+    try {
+      await manager.storage().download(remotePath, tempFile);
+    } catch (err) {
+      return json(
+        { success: false, error: 'FTPS_ERROR', message: `Không tải được file từ máy in: ${err instanceof Error ? err.message : String(err)}` },
+        502
+      );
+    }
+    const staged = await manager.stage({
+      fileName: path.posix.basename(remotePath),
+      data: new Uint8Array(await fs.readFile(tempFile)),
+      source: 'printer',
+      remotePath,
+    });
+    return json({ success: true, staged: manager.describeStaged(staged, printerService) }, 201);
+  } catch (err) {
+    return parseErrorResponse(err) ?? commandErrorResponse(err);
+  } finally {
+    await fs.rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+// GET /api/print/staged/:id
+export const getStagedPrint = handler<{ id: string }>(({ printerService, params }) => {
+  const manager = PrintJobManager.getInstance();
+  const staged = manager.getStaged(params.id);
+  if (!staged) {
+    return json({ success: false, error: 'STAGED_FILE_NOT_FOUND', message: 'File không tồn tại hoặc đã hết hạn.' }, 404);
+  }
+  return json({ success: true, staged: manager.describeStaged(staged, printerService) });
+});
+
+// DELETE /api/print/staged/:id
+export const deleteStagedPrint = handler<{ id: string }>(async ({ params }) => {
+  const removed = await PrintJobManager.getInstance().deleteStaged(params.id);
+  if (!removed) {
+    return json({ success: false, error: 'STAGED_FILE_NOT_FOUND', message: 'File không tồn tại hoặc đã hết hạn.' }, 404);
+  }
+  return json({ success: true });
+});
+
+// POST /api/print/start - upload (if needed) + print.project_file, tracked as a print job
+export const startPrint = handler(async ({ printerService, request }) => {
+  const parsed = startPrintSchema.safeParse(await readJsonBody(request));
+  if (!parsed.success) return invalidPayload('Invalid start print request', parsed.error.issues);
+
+  const assignment: Record<number, number | null> = {};
+  for (const [key, value] of Object.entries(parsed.data.amsMapping)) assignment[Number(key)] = value;
+
+  try {
+    const job = PrintJobManager.getInstance().startJob(printerService, {
+      stagedId: parsed.data.stagedId,
+      plateIndex: parsed.data.plateIndex,
+      assignment,
+      options: parsed.data.options,
+    });
+    return json({ success: true, job, message: job.message }, 202);
+  } catch (err) {
+    return commandErrorResponse(err);
+  }
+});
+
+// GET /api/print/jobs
+export const listPrintJobs = handler(() => {
+  const manager = PrintJobManager.getInstance();
+  return json({ jobs: manager.getJobs(), printer: manager.getPrinterSnapshot() });
+});
+
+// GET /api/print/jobs/:id
+export const getPrintJob = handler<{ id: string }>(({ params }) => {
+  const job = PrintJobManager.getInstance().getJob(params.id);
+  if (!job) {
+    return json({ success: false, error: 'PRINT_JOB_NOT_FOUND', message: `Print job '${params.id}' not found` }, 404);
+  }
+  return json({ success: true, job });
+});

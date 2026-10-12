@@ -1,8 +1,8 @@
-import { BambuMessageParser } from '../bambu/BambuMessageParser.js';
-import { normalizePrinterState } from '../domain/normalizePrinterState.js';
-import { PrinterStateStore } from '../domain/PrinterStateStore.js';
-import { BambuRawReportPayload } from '../bambu/types.js';
-import { logger } from '../logger/logger.js';
+import { BambuMessageParser } from '../bambu/BambuMessageParser';
+import { normalizePrinterState } from '../domain/normalizePrinterState';
+import { PrinterStateStore } from '../domain/PrinterStateStore';
+import { BambuRawReportPayload } from '../bambu/types';
+import { logger } from '../logger/logger';
 
 export interface PipelineDebugSnapshot {
   raw: BambuRawReportPayload;

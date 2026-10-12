@@ -1,4 +1,4 @@
-import { PrinterState, createInitialPrinterState } from './PrinterState.js';
+import { PrinterState, createInitialPrinterState } from './PrinterState';
 
 export type StateChangeListener = (state: PrinterState) => void;
 export type ConnectionChangeListener = (online: boolean) => void;

@@ -1,7 +1,7 @@
 import mqtt, { MqttClient } from 'mqtt';
-import { logger } from '../logger/logger.js';
-import { BambuClientOptions } from './types.js';
-import { BambuTopics } from './BambuTopics.js';
+import { logger } from '../logger/logger';
+import { BambuClientOptions } from './types';
+import { BambuTopics } from './BambuTopics';
 
 export type OnMessageCallback = (topic: string, message: Buffer) => void;
 
