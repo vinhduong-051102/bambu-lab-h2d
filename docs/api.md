@@ -100,6 +100,9 @@ Body: `{ "path": "/part.gcode.3mf" }`. Downloads a 3MF already on the printer (F
 ### `GET /api/print/staged/:id` · `DELETE /api/print/staged/:id`
 Re-read or discard a prepared file (prepared files expire after 2 hours).
 
+### `GET /api/print/staged/:id/file`
+Returns the prepared `.gcode.3mf` as `application/octet-stream`. The dashboard's 3D toolpath preview uses it: the browser unzips `Metadata/plate_N.gcode`, parses it and renders it with three.js, so the gateway does no extra work.
+
 ### `POST /api/print/start`
 ```json
 {

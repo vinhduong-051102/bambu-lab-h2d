@@ -67,6 +67,7 @@ export function initPrintJob({ showToast, addLog }) {
   const plateSelect = $('printPlateSelect');
   const plateThumb = $('printPlateThumb');
   const plateInfo = $('printPlateInfo');
+  const btnPreview3d = $('btnPrintPreview3d');
   const mappingBody = $('printMappingBody');
   const warningsList = $('printWarnings');
   const btnStart = $('btnPrintStart');
@@ -339,6 +340,21 @@ export function initPrintJob({ showToast, addLog }) {
   }
 
   plateSelect.addEventListener('change', renderPlate);
+
+  // three.js + the G-code parser load only when the preview is opened
+  btnPreview3d?.addEventListener('click', async () => {
+    const plate = currentPlate();
+    if (!staged || !plate) return;
+    btnPreview3d.disabled = true;
+    try {
+      const { openGcodePreview } = await import('./gcodeViewer');
+      openGcodePreview({ stagedId: staged.id, plateIndex: plate.index, fileName: staged.fileName, showToast });
+    } catch (err) {
+      showToast(`Không mở được trình xem 3D: ${err.message}`, 'error');
+    } finally {
+      btnPreview3d.disabled = false;
+    }
+  });
 
   btnDiscard.addEventListener('click', async () => {
     if (!staged) return;

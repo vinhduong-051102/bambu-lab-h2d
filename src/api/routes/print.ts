@@ -178,6 +178,22 @@ export const getStagedPrint = handler<{ id: string }>(({ printerService, params 
   return json({ success: true, staged: manager.describeStaged(staged, printerService) });
 });
 
+// GET /api/print/staged/:id/file - the staged .gcode.3mf, for the browser-side 3D toolpath preview
+export const getStagedFile = handler<{ id: string }>(async ({ params }) => {
+  const staged = PrintJobManager.getInstance().getStaged(params.id);
+  if (!staged) {
+    return json({ success: false, error: 'STAGED_FILE_NOT_FOUND', message: 'File không tồn tại hoặc đã hết hạn.' }, 404);
+  }
+  const data = await fs.readFile(staged.localPath);
+  return new Response(data, {
+    headers: {
+      'Content-Type': 'application/octet-stream',
+      'Content-Length': String(data.byteLength),
+      'Cache-Control': 'no-store',
+    },
+  });
+});
+
 // DELETE /api/print/staged/:id
 export const deleteStagedPrint = handler<{ id: string }>(async ({ params }) => {
   const removed = await PrintJobManager.getInstance().deleteStaged(params.id);

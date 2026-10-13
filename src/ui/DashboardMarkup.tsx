@@ -623,6 +623,7 @@ export function DashboardMarkup() {
                       <label className="print-field-label" htmlFor="printPlateSelect">Plate</label>
                       <select id="printPlateSelect" className="print-select" />
                       <div className="print-muted" id="printPlateInfo" />
+                      <button type="button" className="btn-ams-action btn-print-preview" id="btnPrintPreview3d">🧊 Xem 3D đường in</button>
                     </div>
                   </div>
                   <table className="print-mapping-table">
