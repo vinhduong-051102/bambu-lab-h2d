@@ -1,4 +1,5 @@
 import { initPrintJob } from './printJob';
+import { initCameraZoom } from './cameraZoom';
 
 /**
  * Dashboard behaviour ported from the former public/app.js. Binds to the element ids rendered
@@ -1279,10 +1280,19 @@ export function initDashboard() {
   const cameraStatusTimer = setInterval(fetchCameraStatus, 5000);
 
   const disposePrintJob = initPrintJob({ showToast, addLog });
+  const disposeCameraZoom = initCameraZoom({
+    viewport: document.getElementById('cameraViewport'),
+    img: cameraImg,
+    zoomInBtn: document.getElementById('btnCamZoomIn'),
+    zoomOutBtn: document.getElementById('btnCamZoomOut'),
+    resetBtn: document.getElementById('btnCamZoomReset'),
+    levelLabel: document.getElementById('camZoomLevel'),
+  });
 
   return () => {
     disposed = true;
     disposePrintJob();
+    disposeCameraZoom();
     clearInterval(cameraStatusTimer);
     if (cameraRetryTimer) clearTimeout(cameraRetryTimer);
     if (cameraImg) {

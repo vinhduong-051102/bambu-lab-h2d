@@ -379,8 +379,19 @@ export function DashboardMarkup() {
                 </a>
               </div>
             </div>
-            <div className="camera-viewport">
-              <img id="cameraStreamImg" alt="Bambu Camera Feed" className="camera-feed-img" />
+            <div className="camera-viewport" id="cameraViewport" tabIndex={0} title="Cuộn chuột / chụm 2 ngón để zoom, kéo để di chuyển, nhấp đúp để phóng to / thu nhỏ">
+              <img id="cameraStreamImg" alt="Bambu Camera Feed" className="camera-feed-img" draggable={false} />
+              <div className="camera-zoom-controls" aria-label="Zoom camera">
+                <button type="button" id="btnCamZoomOut" className="cam-zoom-btn" title="Thu nhỏ (−)" aria-label="Thu nhỏ">
+                  −
+                </button>
+                <button type="button" id="btnCamZoomReset" className="cam-zoom-btn cam-zoom-level" title="Về 1× (0 / Esc)" aria-label="Đặt lại zoom">
+                  <span id="camZoomLevel">1.0×</span>
+                </button>
+                <button type="button" id="btnCamZoomIn" className="cam-zoom-btn" title="Phóng to (+)" aria-label="Phóng to">
+                  +
+                </button>
+              </div>
               <div className="camera-overlay">
                 <span className="cam-live-indicator" id="camLiveIndicator">
                   ● LIVE CAMERA
