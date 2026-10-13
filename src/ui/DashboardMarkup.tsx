@@ -380,7 +380,7 @@ export function DashboardMarkup() {
               </div>
             </div>
             <div className="camera-viewport">
-              <img id="cameraStreamImg" src="/api/camera/mjpeg" alt="Bambu Camera Feed" className="camera-feed-img" />
+              <img id="cameraStreamImg" alt="Bambu Camera Feed" className="camera-feed-img" />
               <div className="camera-overlay">
                 <span className="cam-live-indicator" id="camLiveIndicator">
                   ● LIVE CAMERA

@@ -81,6 +81,12 @@ export async function startGateway(): Promise<StartedGateway> {
     }
   });
 
+  // Subscribe and request a full status dump on every (re)connect, not just the first one
+  mqttClient.onConnect(async () => {
+    await mqttClient.subscribeReports();
+    await mqttClient.publishRequest(BambuCommandBuilder.buildPushAllPayload());
+  });
+
   // Attempt connection to printer
   try {
     await mqttClient.connect();
@@ -91,9 +97,6 @@ MQTT:
 Subscribed:
   ${BambuTopics.getReportTopic(env.BAMBU_SERIAL)}
 `);
-    await mqttClient.subscribeReports();
-    // Request full status report dump from printer immediately on connection
-    await mqttClient.publishRequest(BambuCommandBuilder.buildPushAllPayload());
   } catch (err) {
     logger.warn({ error: err instanceof Error ? err.message : String(err) }, 'Initial MQTT connection attempt failed. Gateway will auto-retry in background.');
   }
