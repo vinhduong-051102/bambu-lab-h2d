@@ -2,7 +2,7 @@ import type { BambuCameraService } from '../../bambu/BambuCameraService';
 import { handler, json, type HandlerArgs } from '../http';
 
 // Camera routes are only available when the gateway was started with a camera service
-const cameraHandler = (fn: (cameraService: BambuCameraService, args: HandlerArgs) => Response) =>
+const cameraHandler = (fn: (cameraService: BambuCameraService, args: HandlerArgs) => Response | Promise<Response>) =>
   handler((args) => {
     const { cameraService } = args.printerService;
     if (!cameraService) {
@@ -84,7 +84,17 @@ export const getCameraMjpeg = cameraHandler((cameraService, { request }) => {
 });
 
 // 4. POST /api/camera/reconnect
-export const reconnectCamera = cameraHandler((cameraService) => {
-  cameraService.forceReconnect();
-  return json({ success: true, message: 'Đã gửi lệnh thử lại kết nối Camera RTSP FFmpeg' });
+// Waits for the first frame of the new stream so the response says whether the camera is really back
+export const reconnectCamera = cameraHandler(async (cameraService) => {
+  const connected = await cameraService.forceReconnect();
+  const status = cameraService.getStatus();
+  if (!connected) {
+    return json({
+      success: false,
+      error: 'CAMERA_NO_FRAMES',
+      message: `Đã khởi động lại camera nhưng chưa nhận được hình: ${status.lastError ?? 'không rõ lỗi'}`,
+      status,
+    }, 504);
+  }
+  return json({ success: true, message: 'Camera đã kết nối lại và đang nhận hình.', status });
 });

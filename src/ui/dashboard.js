@@ -87,6 +87,7 @@ export function initDashboard() {
 
   let ws = null;
   let wsReconnectTimer = null;
+  let wsHasConnected = false;
 
   // Toast System
   function showToast(message, type = 'info') {
@@ -656,6 +657,20 @@ export function initDashboard() {
   });
 
   // Camera Info & Controls
+  let cameraRetryTimer = null;
+  let cameraRetryDelayMs = 3000;
+
+  function restartCameraStream(resetBackoff = true) {
+    if (!cameraImg || disposed) return;
+    if (cameraRetryTimer) {
+      clearTimeout(cameraRetryTimer);
+      cameraRetryTimer = null;
+    }
+    if (resetBackoff) cameraRetryDelayMs = 3000;
+    // Cache-busting query forces a fresh connection even when the src was already the MJPEG URL
+    cameraImg.src = `/api/camera/mjpeg?t=${Date.now()}`;
+  }
+
   const btnCopyRtsp = document.getElementById('btnCopyRtsp');
   const btnReconnectCam = document.getElementById('btnReconnectCam');
   const camLiveIndicator = document.getElementById('camLiveIndicator');
@@ -741,9 +756,35 @@ export function initDashboard() {
     });
   });
 
-  btnReconnectCam?.addEventListener('click', (e) => {
-    sendCommand('/api/camera/reconnect', 'POST', {}, e.currentTarget);
-    setTimeout(fetchCameraStatus, 2500);
+  btnReconnectCam?.addEventListener('click', async () => {
+    if (btnReconnectCam.disabled) return;
+    const originalHtml = btnReconnectCam.innerHTML;
+    btnReconnectCam.disabled = true;
+    btnReconnectCam.innerHTML = '⏳ Đang kết nối...';
+    addLog('[CAMERA] 🔄 Khởi động lại luồng camera...', 'info');
+
+    try {
+      // The gateway answers once the new stream delivers a frame (or after ~10s without one)
+      const res = await fetch('/api/camera/reconnect', { method: 'POST' });
+      const data = await res.json().catch(() => ({}));
+      if (res.ok && data.success) {
+        showToast(data.message || 'Camera đã kết nối lại.', 'success');
+        addLog(`[CAMERA] ✅ ${data.message || 'Camera đã kết nối lại.'}`, 'success');
+      } else {
+        const msg = data.message || data.error || `HTTP ${res.status}`;
+        showToast(`Camera: ${msg}`, 'warn');
+        addLog(`[CAMERA] ❌ ${msg}`, 'warn');
+      }
+    } catch (err) {
+      showToast(`Lỗi kết nối: ${err.message}`, 'error');
+      addLog(`[CAMERA] ❌ Lỗi kết nối: ${err.message}`, 'warn');
+    } finally {
+      // Re-open the MJPEG stream either way: the browser's old connection may be dead
+      restartCameraStream();
+      fetchCameraStatus();
+      btnReconnectCam.disabled = false;
+      btnReconnectCam.innerHTML = originalHtml;
+    }
   });
 
   // Compact View Toggle (Ẩn/Hiện Log & Hướng Dẫn)
@@ -1018,6 +1059,10 @@ export function initDashboard() {
       wsStatusText.textContent = 'WS Live Data';
       addLog('Đã kết nối WebSocket thành công (Real-time mode).', 'success');
 
+      // A WebSocket reconnect usually means the gateway restarted, which also ended the MJPEG response
+      if (wsHasConnected) restartCameraStream();
+      wsHasConnected = true;
+
       if (wsReconnectTimer) {
         clearTimeout(wsReconnectTimer);
         wsReconnectTimer = null;
@@ -1211,22 +1256,40 @@ export function initDashboard() {
     amsSettingModal?.classList.remove('open');
   });
 
-  // Handle Camera Stream Fallback
+  // Camera stream: on error show the last snapshot and re-open the MJPEG stream with backoff
+  // (a one-off snapshot fallback used to leave the picture frozen for good).
   if (cameraImg) {
     cameraImg.onerror = () => {
-      setTimeout(() => {
-        if (cameraImg) cameraImg.src = `/api/camera/snapshot?t=${Date.now()}`;
-      }, 3000);
+      if (disposed || cameraRetryTimer) return;
+      cameraRetryTimer = setTimeout(() => {
+        cameraRetryTimer = null;
+        restartCameraStream(false);
+      }, cameraRetryDelayMs);
+      cameraRetryDelayMs = Math.min(cameraRetryDelayMs * 2, 30000);
+      if (!cameraImg.src.includes('/api/camera/snapshot')) {
+        cameraImg.src = `/api/camera/snapshot?t=${Date.now()}`;
+      }
+    };
+    cameraImg.onload = () => {
+      if (cameraImg.src.includes('/api/camera/mjpeg')) cameraRetryDelayMs = 3000;
     };
     // Started here rather than in the markup so it loads after the dashboard login (session cookie).
-    cameraImg.src = '/api/camera/mjpeg';
+    restartCameraStream();
   }
+  const cameraStatusTimer = setInterval(fetchCameraStatus, 5000);
 
   const disposePrintJob = initPrintJob({ showToast, addLog });
 
   return () => {
     disposed = true;
     disposePrintJob();
+    clearInterval(cameraStatusTimer);
+    if (cameraRetryTimer) clearTimeout(cameraRetryTimer);
+    if (cameraImg) {
+      cameraImg.onerror = null;
+      cameraImg.onload = null;
+      cameraImg.src = '';
+    }
     if (wsReconnectTimer) {
       clearTimeout(wsReconnectTimer);
       wsReconnectTimer = null;

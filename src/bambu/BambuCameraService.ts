@@ -17,6 +17,11 @@ export interface CameraStatus {
   lastError: string | null;
 }
 
+// A frame older than this means the stream is not live
+const STALE_FRAME_MS = 5000;
+// No frame for this long while FFmpeg runs: treat the process as hung
+const STALL_RESTART_MS = 20000;
+
 export class BambuCameraService extends EventEmitter {
   private host: string;
   private accessCode: string;
@@ -38,6 +43,10 @@ export class BambuCameraService extends EventEmitter {
   // Stream processes & timers
   private ffmpegProcess: ChildProcess | null = null;
   private ffmpegReconnectTimer: NodeJS.Timeout | null = null;
+  private ffmpegStartedAt = 0;
+  private lastFrameMs = 0;
+  private watchdogTimer: NodeJS.Timeout | null = null;
+  private manualReconnect: Promise<boolean> | null = null;
   private activeSource: 'rtsp' | 'tls6000' | 'none' = 'none';
 
   // TLS 6000 Diagnostic state
@@ -65,7 +74,9 @@ export class BambuCameraService extends EventEmitter {
   }
 
   public getStatus(): CameraStatus {
-    const isConnected = (this.activeSource === 'rtsp' && this.ffmpegProcess !== null && this.framesReceived > 0) || this.tlsConnected;
+    // Live = frames are actually flowing. The TLS 6000 socket is a diagnostic only and yields no frames.
+    const isConnected = this.activeSource === 'rtsp' && this.ffmpegProcess !== null
+      && this.lastFrameMs > 0 && Date.now() - this.lastFrameMs < STALE_FRAME_MS;
     return {
       connected: isConnected,
       source: this.activeSource,
@@ -73,7 +84,7 @@ export class BambuCameraService extends EventEmitter {
       lastFrameAt: this.lastFrameAt,
       frameWidth: this.frameWidth,
       frameHeight: this.frameHeight,
-      fps: this.currentFps,
+      fps: isConnected ? this.currentFps : 0,
       bytesReceived: this.bytesReceived,
       framesReceived: this.framesReceived,
       lastError: this.lastError,
@@ -88,19 +99,67 @@ export class BambuCameraService extends EventEmitter {
     logger.info('Starting BambuCameraService pipeline...');
     this.startFFmpegStream();
     this.startTls6000Diagnostic();
+    if (!this.watchdogTimer) {
+      this.watchdogTimer = setInterval(() => this.checkStall(), 5000);
+      this.watchdogTimer.unref?.();
+    }
   }
 
   public stop(): void {
     logger.info('Stopping BambuCameraService pipeline...');
+    if (this.watchdogTimer) {
+      clearInterval(this.watchdogTimer);
+      this.watchdogTimer = null;
+    }
     this.stopFFmpeg();
     this.stopTls6000Diagnostic();
     this.activeSource = 'none';
   }
 
-  public forceReconnect(): void {
+  /**
+   * Restarts the pipeline and resolves once a frame from the new FFmpeg process arrives (true)
+   * or `timeoutMs` passes (false). Concurrent calls share one restart.
+   */
+  public forceReconnect(timeoutMs = 10000): Promise<boolean> {
+    if (this.manualReconnect) return this.manualReconnect;
     logger.info('Manual camera reconnection requested');
-    this.stop();
-    setTimeout(() => this.start(), 500);
+
+    this.manualReconnect = new Promise<boolean>((resolve) => {
+      const finish = (ok: boolean) => {
+        clearTimeout(timer);
+        this.off('frame', onFrame);
+        this.manualReconnect = null;
+        if (!ok) {
+          this.lastError = this.lastError ?? `No camera frame within ${Math.round(timeoutMs / 1000)}s after reconnect`;
+          logger.warn({ lastError: this.lastError }, 'Manual camera reconnection got no frame');
+        }
+        resolve(ok);
+      };
+      const onFrame = () => finish(true);
+      const timer = setTimeout(() => finish(false), timeoutMs);
+
+      this.stop();
+      // Report the new connection, not the counters of the old one
+      this.framesReceived = 0;
+      this.bytesReceived = 0;
+      this.frameTimestamps = [];
+      this.currentFps = 0;
+      this.lastFrameMs = 0;
+      this.lastError = null;
+      this.on('frame', onFrame);
+      setTimeout(() => this.start(), 500);
+    });
+    return this.manualReconnect;
+  }
+
+  /** FFmpeg can stay alive without producing frames (printer dropped the RTSP session): restart it */
+  private checkStall(): void {
+    if (this.activeSource !== 'rtsp' || !this.ffmpegProcess) return;
+    const since = Math.max(this.lastFrameMs, this.ffmpegStartedAt);
+    if (Date.now() - since < STALL_RESTART_MS) return;
+    this.lastError = `No camera frame for ${Math.round(STALL_RESTART_MS / 1000)}s, restarting FFmpeg`;
+    logger.warn(this.lastError);
+    this.restartFFmpeg();
   }
 
   // --- RTSP / RTSPS FFmpeg Pipeline ---
@@ -149,6 +208,7 @@ export class BambuCameraService extends EventEmitter {
     try {
       const process = spawn(ffmpegBinary, args);
       this.ffmpegProcess = process;
+      this.ffmpegStartedAt = Date.now();
       this.activeSource = 'rtsp';
       let buffer = Buffer.alloc(0);
 
@@ -222,7 +282,8 @@ export class BambuCameraService extends EventEmitter {
 
   private handleNewJpegFrame(frame: Buffer): void {
     this.latestFrame = frame;
-    this.lastFrameAt = new Date().toISOString();
+    this.lastFrameMs = Date.now();
+    this.lastFrameAt = new Date(this.lastFrameMs).toISOString();
     this.framesReceived++;
     this.lastError = null;
 
@@ -267,6 +328,9 @@ export class BambuCameraService extends EventEmitter {
       this.ffmpegReconnectTimer = null;
     }
     if (this.ffmpegProcess) {
+      // Detach stdout too: buffered output of the killed process must not count as frames of the new one
+      this.ffmpegProcess.stdout?.removeAllListeners('data');
+      this.ffmpegProcess.stderr?.removeAllListeners('data');
       this.ffmpegProcess.removeAllListeners();
       this.ffmpegProcess.kill('SIGKILL');
       this.ffmpegProcess = null;
