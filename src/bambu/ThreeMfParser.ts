@@ -79,7 +79,7 @@ export function parseThreeMf(data: Uint8Array): ThreeMfInfo {
 
   if (plateIndexes.length === 0) {
     throw new ThreeMfParseError(
-      'The 3MF contains no sliced G-code (Metadata/plate_N.gcode). Slice it in Bambu Studio and export with "Export plate sliced file" (.gcode.3mf).',
+      'File 3MF chưa được slice (không có Metadata/plate_N.gcode). Hãy slice trong Bambu Studio và xuất bằng "Export plate sliced file" (.gcode.3mf), hoặc bật slice tự động trên gateway (SLICER_DOCKER_IMAGE).',
       'NOT_SLICED'
     );
   }

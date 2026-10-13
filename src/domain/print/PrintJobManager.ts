@@ -8,6 +8,7 @@ import { logger } from '../../logger/logger';
 import { BambuFtpClient, type PrinterFileStorage } from '../../bambu/BambuFtpClient';
 import { BambuCommandBuilder } from '../../bambu/commands/BambuCommandBuilder';
 import { parseThreeMf, type ThreeMfInfo } from '../../bambu/ThreeMfParser';
+import { BambuSlicer, TARGET_PRINTER, type SliceProfiles } from '../../bambu/BambuSlicer';
 import type { PrinterService } from '../PrinterService';
 import {
   buildAmsMappingPayload,
@@ -36,7 +37,18 @@ export interface StagedPrintFile {
   size: number;
   localPath: string;
   info: ThreeMfInfo;
+  /** Set when the upload was an unsliced project that the gateway sliced itself */
+  slicedByGateway: GatewaySlice | null;
   createdAt: string;
+}
+
+export interface GatewaySlice {
+  sourceFileName: string;
+  sourcePrinter: string | null;
+  printer: string;
+  nozzle: string;
+  profiles: SliceProfiles | null;
+  durationMs: number;
 }
 
 export interface PrintJobOptions {
@@ -117,6 +129,7 @@ export class PrintJobManager extends EventEmitter {
   public ackTimeoutMs = 90_000;
   public startTimeoutMs = 10 * 60_000;
   public stagingDir = path.join(os.tmpdir(), 'bambu-h2d-gateway', 'staging');
+  public slicer = new BambuSlicer();
 
   // Shared through globalThis: the custom server feeds MQTT reports in, Route Handlers start jobs
   public static getInstance(): PrintJobManager {
@@ -140,24 +153,58 @@ export class PrintJobManager extends EventEmitter {
 
   // ---------- Staging ----------
 
-  public async stage(input: { fileName: string; data: Uint8Array; source: 'local' | 'printer'; remotePath?: string }): Promise<StagedPrintFile> {
+  public async stage(input: {
+    fileName: string;
+    data: Uint8Array;
+    source: 'local' | 'printer';
+    remotePath?: string;
+    /** Installed nozzle diameter, used when an unsliced project has to be sliced */
+    nozzle?: string | null;
+  }): Promise<StagedPrintFile> {
     await this.expireStaged();
 
-    const info = parseThreeMf(input.data);
+    let { fileName, data, remotePath } = input;
+    let info: ThreeMfInfo;
+    let slicedByGateway: GatewaySlice | null = null;
+    try {
+      info = parseThreeMf(data);
+    } catch (err) {
+      // Matched by name/code (see commandErrorResponse for why not instanceof)
+      const notSliced = err instanceof Error && err.name === 'ThreeMfParseError' && (err as { code?: string }).code === 'NOT_SLICED';
+      if (!notSliced || !this.slicer.isEnabled()) throw err;
+
+      const sliced = await this.slicer.slice(data, { nozzle: input.nozzle });
+      data = sliced.data;
+      info = parseThreeMf(data);
+      for (const plate of info.plates) plate.warnings = [...new Set([...plate.warnings, ...sliced.warnings])];
+      slicedByGateway = {
+        sourceFileName: input.fileName,
+        sourcePrinter: sliced.sourcePrinter,
+        printer: TARGET_PRINTER,
+        nozzle: sliced.nozzle,
+        profiles: sliced.profiles,
+        durationMs: sliced.durationMs,
+      };
+      // The sliced output is a new file: upload it instead of printing the unsliced original on the printer
+      fileName = toSlicedFileName(input.fileName);
+      remotePath = undefined;
+    }
+
     const id = randomUUID();
     await fs.mkdir(this.stagingDir, { recursive: true });
     const localPath = path.join(this.stagingDir, `${id}.3mf`);
-    await fs.writeFile(localPath, input.data);
+    await fs.writeFile(localPath, data);
 
     const staged: StagedPrintFile = {
       id,
-      fileName: input.fileName,
-      remoteName: toRemoteName(input.fileName),
-      remotePath: input.remotePath ?? null,
+      fileName,
+      remoteName: toRemoteName(fileName),
+      remotePath: remotePath ?? null,
       source: input.source,
-      size: input.data.byteLength,
+      size: data.byteLength,
       localPath,
       info,
+      slicedByGateway,
       createdAt: new Date().toISOString(),
     };
     this.staged.set(id, staged);
@@ -191,6 +238,7 @@ export class PrintJobManager extends EventEmitter {
       printerModel: staged.info.printerModel,
       nozzleDiameters: staged.info.nozzleDiameters,
       slicerVersion: staged.info.slicerVersion,
+      slicedByGateway: staged.slicedByGateway,
       plates: staged.info.plates.map((plate) => ({
         index: plate.index,
         name: plate.name,
@@ -520,6 +568,11 @@ export class PrintJobManager extends EventEmitter {
 }
 
 /** FTPS-safe file name: ASCII only, no spaces, keeps the .gcode.3mf / .3mf suffix */
+/** snoopy.3mf → snoopy.gcode.3mf */
+export function toSlicedFileName(fileName: string): string {
+  return fileName.replace(/(\.gcode)?\.3mf$/i, '') + '.gcode.3mf';
+}
+
 export function toRemoteName(fileName: string): string {
   const base = path.basename(fileName.replace(/\\/g, '/'));
   const ascii = base

@@ -94,13 +94,14 @@ export function initPrintJob({ showToast, addLog }) {
     prepareProgress.hidden = percent === null;
     if (percent !== null) {
       prepareBar.style.width = `${percent}%`;
-      prepareText.textContent = percent >= 100 ? 'Đang phân tích…' : `${percent}%`;
+      // An unsliced project is sliced by the gateway during this step, which can take a few minutes
+      prepareText.textContent = percent >= 100 ? 'Đang phân tích / slice (file chưa slice có thể mất vài phút)…' : `${percent}%`;
     }
   }
 
   function uploadToGateway(file) {
     if (!/\.3mf$/i.test(file.name)) {
-      showToast('Chỉ hỗ trợ file .3mf đã slice (.gcode.3mf).', 'error');
+      showToast('Chỉ hỗ trợ file .3mf (project hoặc đã slice .gcode.3mf).', 'error');
       return;
     }
     fileLabel.textContent = file.name;
@@ -123,7 +124,13 @@ export function initPrintJob({ showToast, addLog }) {
       }
       if (xhr.status === 201 && data?.staged) {
         showStaged(data.staged);
-        addLog(`Đã phân tích file ${file.name}: ${data.staged.plates.length} plate.`, 'success');
+        const sliced = data.staged.slicedByGateway;
+        addLog(
+          sliced
+            ? `Gateway đã slice ${file.name} cho ${sliced.printer} trong ${Math.round(sliced.durationMs / 1000)}s: ${data.staged.plates.length} plate.`
+            : `Đã phân tích file ${file.name}: ${data.staged.plates.length} plate.`,
+          'success'
+        );
       } else {
         const message = data?.message || `Lỗi HTTP ${xhr.status}`;
         showToast(message, 'error');
@@ -226,6 +233,7 @@ export function initPrintJob({ showToast, addLog }) {
       [data.printerModel, data.nozzleDiameters && `Nozzle ${data.nozzleDiameters}`, data.slicerVersion && `Slicer ${data.slicerVersion}`]
         .filter(Boolean)
         .join(' · '),
+      data.slicedByGateway && slicedSummary(data.slicedByGateway),
     ].filter(Boolean);
     fileSummary.replaceChildren(...details.map((line) => el('div', { text: line })));
 
@@ -233,6 +241,14 @@ export function initPrintJob({ showToast, addLog }) {
       ...data.plates.map((p) => el('option', { value: String(p.index), text: `Plate ${p.index}${p.name ? ` – ${p.name}` : ''}` }))
     );
     renderPlate();
+  }
+
+  function slicedSummary(sliced) {
+    const seconds = Math.round(sliced.durationMs / 1000);
+    if (!sliced.profiles) {
+      return `🔧 Gateway đã slice từ ${sliced.sourceFileName} (${seconds}s) bằng cấu hình có sẵn trong project.`;
+    }
+    return `🔧 Gateway đã slice từ ${sliced.sourceFileName} (${seconds}s): ${sliced.profiles.process} · ${sliced.profiles.filaments.join(', ')}`;
   }
 
   function currentPlate() {
@@ -294,6 +310,12 @@ export function initPrintJob({ showToast, addLog }) {
     if (!plate) return;
     const mapping = collectMapping();
     const warnings = [...plate.warnings];
+    const sliced = staged.slicedByGateway;
+    if (sliced?.profiles) {
+      warnings.push(
+        `Project được làm cho ${sliced.sourcePrinter ?? 'máy khác'}: gateway đã thay bằng profile mặc định của ${sliced.printer} (${sliced.profiles.machine}). Tùy chỉnh riêng của project (support, infill...) không được giữ — nếu cần, hãy slice trong Bambu Studio.`
+      );
+    }
 
     for (const f of plate.filaments) {
       const target = mapping[f.index];

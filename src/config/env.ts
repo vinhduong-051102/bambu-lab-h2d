@@ -45,6 +45,9 @@ const envSchema = z.object({
     .optional()
     .transform((val) => val === 'true' || val === '1'),
   COMMAND_TIMEOUT_MS: z.coerce.number().default(10000),
+  // Docker image built from slicer/ (headless Bambu Studio). When set, unsliced .3mf projects are sliced for the H2D.
+  SLICER_DOCKER_IMAGE: z.string().optional(),
+  SLICER_TIMEOUT_MS: z.coerce.number().default(10 * 60_000),
 });
 
 const _env = envSchema.safeParse(process.env);
