@@ -386,8 +386,7 @@ export class PrintJobManager extends EventEmitter {
           }
         });
       } catch (err) {
-        const reason = err instanceof Error ? err.message : String(err);
-        this.update(job, 'FAILED', `Upload FTPS thất bại: ${reason}. Kiểm tra cổng FTPS ${env.BAMBU_FTP_PORT}, Access Code và chế độ LAN của máy in.`);
+        this.update(job, 'FAILED', `Upload FTPS thất bại: ${describeUploadError(err)}`);
         return;
       }
       job.upload = { bytes: staged.size, total: staged.size, percent: 100 };
@@ -568,6 +567,25 @@ export class PrintJobManager extends EventEmitter {
 }
 
 /** FTPS-safe file name: ASCII only, no spaces, keeps the .gcode.3mf / .3mf suffix */
+/**
+ * Points at the likely cause. FTP replies 55x come after a successful login, so they are storage
+ * problems on the printer (no/unmounted card, full, read-only), not connection or Access Code issues.
+ */
+export function describeUploadError(err: unknown): string {
+  const reason = (err instanceof Error ? err.message : String(err)).replace(/\.+$/, '');
+  const code = typeof (err as { code?: unknown })?.code === 'number' ? (err as { code: number }).code : null;
+  if (code === 552) {
+    return `${reason}. Bộ nhớ máy in đã đầy: xóa bớt file (danh sách file trên dashboard) rồi thử lại.`;
+  }
+  if (code === 550 || code === 553) {
+    return `${reason}. Máy in đã nhận kết nối và Access Code nhưng không cho ghi file: kiểm tra thẻ nhớ đã lắp và máy in nhận được, còn trống, không bị khóa ghi (thử format thẻ trên màn hình máy in).`;
+  }
+  if (code === 530) {
+    return `${reason}. Sai Access Code (BAMBU_ACCESS_CODE) hoặc máy in chưa bật chế độ LAN.`;
+  }
+  return `${reason}. Kiểm tra cổng FTPS ${env.BAMBU_FTP_PORT}, Access Code và chế độ LAN của máy in.`;
+}
+
 /** snoopy.3mf → snoopy.gcode.3mf */
 export function toSlicedFileName(fileName: string): string {
   return fileName.replace(/(\.gcode)?\.3mf$/i, '') + '.gcode.3mf';

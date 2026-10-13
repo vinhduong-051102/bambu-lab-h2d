@@ -8,10 +8,11 @@ import { CapabilityRegistry } from '../src/domain/capabilities/CapabilityRegistr
 import { PrinterCommandService } from '../src/domain/commands/PrinterCommandService';
 import { PrinterService } from '../src/domain/PrinterService';
 import { normalizePrinterState } from '../src/domain/normalizePrinterState';
-import { PrintJobManager, toRemoteName } from '../src/domain/print/PrintJobManager';
+import { describeUploadError, PrintJobManager, toRemoteName } from '../src/domain/print/PrintJobManager';
 import { buildAmsMappingPayload, listAvailableTrays, suggestMapping } from '../src/domain/print/amsMapping';
 import { parseThreeMf } from '../src/bambu/ThreeMfParser';
 import type { PrinterFileStorage } from '../src/bambu/BambuFtpClient';
+import { FTPError } from 'basic-ftp';
 import { BambuSlicer, type SlicerRunRequest } from '../src/bambu/BambuSlicer';
 import { env } from '../src/config/env';
 import { createTestApp, type TestApp } from './helpers/testApp';
@@ -351,6 +352,17 @@ describe('Print job API (/api/print/*)', () => {
     expect(manager.getJob(jobId)?.status).toBe('FAILED');
     expect(manager.getJob(jobId)?.message).toContain('ECONNREFUSED');
     expect(mqtt.publishRequest).not.toHaveBeenCalled();
+  });
+
+  it('blames printer storage, not the connection, for FTP 55x replies after login', () => {
+    const ftpError = (code: number, message: string) => new FTPError({ code, message } as any);
+
+    const denied = describeUploadError(ftpError(553, '553 Could not create file.'));
+    expect(denied).toContain('thẻ nhớ');
+    expect(denied).not.toContain('Kiểm tra cổng FTPS');
+    expect(describeUploadError(ftpError(552, '552 Disk full'))).toContain('đầy');
+    expect(describeUploadError(ftpError(530, '530 Login incorrect'))).toContain('Access Code');
+    expect(describeUploadError(new Error('connect ECONNREFUSED 192.168.1.100:990'))).toContain('Kiểm tra cổng FTPS');
   });
 
   it('enforces safety mode, connection, developer mode, idle state, single job and a valid mapping', async () => {
