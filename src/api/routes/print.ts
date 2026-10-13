@@ -2,6 +2,7 @@ import { promises as fs } from 'fs';
 import os from 'os';
 import path from 'path';
 import { z } from 'zod';
+import type { PrinterService } from '../../domain/PrinterService';
 import { PrintJobManager } from '../../domain/print/PrintJobManager';
 import { commandErrorResponse, handler, json, readJsonBody } from '../http';
 
@@ -29,6 +30,12 @@ const prepareRemoteSchema = z.object({
     .regex(/^\/?[^\0]*\.3mf$/i, 'Only .3mf project files can be printed')
     .refine((p) => !p.split('/').includes('..'), 'Invalid path'),
 });
+
+/** Installed nozzle diameter from telemetry ("0.4"), used to pick presets when slicing on the gateway */
+const installedNozzle = (printerService: PrinterService): string | null => {
+  const diameter = printerService.stateStore.getState().temperatures.nozzles.find((n) => n.diameter)?.diameter;
+  return diameter ? diameter.toFixed(1) : null;
+};
 
 const invalidPayload = (message: string, issues: z.ZodIssue[]) =>
   json({ success: false, error: 'INVALID_PAYLOAD', message, details: issues }, 400);
@@ -107,7 +114,7 @@ export const preparePrint = handler(async ({ printerService, request }) => {
       {
         success: false,
         error: 'UNSUPPORTED_FILE_TYPE',
-        message: 'Chỉ hỗ trợ file .3mf đã slice (Bambu Studio: "Export plate sliced file" → .gcode.3mf).',
+        message: 'Chỉ hỗ trợ file .3mf (project hoặc đã slice .gcode.3mf).',
       },
       415
     );
@@ -119,6 +126,7 @@ export const preparePrint = handler(async ({ printerService, request }) => {
       fileName: file.name,
       data: new Uint8Array(await file.arrayBuffer()),
       source: 'local',
+      nozzle: installedNozzle(printerService),
     });
     return json({ success: true, staged: manager.describeStaged(staged, printerService) }, 201);
   } catch (err) {
@@ -150,6 +158,7 @@ export const prepareRemotePrint = handler(async ({ printerService, request }) =>
       data: new Uint8Array(await fs.readFile(tempFile)),
       source: 'printer',
       remotePath,
+      nozzle: installedNozzle(printerService),
     });
     return json({ success: true, staged: manager.describeStaged(staged, printerService) }, 201);
   } catch (err) {

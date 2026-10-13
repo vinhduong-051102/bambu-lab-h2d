@@ -93,6 +93,10 @@ BAMBU_DEBUG_PROTOCOL=false
 
 # Optional Gateway API Key (Bearer Token)
 GATEWAY_API_KEY=
+
+# Optional: slice unsliced .3mf projects for the H2D (see docs/slicing.md)
+SLICER_DOCKER_IMAGE=
+SLICER_TIMEOUT_MS=600000
 ```
 
 ---
@@ -142,6 +146,7 @@ Detailed documentation is available in `docs/`:
 - [`docs/capabilities.md`](file:///home/vinhdq/bambu-h2d-gateway/docs/capabilities.md) — Capability Registry System
 - [`docs/api.md`](file:///home/vinhdq/bambu-h2d-gateway/docs/api.md) — Full REST API & WebSocket Reference
 - [`docs/development.md`](file:///home/vinhdq/bambu-h2d-gateway/docs/development.md) — Developer & Testing Guide
+- [`docs/slicing.md`](docs/slicing.md) — Slicing unsliced .3mf projects on the gateway (headless Bambu Studio)
 
 ---
 

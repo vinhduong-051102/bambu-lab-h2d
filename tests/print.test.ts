@@ -12,6 +12,7 @@ import { PrintJobManager, toRemoteName } from '../src/domain/print/PrintJobManag
 import { buildAmsMappingPayload, listAvailableTrays, suggestMapping } from '../src/domain/print/amsMapping';
 import { parseThreeMf } from '../src/bambu/ThreeMfParser';
 import type { PrinterFileStorage } from '../src/bambu/BambuFtpClient';
+import { BambuSlicer, type SlicerRunRequest } from '../src/bambu/BambuSlicer';
 import { env } from '../src/config/env';
 import { createTestApp, type TestApp } from './helpers/testApp';
 
@@ -191,6 +192,7 @@ describe('Print job API (/api/print/*)', () => {
   let storage: MockStorage;
   let manager: PrintJobManager;
   const originalRealPrinter = env.BAMBU_REAL_PRINTER;
+  const originalSlicerImage = env.SLICER_DOCKER_IMAGE;
 
   const prepare = async () => {
     const form = new FormData();
@@ -228,12 +230,15 @@ describe('Print job API (/api/print/*)', () => {
     stateStore.setOnline(true);
     report(amsReport.print);
     env.BAMBU_REAL_PRINTER = true;
+    // Independent of the developer's .env: slicing is opted into by the nested suite below
+    env.SLICER_DOCKER_IMAGE = undefined;
 
     app = createTestApp(printerService);
   });
 
   afterEach(async () => {
     env.BAMBU_REAL_PRINTER = originalRealPrinter;
+    env.SLICER_DOCKER_IMAGE = originalSlicerImage;
     manager.reset();
     stateStore.destroy();
     app.close();
@@ -401,5 +406,93 @@ describe('Print job API (/api/print/*)', () => {
     const del = await app.inject({ method: 'DELETE', url: `/api/files/${encodeURIComponent('/Bracket.gcode.3mf')}` });
     expect(del.statusCode).toBe(200);
     expect(storage.removed).toEqual(['/Bracket.gcode.3mf']);
+  });
+
+  describe('gateway-side slicing of unsliced projects', () => {
+    let runs: SlicerRunRequest[];
+    let outcome: Record<string, unknown>;
+
+    // Stands in for the docker container: writes a sliced 3MF and prints slice.py's outcome line
+    const fakeRunner = async (req: SlicerRunRequest) => {
+      runs.push(req);
+      if (outcome.ok) await fs.writeFile(path.join(req.workDir, req.outputName), buildSliced3mf());
+      return { exitCode: outcome.ok ? 0 : 1, stdout: `Bambu Studio noise\n${JSON.stringify(outcome)}\n`, stderr: '', timedOut: false };
+    };
+
+    const prepareUnsliced = () => {
+      const form = new FormData();
+      form.append('file', new File([buildSliced3mf({ sliced: false })], 'snoopy.3mf'));
+      return app.inject({ method: 'POST', url: '/api/print/prepare', form });
+    };
+
+    beforeEach(async () => {
+      runs = [];
+      outcome = {
+        ok: true,
+        sourcePrinter: 'Bambu Lab A1',
+        nozzle: '0.4',
+        profiles: { machine: 'Bambu Lab H2D 0.4 nozzle', process: '0.20mm Standard @BBL H2D', filaments: ['Generic PLA @BBL H2D'] },
+        warnings: ['It seems object snoopy.obj has floating regions.'],
+      };
+      env.SLICER_DOCKER_IMAGE = 'bambu-h2d-slicer:test';
+      manager.slicer = new BambuSlicer(fakeRunner, path.join(manager.stagingDir, 'slicing'));
+    });
+
+    afterEach(() => {
+      manager.slicer = new BambuSlicer();
+    });
+
+    it('slices an unsliced project, stages the result and uploads it as .gcode.3mf', async () => {
+      const res = await prepareUnsliced();
+      expect(res.statusCode).toBe(201);
+      const staged = res.json().staged;
+
+      expect(runs).toHaveLength(1);
+      expect(staged.fileName).toBe('snoopy.gcode.3mf');
+      expect(staged.remoteName).toBe('/snoopy.gcode.3mf');
+      expect(staged.slicedByGateway).toMatchObject({
+        sourceFileName: 'snoopy.3mf',
+        sourcePrinter: 'Bambu Lab A1',
+        printer: 'Bambu Lab H2D',
+        profiles: { process: '0.20mm Standard @BBL H2D' },
+      });
+      expect(staged.plates[0].warnings).toContain('It seems object snoopy.obj has floating regions.');
+      // The per-job work dir is removed once the result is staged
+      expect(await fs.readdir(path.join(manager.stagingDir, 'slicing'))).toEqual([]);
+
+      expect((await start(staged.id)).statusCode).toBe(202);
+      await vi.waitFor(() => expect(storage.uploads[0]?.remotePath).toBe('/snoopy.gcode.3mf'));
+    });
+
+    it('passes the installed nozzle diameter from telemetry to the slicer', async () => {
+      stateStore.updateState(normalizePrinterState(stateStore.getState(), {
+        print: { device: { nozzle: { info: [{ id: 0, diameter: 0.6 }, { id: 1, diameter: 0.6 }] } } },
+      }));
+      await prepareUnsliced();
+      expect(runs[0].nozzle).toBe('0.6');
+    });
+
+    it('uploads the sliced result instead of reprinting an unsliced file stored on the printer', async () => {
+      storage.remoteContent = buildSliced3mf({ sliced: false });
+      const res = await app.inject({ method: 'POST', url: '/api/print/prepare-remote', payload: { path: '/snoopy.3mf' } });
+      expect(res.statusCode).toBe(201);
+      const staged = res.json().staged;
+      expect(staged.remoteName).toBe('/snoopy.gcode.3mf');
+
+      expect((await start(staged.id)).statusCode).toBe(202);
+      await vi.waitFor(() => expect(storage.uploads[0]?.remotePath).toBe('/snoopy.gcode.3mf'));
+    });
+
+    it('reports slicer failures as JSON errors', async () => {
+      outcome = { ok: false, error: 'SLICE_FAILED', message: 'Bambu Studio slice thất bại: Nothing to be sliced' };
+      const res = await prepareUnsliced();
+      expect(res.statusCode).toBe(500);
+      expect(res.json()).toMatchObject({ success: false, error: 'SLICE_FAILED', message: expect.stringContaining('Nothing to be sliced') });
+    });
+
+    it('never runs the slicer for files that are already sliced', async () => {
+      await prepare();
+      expect(runs).toHaveLength(0);
+    });
   });
 });
