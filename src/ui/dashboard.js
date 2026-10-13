@@ -496,7 +496,8 @@ export function initDashboard() {
         showToast(data.message || 'Lệnh đã được gửi thành công!', 'success');
         addLog(`[HTTP ${res.status}] ✅ Gateway nhận lệnh thành công: ${data.message || 'SUCCESS'} ${data.commandId ? `(Command ID: ${data.commandId})` : ''}`, 'success');
 
-        if (data.commandId) {
+        // Only AMS commands have a lifecycle endpoint (/api/ams/command/:id); other commands complete on send.
+        if (data.commandId && url.startsWith('/api/ams/')) {
           let loadingLabel = '⏳ Đang xử lý...';
           let successText = '✅ Hoàn tất';
           if (url.includes('/unload')) {
@@ -1170,6 +1171,8 @@ export function initDashboard() {
         if (cameraImg) cameraImg.src = `/api/camera/snapshot?t=${Date.now()}`;
       }, 3000);
     };
+    // Started here rather than in the markup so it loads after the dashboard login (session cookie).
+    cameraImg.src = '/api/camera/mjpeg';
   }
 
   const disposePrintJob = initPrintJob({ showToast, addLog });

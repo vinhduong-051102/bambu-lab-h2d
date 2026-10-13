@@ -61,5 +61,6 @@ Defines and tracks printer features by category (`status`, `print`, `temperature
 
 ### 2.5 Security & Authentication (`src/server/auth.ts`)
 - Supports `GATEWAY_API_KEY` authentication via `Authorization: Bearer <GATEWAY_API_KEY>`.
+- The dashboard can't attach headers to `<img>` streams or WebSockets, so it exchanges the key at `POST /api/auth/login` for an HttpOnly, `SameSite=Strict` session cookie (an HMAC of the key, never the key itself). `/api/auth/*` is exempt from the check.
 - In local development mode (when `GATEWAY_API_KEY` is empty), open local access is permitted.
 - **Never exposes Bambu Access Code over REST API or WebSockets.**

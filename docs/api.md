@@ -9,6 +9,16 @@ Authorization: Bearer <GATEWAY_API_KEY>
 
 If `GATEWAY_API_KEY` is omitted, running in local development mode (no auth header required).
 
+The dashboard authenticates with a session cookie instead, since browsers can't send headers for `<img>` streams or WebSockets. These routes are public:
+
+| Method | Path | Body | Description |
+|---|---|---|---|
+| GET | `/api/auth/session` | – | `{ "authRequired": bool, "authenticated": bool }` |
+| POST | `/api/auth/login` | `{ "key": "<GATEWAY_API_KEY>" }` | Sets the HttpOnly `gateway_session` cookie; 401 for a wrong key |
+| POST | `/api/auth/logout` | – | Clears the cookie |
+
+A valid `gateway_session` cookie is accepted anywhere the Bearer header is (all `/api/*` routes and `/ws`). Rotating `GATEWAY_API_KEY` invalidates existing sessions.
+
 ---
 
 ## 2. Capabilities & Health

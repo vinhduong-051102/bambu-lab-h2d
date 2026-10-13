@@ -1,9 +1,21 @@
 import { AMSTray } from '../../domain/PrinterState';
 import { BambuCommandBuilder } from '../../bambu/commands/BambuCommandBuilder';
 import { AmsCommandTracker } from '../../domain/commands/AmsCommandTracker';
-import { handler, json, readJsonBody } from '../http';
+import { env } from '../../config/env';
+import { handler, HttpError, json, readJsonBody } from '../http';
 
 const tracker = () => AmsCommandTracker.getInstance();
+
+// AMS commands publish straight to MQTT, so they need the same safety gate as PrinterCommandService.
+function assertRealPrinterMode(): void {
+  if (!env.BAMBU_REAL_PRINTER) {
+    throw new HttpError(403, {
+      success: false,
+      error: 'TEST_MODE_RESTRICTED',
+      message: 'Command execution blocked: BAMBU_REAL_PRINTER is set to false. Set BAMBU_REAL_PRINTER=true in .env to allow sending commands to real printer.',
+    });
+  }
+}
 
 // 1. GET /api/ams - Fetch current AMS state & active tray
 export const getAms = handler(({ printerService }) => {
@@ -61,6 +73,8 @@ export const getAms = handler(({ printerService }) => {
 
 // 2. POST /api/ams/load - Load specified tray index (0..3) with Idempotency Guard (Req 15)
 export const loadAms = handler(async ({ printerService, request }) => {
+  assertRealPrinterMode();
+
   // Idempotency Check: Reject concurrent commands if another AMS action is in progress
   const pendingCmd = tracker().getActiveCommand();
   if (pendingCmd) {
@@ -116,6 +130,8 @@ export const loadAms = handler(async ({ printerService, request }) => {
 
 // 3. POST /api/ams/unload - Unload active filament (target 255)
 export const unloadAms = handler(async ({ printerService }) => {
+  assertRealPrinterMode();
+
   const pendingCmd = tracker().getActiveCommand();
   if (pendingCmd) {
     return json({
@@ -163,6 +179,8 @@ export const unloadAms = handler(async ({ printerService }) => {
 
 // 4. POST /api/ams/setting - Update filament color, type & temp limits for a tray
 export const updateAmsSetting = handler(async ({ printerService, request }) => {
+  assertRealPrinterMode();
+
   const body = ((await readJsonBody(request)) || {}) as {
     amsId?: number;
     trayId?: number;
@@ -220,6 +238,8 @@ export const updateAmsSetting = handler(async ({ printerService, request }) => {
 
 // 5. POST /api/ams/retry - Retry AMS operation on error/tangle
 export const retryAms = handler(async ({ printerService }) => {
+  assertRealPrinterMode();
+
   const payload = BambuCommandBuilder.buildAmsControlPayload('retry');
   const record = tracker().createCommand({
     type: 'retry',
@@ -251,6 +271,8 @@ export const retryAms = handler(async ({ printerService }) => {
 
 // 6. GET /api/ams/:amsId/tray/:trayId/rfid - Fetch RFID info for specified slot (Req 11)
 export const getAmsTrayRfid = handler<{ amsId: string; trayId: string }>(async ({ printerService, params }) => {
+  assertRealPrinterMode();
+
   const { amsId: amsIdStr, trayId: trayIdStr } = params;
   const amsId = parseInt(amsIdStr, 10) || 0;
   const slotId = parseInt(trayIdStr, 10) || 0;

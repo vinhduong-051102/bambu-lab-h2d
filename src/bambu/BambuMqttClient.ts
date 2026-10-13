@@ -4,11 +4,13 @@ import { BambuClientOptions } from './types';
 import { BambuTopics } from './BambuTopics';
 
 export type OnMessageCallback = (topic: string, message: Buffer) => void;
+export type OnConnectCallback = () => void | Promise<void>;
 
 export class BambuMqttClient {
   private client: MqttClient | null = null;
   private options: BambuClientOptions;
   private messageCallbacks: Set<OnMessageCallback> = new Set();
+  private connectCallbacks: Set<OnConnectCallback> = new Set();
   private connected: boolean = false;
 
   constructor(options: BambuClientOptions) {
@@ -42,6 +44,14 @@ export class BambuMqttClient {
       this.client.on('connect', () => {
         this.connected = true;
         logger.info({ host, port }, 'MQTT connected');
+        // Fires on the initial connect and on every auto-reconnect (clean session drops subscriptions)
+        for (const callback of this.connectCallbacks) {
+          Promise.resolve()
+            .then(callback)
+            .catch((err) => {
+              logger.error({ error: err instanceof Error ? err.message : String(err) }, 'Error in MQTT connect callback');
+            });
+        }
         if (!resolved) {
           resolved = true;
           resolve();
@@ -99,6 +109,10 @@ export class BambuMqttClient {
 
   public onMessage(callback: OnMessageCallback): void {
     this.messageCallbacks.add(callback);
+  }
+
+  public onConnect(callback: OnConnectCallback): void {
+    this.connectCallbacks.add(callback);
   }
 
   public async publishRequest(payload: Record<string, unknown>): Promise<boolean> {

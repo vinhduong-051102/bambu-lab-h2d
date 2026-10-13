@@ -6,6 +6,7 @@ import { PrinterService } from '../src/domain/PrinterService';
 import { normalizePrinterState } from '../src/domain/normalizePrinterState';
 import { createTestApp, type TestApp } from './helpers/testApp';
 import { AmsCommandTracker } from '../src/domain/commands/AmsCommandTracker';
+import { env } from '../src/config/env';
 
 describe('AMS Control & Telemetry Protocol Test Suite (18 Mandatory Test Cases)', () => {
   let app: TestApp;
@@ -15,6 +16,7 @@ describe('AMS Control & Telemetry Protocol Test Suite (18 Mandatory Test Cases)'
   let printerService: PrinterService;
   let mockMqttClient: any;
   let tracker: AmsCommandTracker;
+  const originalRealPrinter = env.BAMBU_REAL_PRINTER;
 
   const rawH2dTelemetry = {
     print: {
@@ -89,6 +91,7 @@ describe('AMS Control & Telemetry Protocol Test Suite (18 Mandatory Test Cases)'
   };
 
   beforeEach(async () => {
+    env.BAMBU_REAL_PRINTER = true;
     stateStore = new PrinterStateStore('TEST_SERIAL_AMS');
     capabilityRegistry = new CapabilityRegistry();
     mockMqttClient = {
@@ -111,8 +114,32 @@ describe('AMS Control & Telemetry Protocol Test Suite (18 Mandatory Test Cases)'
   });
 
   afterEach(async () => {
+    env.BAMBU_REAL_PRINTER = originalRealPrinter;
     stateStore.destroy();
     app.close();
+  });
+
+  it('Should block every AMS write command with 403 when BAMBU_REAL_PRINTER is false', async () => {
+    env.BAMBU_REAL_PRINTER = false;
+    let published = 0;
+    mockMqttClient.publishRequest = async () => {
+      published++;
+      return true;
+    };
+
+    const requests = [
+      { method: 'POST', url: '/api/ams/load' },
+      { method: 'POST', url: '/api/ams/unload' },
+      { method: 'POST', url: '/api/ams/setting' },
+      { method: 'POST', url: '/api/ams/retry' },
+      { method: 'GET', url: '/api/ams/0/tray/0/rfid' },
+    ] as const;
+    for (const { method, url } of requests) {
+      const res = await app.inject({ method, url, ...(method === 'POST' && { payload: { trayId: 0 } }) });
+      expect(res.statusCode, url).toBe(403);
+      expect(res.json().error, url).toBe('TEST_MODE_RESTRICTED');
+    }
+    expect(published).toBe(0);
   });
 
   // Test 1: Load Tray 0
