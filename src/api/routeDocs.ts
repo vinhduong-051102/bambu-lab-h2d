@@ -69,6 +69,7 @@ export const GATEWAY_ROUTES: RouteDoc[] = [
   { method: 'POST', path: '/api/print/prepare', category: 'LAN Printing', description: 'Tải file .gcode.3mf (multipart, field "file") lên gateway & phân tích plate/filament', body: 'multipart/form-data: file=@part.gcode.3mf' },
   { method: 'POST', path: '/api/print/prepare-remote', category: 'LAN Printing', description: 'Phân tích file 3MF có sẵn trên máy in', body: '{"path": "/part.gcode.3mf"}' },
   { method: 'GET', path: '/api/print/staged/:id', category: 'LAN Printing', description: 'Thông tin file 3MF đã chuẩn bị (plate, filament)' },
+  { method: 'GET', path: '/api/print/staged/:id/file', category: 'LAN Printing', description: 'Tải file .gcode.3mf đã chuẩn bị (dùng cho xem 3D đường in)' },
   { method: 'DELETE', path: '/api/print/staged/:id', category: 'LAN Printing', description: 'Hủy file 3MF đã chuẩn bị' },
   { method: 'POST', path: '/api/print/start', category: 'LAN Printing', description: 'Upload FTPS + gửi print.project_file, trả về print job', body: '{"stagedId": "...", "plateIndex": 1, "amsMapping": {"0": 0}}' },
   { method: 'GET', path: '/api/print/jobs', category: 'LAN Printing', description: 'Danh sách lệnh in & trạng thái xác nhận từ máy in', exampleUrl: '/api/print/jobs' },

@@ -1986,3 +1986,108 @@ button.is-loading::after,
     grid-template-columns: 1fr;
   }
 }
+
+/* G-code 3D toolpath preview */
+.btn-print-preview {
+  align-self: flex-start;
+}
+
+.gcode-preview-modal {
+  max-width: 1100px;
+  width: 94%;
+  max-height: 92vh;
+  gap: 12px;
+}
+
+.gcode-preview-viewport {
+  position: relative;
+  height: min(62vh, 640px);
+  min-height: 260px;
+  border-radius: var(--radius-md);
+  overflow: hidden;
+  background: #0b0f17;
+  border: 1px solid var(--card-border);
+}
+
+.gcode-preview-viewport canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+  touch-action: none;
+}
+
+.gcode-preview-status {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+  text-align: center;
+  color: var(--text-muted);
+  font-size: 0.9rem;
+}
+
+.gcode-preview-controls {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.gcode-preview-layer-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.gcode-preview-layer {
+  font-family: var(--font-mono);
+  font-size: 0.85rem;
+  color: var(--text-main);
+}
+
+.gcode-preview-slider {
+  width: 100%;
+  accent-color: var(--primary-accent);
+}
+
+.gcode-preview-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 14px;
+}
+
+.gcode-preview-check {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.78rem;
+  color: var(--text-main);
+  cursor: pointer;
+  user-select: none;
+}
+
+.gcode-preview-swatch {
+  display: inline-block;
+  width: 12px;
+  height: 12px;
+  border-radius: 3px;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+}
+
+.gcode-preview-hint {
+  font-size: 0.72rem;
+}
+
+@media (max-width: 640px) {
+  .gcode-preview-modal {
+    width: calc(100% - 32px);
+    padding: 16px;
+  }
+
+  .gcode-preview-viewport {
+    height: 50vh;
+  }
+}

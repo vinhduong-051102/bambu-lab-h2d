@@ -46,6 +46,7 @@ export interface InjectResponse {
   statusCode: number;
   headers: Headers;
   body: string;
+  rawBody: Uint8Array;
   json(): any;
 }
 
@@ -87,11 +88,13 @@ export function createTestApp(printerService: PrinterService, printerManager?: P
       }
 
       response ??= Response.json({ error: 'Not Found' }, { status: 404 });
-      const body = await response.text();
+      const rawBody = new Uint8Array(await response.arrayBuffer());
+      const body = new TextDecoder().decode(rawBody);
       return {
         statusCode: response.status,
         headers: response.headers,
         body,
+        rawBody,
         json: () => JSON.parse(body),
       };
     },

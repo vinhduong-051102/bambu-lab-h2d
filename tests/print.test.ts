@@ -398,6 +398,17 @@ describe('Print job API (/api/print/*)', () => {
     expect((await start(staged.id)).json().error).toBe('PRINT_JOB_IN_PROGRESS');
   });
 
+  it('serves the staged .gcode.3mf for the 3D preview', async () => {
+    const staged = await prepare();
+    const res = await app.inject({ method: 'GET', url: `/api/print/staged/${staged.id}/file` });
+    expect(res.statusCode).toBe(200);
+    expect(res.headers.get('content-type')).toBe('application/octet-stream');
+    expect(Buffer.from(res.rawBody)).toEqual(Buffer.from(buildSliced3mf()));
+
+    const missing = await app.inject({ method: 'GET', url: '/api/print/staged/nope/file' });
+    expect(missing.statusCode).toBe(404);
+  });
+
   it('prints a file already on the printer without uploading it again', async () => {
     const res = await app.inject({ method: 'POST', url: '/api/print/prepare-remote', payload: { path: '/Bracket.gcode.3mf' } });
     expect(res.statusCode).toBe(201);
