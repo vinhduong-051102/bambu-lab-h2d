@@ -1,5 +1,7 @@
 import { logger } from '../../logger/logger';
 import { PrinterState } from '../PrinterState';
+import { findTray } from '../ams/amsTrays';
+import { formatHms, isAmsHms } from '../hms';
 
 export type AmsCommandType = 'load' | 'unload' | 'setting' | 'retry' | 'rfid';
 
@@ -14,24 +16,45 @@ export type AmsCommandStatus =
   | 'TIMEOUT'
   | 'UNKNOWN';
 
+export interface AmsCommandBaseline {
+  /** Absolute indexes of the AMS trays loaded when the command was issued */
+  loadedTrays: number[];
+  /** HMS codes already active when the command was issued */
+  hms: string[];
+}
+
 export interface AmsCommandRecord {
   commandId: string;
   type: AmsCommandType;
   amsId: number;
   trayId: number;
-  target: number; // 0..3 for load tray, 255 for unload
+  target: number; // absolute tray index for load, 255 for unload
   createdAt: string;
   sentAt: string | null;
+  /** Set when the printer answers the request (same sequence_id) with result "success" */
+  acknowledgedAt: string | null;
   completedAt: string | null;
   status: AmsCommandStatus;
   protocolConfidence: 'CONFIRMED' | 'PROTOCOL_UNVERIFIED' | 'POSSIBLE';
+  sequenceId: string | null;
+  baseline: AmsCommandBaseline;
   rawRequest: Record<string, unknown>;
   rawResponse?: Record<string, unknown> | null;
   error?: string | null;
 }
 
+const PENDING_STATUSES: AmsCommandStatus[] = ['REQUESTED', 'SENDING', 'SENT', 'WAITING_FOR_PRINTER', 'VERIFYING'];
+const AMS_COMMANDS = new Set(['ams_change_filament', 'ams_filament_setting', 'ams_get_rfid', 'ams_control']);
+
 // Stored on globalThis so the custom server and Next.js route bundles share one tracker
 const globalForTracker = globalThis as unknown as { __bambuAmsCommandTracker?: AmsCommandTracker };
+
+export function snapshotBaseline(state: PrinterState): AmsCommandBaseline {
+  return {
+    loadedTrays: (state.amsLoadedTrays ?? []).map((t) => t.trayIndex),
+    hms: (state.hmsErrors ?? []).map(formatHms).filter((c): c is string => c !== null),
+  };
+}
 
 export class AmsCommandTracker {
   private commands: Map<string, AmsCommandRecord> = new Map();
@@ -51,15 +74,7 @@ export class AmsCommandTracker {
    */
   public getActiveCommand(): AmsCommandRecord | null {
     for (const cmd of this.commands.values()) {
-      if (
-        cmd.status === 'REQUESTED' ||
-        cmd.status === 'SENDING' ||
-        cmd.status === 'SENT' ||
-        cmd.status === 'WAITING_FOR_PRINTER' ||
-        cmd.status === 'VERIFYING'
-      ) {
-        return cmd;
-      }
+      if (PENDING_STATUSES.includes(cmd.status)) return cmd;
     }
     return null;
   }
@@ -72,10 +87,12 @@ export class AmsCommandTracker {
     rawRequest: Record<string, unknown>;
     protocolConfidence?: 'CONFIRMED' | 'PROTOCOL_UNVERIFIED' | 'POSSIBLE';
     serial?: string;
+    baseline?: AmsCommandBaseline;
   }): AmsCommandRecord {
     const nowIso = new Date().toISOString();
     const commandId = `ams_cmd_${Date.now()}_${this.idCounter++}`;
     const confidence = options.protocolConfidence || (options.type === 'retry' ? 'PROTOCOL_UNVERIFIED' : 'CONFIRMED');
+    const print = options.rawRequest.print as Record<string, unknown> | undefined;
 
     const record: AmsCommandRecord = {
       commandId,
@@ -85,9 +102,12 @@ export class AmsCommandTracker {
       target: options.target,
       createdAt: nowIso,
       sentAt: null,
+      acknowledgedAt: null,
       completedAt: null,
       status: 'REQUESTED',
       protocolConfidence: confidence,
+      sequenceId: print?.sequence_id !== undefined ? String(print.sequence_id) : null,
+      baseline: options.baseline ?? { loadedTrays: [], hms: [] },
       rawRequest: sanitizePayload(options.rawRequest),
       rawResponse: null,
       error: null,
@@ -125,95 +145,118 @@ export class AmsCommandTracker {
     }
   }
 
+  /**
+   * Inspects every report: the printer answers AMS requests on the report topic with the same
+   * command + sequence_id and a `result` ("success" / "fail") plus optional `reason`.
+   */
   public recordRawResponse(rawPayload: Record<string, unknown>, topic = 'mqtt_report'): void {
-    const sanitized = sanitizePayload(rawPayload);
-    this.lastResponse = sanitized;
+    const print = rawPayload.print as Record<string, unknown> | undefined;
+    const isAmsReply = !!print && typeof print.command === 'string' && AMS_COMMANDS.has(print.command);
     const nowIso = new Date().toISOString();
 
-    if (process.env.AMS_PROTOCOL_DEBUG === 'true' || process.env.BAMBU_DEBUG_PROTOCOL === 'true') {
-      logger.info({
-        logType: 'AMS_RESPONSE',
-        timestamp: nowIso,
-        topic,
-        rawPayload: sanitized,
-      }, `[AMS RESPONSE / INCOMING MQTT] timestamp=${nowIso} topic=${topic}`);
+    if (isAmsReply) {
+      this.lastResponse = sanitizePayload(rawPayload);
+      // Replies are rare and small, so always log them: they are the only evidence of why the printer refused
+      logger.info({ logType: 'AMS_RESPONSE', topic, rawPayload: this.lastResponse }, `[AMS RESPONSE] command=${print!.command} sequence_id=${print!.sequence_id} result=${print!.result} reason=${print!.reason ?? ''}`);
+      this.applyReply(print!, nowIso);
+    } else if (process.env.AMS_PROTOCOL_DEBUG === 'true' || process.env.BAMBU_DEBUG_PROTOCOL === 'true') {
+      if (print?.ams !== undefined) {
+        logger.info({ logType: 'AMS_TELEMETRY', timestamp: nowIso, topic, ams: print.ams }, `[AMS TELEMETRY / INCOMING MQTT] timestamp=${nowIso} topic=${topic}`);
+      }
     }
   }
 
-  public verifyTelemetry(currentState: PrinterState, timeoutMs = getTimeoutFromEnv()): void {
+  private applyReply(print: Record<string, unknown>, nowIso: string): void {
+    const sequenceId = print.sequence_id !== undefined ? String(print.sequence_id) : null;
+    if (!sequenceId) return;
+
+    const cmd = Array.from(this.commands.values()).find(
+      (c) => c.sequenceId === sequenceId && PENDING_STATUSES.includes(c.status)
+        && (c.rawRequest.print as Record<string, unknown> | undefined)?.command === print.command
+    );
+    const result = typeof print.result === 'string' ? print.result.toLowerCase() : null;
+    if (!cmd || !result) return;
+
+    cmd.rawResponse = sanitizePayload({ print });
+    if (result === 'success') {
+      cmd.acknowledgedAt = nowIso;
+      if (cmd.status === 'WAITING_FOR_PRINTER') cmd.status = 'VERIFYING';
+      logger.info(`[AMS STATE CHANGE] command=${cmd.commandId} type=${cmd.type} printer acknowledged`);
+    } else {
+      cmd.status = 'FAILED';
+      cmd.completedAt = nowIso;
+      const reason = typeof print.reason === 'string' && print.reason ? print.reason : String(print.result);
+      cmd.error = `Máy in từ chối lệnh: ${reason}`;
+      logger.warn(`[AMS STATE CHANGE] command=${cmd.commandId} type=${cmd.type} after=FAILED error=${cmd.error}`);
+    }
+  }
+
+  public verifyTelemetry(currentState: PrinterState, timeoutMs?: number): void {
     this.verifyCommandWithTelemetry(currentState, timeoutMs);
   }
 
   /**
    * Multi-field Telemetry Verifier (Requirement 7)
    */
-  public verifyCommandWithTelemetry(currentState: PrinterState, timeoutMs = getTimeoutFromEnv()): void {
+  public verifyCommandWithTelemetry(currentState: PrinterState, timeoutMs?: number): void {
     const nowMs = Date.now();
-    const activeTray = currentState.amsActiveTrayId;
-    const trayNow = currentState.amsTrayNow;
-    const hmsErrors = currentState.hmsErrors || [];
-
-    // 1. Check for active HMS error indicating AMS hardware failure (e.g. tangle or feed fail)
-    const amsHmsError = hmsErrors.find((err) => {
-      const codeStr = String(err.code || '');
-      return codeStr.includes('0300') || codeStr.includes('AMS');
-    });
+    const loadedTrays = (currentState.amsLoadedTrays ?? []).map((t) => t.trayIndex);
+    // H2D switches extruder.snow to the target as soon as a load starts; the change is only finished once
+    // the AMS is back to idle. Printers that never report ams_status fall back to the slot alone.
+    const amsStatus = currentState.amsStatus;
+    const amsIdle = amsStatus === null || amsStatus === undefined || ((amsStatus >> 8) & 0xff) === 0;
+    const amsHms = (currentState.hmsErrors ?? [])
+      .filter(isAmsHms)
+      .map(formatHms)
+      .filter((c): c is string => c !== null);
 
     for (const cmd of this.commands.values()) {
-      if (cmd.status === 'COMPLETED' || cmd.status === 'FAILED' || cmd.status === 'TIMEOUT') {
+      if (!PENDING_STATUSES.includes(cmd.status)) continue;
+
+      const elapsedMs = nowMs - new Date(cmd.createdAt).getTime();
+      const acked = cmd.acknowledgedAt !== null;
+
+      // Only an AMS error raised after the command was issued counts as its failure
+      const newHms = amsHms.find((code) => !cmd.baseline.hms.includes(code));
+      if (newHms && (cmd.status === 'WAITING_FOR_PRINTER' || cmd.status === 'VERIFYING')) {
+        this.finish(cmd, 'FAILED', `Máy in báo lỗi HMS của AMS: ${newHms}`);
         continue;
       }
 
-      const createdMs = new Date(cmd.createdAt).getTime();
-      const elapsedMs = nowMs - createdMs;
-
-      // Fail command if active HMS error is reported
-      if (amsHmsError && (cmd.status === 'WAITING_FOR_PRINTER' || cmd.status === 'VERIFYING')) {
-        cmd.status = 'FAILED';
-        cmd.completedAt = new Date().toISOString();
-        cmd.error = `Printer HMS Error detected: ${amsHmsError.code || amsHmsError.attr}`;
-        logger.warn(`[AMS STATE CHANGE] command=${cmd.commandId} type=${cmd.type} before=${cmd.status} after=FAILED error=${cmd.error}`);
-        continue;
-      }
-
+      let done = false;
       if (cmd.type === 'load') {
-        // SUCCESS condition for load: activeTray matches target tray AND tray_now is not sentinel 255
-        const isLoaded = (activeTray === cmd.target) || (parseTrayNumber(trayNow) === cmd.target && parseTrayNumber(trayNow) !== 255);
-        if (isLoaded) {
-          const beforeStatus = cmd.status;
-          cmd.status = 'COMPLETED';
-          cmd.completedAt = new Date().toISOString();
-          logger.info(`[AMS STATE CHANGE] command=${cmd.commandId} type=load target=${cmd.target} before=${beforeStatus} after=COMPLETED activeTray=${activeTray}`);
-          continue;
-        }
+        // Target fed into an extruder; if it already was, only a printer ack proves this command did anything
+        done = amsIdle && loadedTrays.includes(cmd.target) && (!cmd.baseline.loadedTrays.includes(cmd.target) || acked);
       } else if (cmd.type === 'unload') {
-        // SUCCESS condition for unload: activeTray is null OR tray_now is sentinel 255
-        const isUnloaded = (activeTray === null) || (parseTrayNumber(trayNow) === 255) || (trayNow === '255');
-        if (isUnloaded && cmd.status === 'WAITING_FOR_PRINTER') {
-          const beforeStatus = cmd.status;
-          cmd.status = 'COMPLETED';
-          cmd.completedAt = new Date().toISOString();
-          logger.info(`[AMS STATE CHANGE] command=${cmd.commandId} type=unload before=${beforeStatus} after=COMPLETED activeTray=null`);
-          continue;
-        }
-      } else if (cmd.type === 'setting' || cmd.type === 'retry' || cmd.type === 'rfid') {
-        // Setting/retry/rfid commands complete when sent & printer acknowledges state update
-        if (cmd.sentAt && elapsedMs > 1500) {
-          cmd.status = 'COMPLETED';
-          cmd.completedAt = new Date().toISOString();
-          continue;
-        }
+        done = amsIdle && loadedTrays.length === 0 && (cmd.baseline.loadedTrays.length > 0 || acked);
+      } else if (cmd.type === 'setting') {
+        done = acked || settingApplied(cmd, currentState);
+      } else {
+        done = acked;
       }
 
-      // Requirement 14: Check for TIMEOUT with configurable AMS_COMMAND_TIMEOUT_MS
-      if (elapsedMs >= timeoutMs) {
-        const beforeStatus = cmd.status;
-        cmd.status = 'TIMEOUT';
-        cmd.completedAt = new Date().toISOString();
-        cmd.error = `Command timed out after ${timeoutMs}ms without printer telemetry confirmation`;
-        logger.warn(`[AMS STATE CHANGE] command=${cmd.commandId} type=${cmd.type} before=${beforeStatus} after=TIMEOUT`);
+      if (done) {
+        this.finish(cmd, 'COMPLETED', null);
+        continue;
+      }
+
+      const limit = timeoutMs ?? getTimeoutFromEnv(cmd.type);
+      if (elapsedMs >= limit) {
+        this.finish(cmd, 'TIMEOUT', acked
+          ? `Máy in đã nhận lệnh nhưng telemetry chưa xác nhận kết quả sau ${Math.round(limit / 1000)}s (timed out)`
+          : `Máy in không phản hồi lệnh sau ${Math.round(limit / 1000)}s (timed out)`);
       }
     }
+  }
+
+  private finish(cmd: AmsCommandRecord, status: 'COMPLETED' | 'FAILED' | 'TIMEOUT', error: string | null): void {
+    const before = cmd.status;
+    cmd.status = status;
+    cmd.completedAt = new Date().toISOString();
+    cmd.error = error;
+    const line = `[AMS STATE CHANGE] command=${cmd.commandId} type=${cmd.type} target=${cmd.target} before=${before} after=${status}${error ? ` error=${error}` : ''}`;
+    if (status === 'COMPLETED') logger.info(line);
+    else logger.warn(line);
   }
 
   public getLastCommand(): AmsCommandRecord | null {
@@ -240,22 +283,23 @@ export class AmsCommandTracker {
   }
 }
 
-function parseTrayNumber(val: unknown): number | null {
-  if (typeof val === 'number') return isNaN(val) ? null : val;
-  if (typeof val === 'string') {
-    const p = parseInt(val, 10);
-    return isNaN(p) ? null : p;
-  }
-  return null;
+/** The tray already shows the requested material and colour (printers that don't ack the setting) */
+function settingApplied(cmd: AmsCommandRecord, state: PrinterState): boolean {
+  const req = cmd.rawRequest.print as Record<string, unknown> | undefined;
+  const tray = findTray(state, cmd.amsId, cmd.trayId);
+  if (!req || !tray?.type || !tray.rawColor) return false;
+  return tray.type.toUpperCase() === String(req.tray_type).toUpperCase()
+    && tray.rawColor.slice(0, 6).toUpperCase() === String(req.tray_color).slice(0, 6).toUpperCase();
 }
 
-function getTimeoutFromEnv(): number {
+function getTimeoutFromEnv(type: AmsCommandType): number {
   const envVal = process.env.AMS_COMMAND_TIMEOUT_MS;
   if (envVal) {
     const num = parseInt(envVal, 10);
     if (!isNaN(num) && num > 0) return num;
   }
-  return 30000; // 30 seconds default
+  // Load/unload heat the nozzle, cut, feed and purge: well over a minute on H2D
+  return type === 'load' || type === 'unload' ? 180000 : 30000;
 }
 
 function sanitizePayload(payload: Record<string, unknown>): Record<string, unknown> {

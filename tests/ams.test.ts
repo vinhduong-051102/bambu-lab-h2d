@@ -6,25 +6,50 @@ import { PrinterService } from '../src/domain/PrinterService';
 import { normalizePrinterState } from '../src/domain/normalizePrinterState';
 import { createTestApp, type TestApp } from './helpers/testApp';
 import { AmsCommandTracker } from '../src/domain/commands/AmsCommandTracker';
+import { decodeExtruderSlot, trayIndexOf } from '../src/domain/ams/amsTrays';
 import { env } from '../src/config/env';
 
-describe('AMS Control & Telemetry Protocol Test Suite (18 Mandatory Test Cases)', () => {
-  let app: TestApp;
-  let stateStore: PrinterStateStore;
-  let capabilityRegistry: CapabilityRegistry;
-  let commandService: PrinterCommandService;
-  let printerService: PrinterService;
-  let mockMqttClient: any;
-  let tracker: AmsCommandTracker;
-  const originalRealPrinter = env.BAMBU_REAL_PRINTER;
+const NONE = 0xffff;
+const slotWord = (amsId: number, slotId: number) => (amsId << 8) | slotId;
 
-  const rawH2dTelemetry = {
+function tray(id: string, type: string, color: string, min: number, max: number, extra: Record<string, unknown> = {}) {
+  return {
+    id,
+    tray_type: type,
+    tray_sub_brands: `${type} Basic`,
+    tray_color: color,
+    tray_diameter: '1.75',
+    tray_weight: '1000',
+    tray_info_idx: type === 'PLA' ? 'GFA00' : 'GFG00',
+    nozzle_temp_min: String(min),
+    nozzle_temp_max: String(max),
+    remain: 80,
+    tag_uid: `RFID-${id}`,
+    tray_uuid: `UUID-${id}`,
+    state: 11,
+    ...extra,
+  };
+}
+
+// Shape taken from a real H2D report: tray_now stays "255", the loaded slot is in device.extruder.info[].snow
+function h2dReport(snow0 = NONE, snow1 = 0xfeff, star0 = snow0) {
+  return {
     print: {
       gcode_state: 'IDLE',
+      ams_status: 0,
+      device: {
+        extruder: {
+          info: [
+            { id: 0, temp: 32, snow: snow0, spre: NONE, star: star0, hnow: 0, hpre: 0, htar: 0, stat: 0 },
+            { id: 1, temp: 32, snow: snow1, spre: snow1, star: snow1, hnow: 1, hpre: 1, htar: 1, stat: 0 },
+          ],
+          state: 2,
+        },
+        nozzle: { src_id: 0, tar_id: 0, info: [{ id: 0, diameter: 0.4 }, { id: 1, diameter: 0.4 }] },
+      },
       ams: {
-        ams_exist_bits: '1',
-        tray_exist_bits: '15',
-        tray_is_bbl_bits: '15',
+        ams_exist_bits: '3',
+        tray_exist_bits: 'ee',
         tray_now: '255',
         tray_tar: '255',
         tray_pre: '255',
@@ -35,70 +60,52 @@ describe('AMS Control & Telemetry Protocol Test Suite (18 Mandatory Test Cases)'
             humidity: '1',
             humidity_raw: '40',
             tray: [
-              {
-                id: '0',
-                tray_type: 'PETG',
-                tray_sub_brands: 'PETG Basic',
-                tray_color: 'DBC8B6FF',
-                tray_diameter: '1.75',
-                tray_weight: '1000',
-                remain: 100,
-                tag_uid: 'RFID123456',
-                tray_uuid: 'UUID-PETG-001',
-                state: 11,
-              },
-              {
-                id: '1',
-                tray_type: 'PLA',
-                tray_sub_brands: 'PLA Basic',
-                tray_color: '00FF00FF',
-                tray_diameter: '1.75',
-                tray_weight: '1000',
-                remain: 80,
-                tag_uid: 'RFID123457',
-                tray_uuid: 'UUID-PLA-002',
-                state: 11,
-              },
-              {
-                id: '2',
-                tray_type: 'ABS',
-                tray_sub_brands: 'ABS Tough',
-                tray_color: 'FF0000FF',
-                tray_diameter: '1.75',
-                tray_weight: '1000',
-                remain: 50,
-                tag_uid: 'RFID123458',
-                tray_uuid: 'UUID-ABS-003',
-                state: 11,
-              },
-              {
-                id: '3',
-                tray_type: 'TPU',
-                tray_sub_brands: 'TPU 95A',
-                tray_color: '0000FFFF',
-                tray_diameter: '1.75',
-                tray_weight: '750',
-                remain: 30,
-                tag_uid: 'RFID123459',
-                tray_uuid: 'UUID-TPU-004',
-                state: 11,
-              },
+              { id: '0', state: 10 },
+              tray('1', 'PLA', '4DAFDAFF', 190, 240),
+              tray('2', 'PETG', '000000FF', 230, 260),
+              tray('3', 'PETG', 'DBC8B6FF', 230, 260),
             ],
+          },
+          {
+            id: '1',
+            temp: '30.0',
+            tray: [tray('0', 'PLA', 'FF0000FF', 190, 230), { id: '1', state: 10 }],
           },
         ],
       },
     },
   };
+}
+
+describe('AMS control & telemetry', () => {
+  let app: TestApp;
+  let stateStore: PrinterStateStore;
+  let printerService: PrinterService;
+  let mockMqttClient: any;
+  let published: any[];
+  let tracker: AmsCommandTracker;
+  const originalRealPrinter = env.BAMBU_REAL_PRINTER;
+
+  const ingest = (payload: any) => {
+    tracker.recordRawResponse(payload);
+    stateStore.updateState(normalizePrinterState(stateStore.getState(), payload));
+    tracker.verifyTelemetry(stateStore.getState());
+  };
+  const lastPrint = () => published[published.length - 1].print;
 
   beforeEach(async () => {
     env.BAMBU_REAL_PRINTER = true;
     stateStore = new PrinterStateStore('TEST_SERIAL_AMS');
-    capabilityRegistry = new CapabilityRegistry();
+    const capabilityRegistry = new CapabilityRegistry();
+    published = [];
     mockMqttClient = {
-      publishRequest: async () => true,
+      publishRequest: async (payload: any) => {
+        published.push(payload);
+        return true;
+      },
     };
 
-    commandService = new PrinterCommandService(capabilityRegistry, stateStore, mockMqttClient);
+    const commandService = new PrinterCommandService(capabilityRegistry, stateStore, mockMqttClient);
     printerService = new PrinterService({
       serial: 'TEST_SERIAL_AMS',
       stateStore,
@@ -109,7 +116,6 @@ describe('AMS Control & Telemetry Protocol Test Suite (18 Mandatory Test Cases)'
 
     tracker = AmsCommandTracker.getInstance();
     tracker.clear();
-
     app = createTestApp(printerService);
   });
 
@@ -119,14 +125,8 @@ describe('AMS Control & Telemetry Protocol Test Suite (18 Mandatory Test Cases)'
     app.close();
   });
 
-  it('Should block every AMS write command with 403 when BAMBU_REAL_PRINTER is false', async () => {
+  it('blocks every AMS write command with 403 when BAMBU_REAL_PRINTER is false', async () => {
     env.BAMBU_REAL_PRINTER = false;
-    let published = 0;
-    mockMqttClient.publishRequest = async () => {
-      published++;
-      return true;
-    };
-
     const requests = [
       { method: 'POST', url: '/api/ams/load' },
       { method: 'POST', url: '/api/ams/unload' },
@@ -135,321 +135,354 @@ describe('AMS Control & Telemetry Protocol Test Suite (18 Mandatory Test Cases)'
       { method: 'GET', url: '/api/ams/0/tray/0/rfid' },
     ] as const;
     for (const { method, url } of requests) {
-      const res = await app.inject({ method, url, ...(method === 'POST' && { payload: { trayId: 0 } }) });
+      const res = await app.inject({ method, url, ...(method === 'POST' && { payload: { slotId: 1 } }) });
       expect(res.statusCode, url).toBe(403);
       expect(res.json().error, url).toBe('TEST_MODE_RESTRICTED');
     }
-    expect(published).toBe(0);
+    expect(published).toHaveLength(0);
   });
 
-  // Test 1: Load Tray 0
-  it('1. Should post load command for Tray 0 and transition status correctly', async () => {
-    const res = await app.inject({
-      method: 'POST',
-      url: '/api/ams/load',
-      payload: { amsId: 0, trayId: 0, target: 0, temp: 220 },
+  describe('telemetry', () => {
+    it('decodes H2 extruder slot words', () => {
+      expect(decodeExtruderSlot(0x0002)).toEqual({ amsId: 0, slotId: 2 });
+      expect(decodeExtruderSlot(0x0103)).toEqual({ amsId: 1, slotId: 3 });
+      expect(decodeExtruderSlot(0x8000)).toEqual({ amsId: 128, slotId: 0 });
+      expect(decodeExtruderSlot(0xffff)).toBeNull();
+      expect(decodeExtruderSlot(0xfeff)).toBeNull(); // external spool, not an AMS tray
+      expect(trayIndexOf(1, 0)).toBe(4);
+      expect(trayIndexOf(128, 0)).toBe(128);
     });
 
-    expect(res.statusCode).toBe(200);
-    const body = res.json();
-    expect(body.success).toBe(true);
-    expect(body.status).toBe('SENT');
-    expect(body.commandId).toBeDefined();
-
-    const cmd = tracker.getCommand(body.commandId);
-    expect(cmd).toBeDefined();
-    expect(cmd?.target).toBe(0);
-    expect(cmd?.status).toBe('WAITING_FOR_PRINTER');
-  });
-
-  // Test 2: Load Tray 1
-  it('2. Should post load command for Tray 1', async () => {
-    const res = await app.inject({
-      method: 'POST',
-      url: '/api/ams/load',
-      payload: { amsId: 0, trayId: 1, target: 1 },
-    });
-    expect(res.statusCode).toBe(200);
-    expect(res.json().target).toBe(1);
-  });
-
-  // Test 3: Load Tray 2
-  it('3. Should post load command for Tray 2', async () => {
-    const res = await app.inject({
-      method: 'POST',
-      url: '/api/ams/load',
-      payload: { amsId: 0, trayId: 2, target: 2 },
-    });
-    expect(res.statusCode).toBe(200);
-    expect(res.json().target).toBe(2);
-  });
-
-  // Test 4: Load Tray 3
-  it('4. Should post load command for Tray 3', async () => {
-    const res = await app.inject({
-      method: 'POST',
-      url: '/api/ams/load',
-      payload: { amsId: 0, trayId: 3, target: 3 },
-    });
-    expect(res.statusCode).toBe(200);
-    expect(res.json().target).toBe(3);
-  });
-
-  // Test 5: Unload
-  it('5. Should post unload command with target 255', async () => {
-    const res = await app.inject({
-      method: 'POST',
-      url: '/api/ams/unload',
-      payload: {},
-    });
-    expect(res.statusCode).toBe(200);
-    const body = res.json();
-    expect(body.success).toBe(true);
-    expect(body.status).toBe('SENT');
-
-    const cmd = tracker.getCommand(body.commandId);
-    expect(cmd?.target).toBe(255);
-  });
-
-  // Test 6: Retry
-  it('6. Should post retry command marked as PROTOCOL_UNVERIFIED', async () => {
-    const res = await app.inject({
-      method: 'POST',
-      url: '/api/ams/retry',
-      payload: {},
-    });
-    expect(res.statusCode).toBe(200);
-    const body = res.json();
-    expect(body.protocolConfidence).toBe('PROTOCOL_UNVERIFIED');
-  });
-
-  // Test 7: Setting Tray
-  it('7. Should update tray settings via POST /api/ams/setting', async () => {
-    const res = await app.inject({
-      method: 'POST',
-      url: '/api/ams/setting',
-      payload: {
-        amsId: 0,
-        trayId: 0,
-        color: '#FF5733',
-        type: 'PETG',
-        minTemp: 220,
-        maxTemp: 260,
-      },
-    });
-    expect(res.statusCode).toBe(200);
-    expect(res.json().success).toBe(true);
-  });
-
-  // Test 8: Printer does not respond -> TIMEOUT handling
-  it('8. Should handle printer timeout when no matching telemetry is received', async () => {
-    const cmd = tracker.createCommand({
-      type: 'load',
-      amsId: 0,
-      trayId: 1,
-      target: 1,
-      rawRequest: { command: 'ams_change_filament', target: 1 },
-    });
-    tracker.markSent(cmd.commandId);
-
-    // Verify after timeout period
-    const initialState = stateStore.getState();
-    tracker.verifyTelemetry(initialState, 0); // 0ms timeout threshold
-
-    expect(cmd.status).toBe('TIMEOUT');
-    expect(cmd.error).toContain('timed out');
-  });
-
-  // Test 9: MQTT disconnect
-  it('9. Should return HTTP 503 if MQTT client fails to publish request', async () => {
-    printerService.mqttClient!.publishRequest = async () => false;
-
-    const res = await app.inject({
-      method: 'POST',
-      url: '/api/ams/load',
-      payload: { amsId: 0, trayId: 0 },
+    it('reports no loaded tray when every extruder is empty (tray_now "255" is ignored)', () => {
+      ingest(h2dReport());
+      const state = stateStore.getState();
+      expect(state.amsTrayNow).toBe('255');
+      expect(state.amsActiveTrayId).toBeNull();
+      expect(state.amsLoadedTrays).toEqual([]);
+      state.ams!.flatMap((u) => u.trays).forEach((t) => {
+        expect(t.isActive).toBe(false);
+        expect(t.isLoaded).toBe(false); // state 11 only means a spool sits in the slot
+      });
     });
 
-    expect(res.statusCode).toBe(503);
-    const body = res.json();
-    expect(body.success).toBe(false);
-    expect(body.error).toBe('MQTT_DISCONNECTED');
-  });
-
-  // Test 10: Invalid tray / target
-  it('10. Should fallback gracefully for invalid or missing tray payload', async () => {
-    const res = await app.inject({
-      method: 'POST',
-      url: '/api/ams/load',
-      payload: {},
+    it('marks the tray named by extruder.info[].snow as loaded, with its extruder', () => {
+      ingest(h2dReport(slotWord(0, 2)));
+      const state = stateStore.getState();
+      expect(state.amsActiveTrayId).toBe(2);
+      expect(state.amsLoadedTrays).toEqual([{ trayIndex: 2, amsId: 0, slotId: 2, extruderId: 0 }]);
+      const t2 = state.ams![0].trays[2];
+      expect(t2.isActive).toBe(true);
+      expect(t2.isLoaded).toBe(true);
+      expect(t2.loadedExtruderId).toBe(0);
+      expect(state.ams![0].activeTrayId).toBe(2);
+      expect(state.ams![1].activeTrayId).toBeNull();
     });
-    expect(res.statusCode).toBe(200);
-    expect(res.json().target).toBe(0);
-  });
 
-  // Test 11: CRITICAL - tray_now = 255 sentinel value must NOT map to Tray 0!
-  it('11. CRITICAL: tray_now = "255" sentinel must set activeTrayId to null (NOT Tray 0)', () => {
-    const currentState = stateStore.getState();
-    const updatedState = normalizePrinterState(currentState, rawH2dTelemetry);
+    it('maps a tray of the second AMS by unit, not by slot number', () => {
+      ingest(h2dReport(slotWord(1, 0)));
+      const state = stateStore.getState();
+      expect(state.amsActiveTrayId).toBe(4);
+      expect(state.ams![0].trays[0].isActive).toBe(false);
+      expect(state.ams![1].trays[0].isActive).toBe(true);
+    });
 
-    expect(updatedState.amsTrayNow).toBe('255');
-    expect(updatedState.amsActiveTrayId).toBeNull();
+    it('refreshes tray flags from an extruder-only delta report', () => {
+      ingest(h2dReport(slotWord(0, 1)));
+      ingest({ print: { device: { extruder: { info: [{ id: 0, snow: NONE, star: NONE }] } } } });
+      const state = stateStore.getState();
+      expect(state.amsActiveTrayId).toBeNull();
+      expect(state.ams![0].trays[1].isActive).toBe(false);
+    });
 
-    const amsUnit = updatedState.ams![0];
-    expect(amsUnit.activeTrayId).toBeNull();
-    amsUnit.trays.forEach((tray) => {
-      expect(tray.isActive).toBe(false);
+    it('flags the target tray while a change is in progress', () => {
+      ingest(h2dReport(NONE, 0xfeff, slotWord(0, 3)));
+      const state = stateStore.getState();
+      expect(state.amsTargetTrayId).toBe(3);
+      expect(state.ams![0].trays[3].isTarget).toBe(true);
+    });
+
+    it('falls back to print.ams.tray_now on printers without extruder slot words', () => {
+      ingest({ print: { ams: { tray_now: '5', ams: [{ id: '0', tray: [tray('0', 'PLA', 'FFFFFFFF', 190, 230)] }, { id: '1', tray: [tray('0', 'PLA', 'FFFFFFFF', 190, 230), tray('1', 'PLA', '000000FF', 190, 230)] }] } } });
+      const state = stateStore.getState();
+      expect(state.amsActiveTrayId).toBe(5);
+      expect(state.ams![1].trays[1].isActive).toBe(true);
+    });
+
+    it('parses tray profile id and nozzle range', () => {
+      ingest(h2dReport());
+      const t1 = stateStore.getState().ams![0].trays[1];
+      expect(t1.infoIdx).toBe('GFA00');
+      expect(t1.nozzleTempMin).toBe(190);
+      expect(t1.nozzleTempMax).toBe(240);
+      expect(t1.color).toBe('#4DAFDA');
+      expect(t1.rawColor).toBe('4DAFDAFF');
+    });
+
+    it('clears a tray whose spool was removed instead of keeping the old filament', () => {
+      ingest(h2dReport());
+      const report = h2dReport();
+      report.print.ams.ams[0].tray[2] = { id: '2', state: 10 } as any;
+      ingest(report);
+      const t2 = stateStore.getState().ams![0].trays[2];
+      expect(t2.isEmpty).toBe(true);
+      expect(t2.type).toBeNull();
+    });
+
+    it('clears HMS errors when the printer reports an empty hms list', () => {
+      ingest({ print: { hms: [{ attr: 0x07002000, code: 0x00020001 }] } });
+      expect(stateStore.getState().hmsErrors).toHaveLength(1);
+      ingest({ print: { gcode_state: 'IDLE' } });
+      expect(stateStore.getState().hmsErrors).toHaveLength(1);
+      ingest({ print: { hms: [] } });
+      expect(stateStore.getState().hmsErrors).toHaveLength(0);
     });
   });
 
-  // Test 12: AMS unit empty / not present
-  it('12. Should handle telemetry payload with no AMS units', () => {
-    const currentState = stateStore.getState();
-    const noAmsPayload = { print: { gcode_state: 'IDLE' } };
-    const updatedState = normalizePrinterState(currentState, noAmsPayload);
+  describe('POST /api/ams/load', () => {
+    beforeEach(() => ingest(h2dReport()));
 
-    expect(updatedState.ams).toEqual([]);
-    expect(updatedState.amsActiveTrayId).toBeUndefined();
-  });
-
-  // Test 13: Tray empty (remain: 0 or state: 0)
-  it('13. Should flag tray as isEmpty when remain is 0 or state is 0', () => {
-    const emptyPayload = {
-      print: {
-        ams: {
-          ams: [
-            {
-              id: '0',
-              tray: [{ id: '0', tray_type: 'PLA', remain: 0, state: 0 }],
-            },
-          ],
-        },
-      },
-    };
-
-    const currentState = stateStore.getState();
-    const updated = normalizePrinterState(currentState, emptyPayload);
-    const tray = updated.ams![0].trays[0];
-
-    expect(tray.isEmpty).toBe(true);
-    expect(tray.remain).toBe(0);
-  });
-
-  // Test 14: RFID Tray metadata preservation & Color normalization
-  it('14. Should preserve RFID metadata and normalize hex colors', () => {
-    const currentState = stateStore.getState();
-    const updated = normalizePrinterState(currentState, rawH2dTelemetry);
-    const tray0 = updated.ams![0].trays[0];
-
-    expect(tray0.rawColor).toBe('DBC8B6FF');
-    expect(tray0.color).toBe('#DBC8B6');
-    expect(tray0.tagUid).toBe('RFID123456');
-    expect(tray0.uuid).toBe('UUID-PETG-001');
-    expect(tray0.subBrand).toBe('PETG Basic');
-  });
-
-  // Test 15: Multiple AMS units
-  it('15. Should parse multiple AMS units correctly', () => {
-    const multiAmsPayload = {
-      print: {
-        ams: {
-          ams: [
-            { id: '0', temp: '30', tray: [{ id: '0', tray_type: 'PLA' }] },
-            { id: '1', temp: '32', tray: [{ id: '0', tray_type: 'PETG' }] },
-          ],
-        },
-      },
-    };
-
-    const currentState = stateStore.getState();
-    const updated = normalizePrinterState(currentState, multiAmsPayload);
-
-    expect(updated.ams!.length).toBe(2);
-    expect(updated.ams![0].id).toBe('0');
-    expect(updated.ams![1].id).toBe('1');
-  });
-
-  // Test 16: Multiple Trays per AMS
-  it('16. Should parse all 4 trays per AMS unit', () => {
-    const currentState = stateStore.getState();
-    const updated = normalizePrinterState(currentState, rawH2dTelemetry);
-
-    expect(updated.ams![0].trays.length).toBe(4);
-    expect(updated.ams![0].trays[0].type).toBe('PETG');
-    expect(updated.ams![0].trays[1].type).toBe('PLA');
-    expect(updated.ams![0].trays[2].type).toBe('ABS');
-    expect(updated.ams![0].trays[3].type).toBe('TPU');
-  });
-
-  // Test 17: Duplicate MQTT messages -> State stability
-  it('17. Should maintain state stability on duplicate MQTT reports', () => {
-    const state1 = normalizePrinterState(stateStore.getState(), rawH2dTelemetry);
-    stateStore.updateState(state1);
-
-    const state2 = normalizePrinterState(stateStore.getState(), rawH2dTelemetry);
-    stateStore.updateState(state2);
-
-    expect(state2.amsActiveTrayId).toBeNull();
-    expect(state2.ams![0].trays.length).toBe(4);
-  });
-
-  // Test 19: Idempotency Guard (HTTP 409 Conflict)
-  it('19. Should return HTTP 409 Conflict if another AMS command is already pending', async () => {
-    // Issue first load command
-    const res1 = await app.inject({
-      method: 'POST',
-      url: '/api/ams/load',
-      payload: { amsId: 0, trayId: 0 },
-    });
-    expect(res1.statusCode).toBe(200);
-
-    // Issue second concurrent load command
-    const res2 = await app.inject({
-      method: 'POST',
-      url: '/api/ams/load',
-      payload: { amsId: 0, trayId: 1 },
+    it('sends target, ams_id, slot_id and the tray temperature', async () => {
+      const res = await app.inject({ method: 'POST', url: '/api/ams/load', payload: { amsId: 0, slotId: 2 } });
+      expect(res.statusCode).toBe(200);
+      const body = res.json();
+      expect(body.status).toBe('SENT');
+      expect(body.target).toBe(2);
+      expect(lastPrint()).toMatchObject({ command: 'ams_change_filament', target: 2, ams_id: 0, slot_id: 2, curr_temp: 245, tar_temp: 245 });
+      expect(tracker.getCommand(body.commandId)?.status).toBe('WAITING_FOR_PRINTER');
     });
 
-    expect(res2.statusCode).toBe(409);
-    const body2 = res2.json();
-    expect(body2.success).toBe(false);
-    expect(body2.error).toBe('AMS_COMMAND_IN_PROGRESS');
-  });
-
-  // Test 20: AMS RFID Read Request
-  it('20. Should trigger ams_get_rfid command and return slot rfid data', async () => {
-    const res = await app.inject({
-      method: 'GET',
-      url: '/api/ams/0/tray/0/rfid',
+    it('uses the absolute index for a tray of the second AMS', async () => {
+      const res = await app.inject({ method: 'POST', url: '/api/ams/load', payload: { amsId: 1, slotId: 0 } });
+      expect(res.statusCode).toBe(200);
+      expect(lastPrint()).toMatchObject({ target: 4, ams_id: 1, slot_id: 0, tar_temp: 210 });
     });
 
-    expect(res.statusCode).toBe(200);
-    const body = res.json();
-    expect(body.success).toBe(true);
-    expect(body.commandId).toBeDefined();
-    expect(body.rfidData.amsId).toBe(0);
-    expect(body.rfidData.slotId).toBe(0);
+    it('accepts the legacy trayId field as the slot', async () => {
+      const res = await app.inject({ method: 'POST', url: '/api/ams/load', payload: { amsId: 0, trayId: 1 } });
+      expect(res.statusCode).toBe(200);
+      expect(lastPrint()).toMatchObject({ target: 1, slot_id: 1, tar_temp: 215 });
+    });
+
+    it('uses the loaded filament temperature as curr_temp', async () => {
+      ingest(h2dReport(slotWord(0, 1)));
+      await app.inject({ method: 'POST', url: '/api/ams/load', payload: { amsId: 0, slotId: 3 } });
+      expect(lastPrint()).toMatchObject({ curr_temp: 215, tar_temp: 245 });
+    });
+
+    it.each([
+      [{ amsId: 0 }, 'INVALID_PARAMETER'],
+      [{ amsId: 0, slotId: -1 }, 'INVALID_PARAMETER'],
+      [{ amsId: 3, slotId: 0 }, 'TRAY_NOT_FOUND'],
+      [{ amsId: 0, slotId: 0 }, 'TRAY_EMPTY'],
+      [{ amsId: 0, slotId: 2, temp: 200 }, 'INVALID_TEMPERATURE'],
+    ])('rejects %j with %s', async (payload, error) => {
+      const res = await app.inject({ method: 'POST', url: '/api/ams/load', payload });
+      expect(res.statusCode).toBe(400);
+      expect(res.json().error).toBe(error);
+      expect(published).toHaveLength(0);
+    });
+
+    it('rejects a tray that is already loaded', async () => {
+      ingest(h2dReport(slotWord(0, 2)));
+      const res = await app.inject({ method: 'POST', url: '/api/ams/load', payload: { amsId: 0, slotId: 2 } });
+      expect(res.statusCode).toBe(400);
+      expect(res.json().error).toBe('TRAY_ALREADY_LOADED');
+    });
+
+    it('refuses while printing', async () => {
+      ingest({ print: { gcode_state: 'RUNNING' } });
+      const res = await app.inject({ method: 'POST', url: '/api/ams/load', payload: { amsId: 0, slotId: 2 } });
+      expect(res.statusCode).toBe(409);
+      expect(res.json().error).toBe('PRINTER_BUSY');
+    });
+
+    it('returns 409 while another AMS command is pending', async () => {
+      expect((await app.inject({ method: 'POST', url: '/api/ams/load', payload: { amsId: 0, slotId: 1 } })).statusCode).toBe(200);
+      const res = await app.inject({ method: 'POST', url: '/api/ams/load', payload: { amsId: 0, slotId: 2 } });
+      expect(res.statusCode).toBe(409);
+      expect(res.json().error).toBe('AMS_COMMAND_IN_PROGRESS');
+    });
+
+    it('returns 503 when MQTT publish fails', async () => {
+      mockMqttClient.publishRequest = async () => false;
+      const res = await app.inject({ method: 'POST', url: '/api/ams/load', payload: { amsId: 0, slotId: 1 } });
+      expect(res.statusCode).toBe(503);
+      expect(res.json().error).toBe('MQTT_DISCONNECTED');
+    });
+
+    it('completes once the extruder reports the target slot', async () => {
+      const { commandId } = (await app.inject({ method: 'POST', url: '/api/ams/load', payload: { amsId: 0, slotId: 2 } })).json();
+      ingest(h2dReport(NONE, 0xfeff, slotWord(0, 2)));
+      expect(tracker.getCommand(commandId)?.status).toBe('WAITING_FOR_PRINTER');
+      ingest(h2dReport(slotWord(0, 2)));
+      expect(tracker.getCommand(commandId)?.status).toBe('COMPLETED');
+    });
+
+    it('waits for the AMS to finish the change, not just for snow to switch (live H2D sequence)', async () => {
+      const { commandId } = (await app.inject({ method: 'POST', url: '/api/ams/load', payload: { amsId: 0, slotId: 1 } })).json();
+      ingest({ print: { command: 'ams_change_filament', sequence_id: lastPrint().sequence_id, result: 'success', errno: 0 } });
+      // snow/star jump to the target immediately while ams_status reports 0x0102 (filament change)
+      ingest({ print: { ams_status: 0x0102, device: { extruder: { info: [{ id: 0, snow: slotWord(0, 1), star: slotWord(0, 1) }] } } } });
+      expect(tracker.getCommand(commandId)?.status).toBe('VERIFYING');
+      ingest({ print: { ams_status: 0 } });
+      expect(tracker.getCommand(commandId)?.status).toBe('COMPLETED');
+    });
+
+    it('fails when the load stops on an AMS HMS error (live H2D sequence)', async () => {
+      const { commandId } = (await app.inject({ method: 'POST', url: '/api/ams/load', payload: { amsId: 0, slotId: 1 } })).json();
+      ingest({ print: { ams_status: 0x0102, device: { extruder: { info: [{ id: 0, snow: slotWord(0, 1), star: slotWord(0, 1) }] } } } });
+      ingest({ print: { ams_status: 0x0300, hms: [{ attr: 117448960, code: 131109 }] } });
+      const record = tracker.getCommand(commandId)!;
+      expect(record.status).toBe('FAILED');
+      expect(record.error).toContain('0700-2100-0002-0025');
+    });
+
+    it('moves to VERIFYING on a success reply and FAILED on a refusal', async () => {
+      const first = (await app.inject({ method: 'POST', url: '/api/ams/load', payload: { amsId: 0, slotId: 2 } })).json();
+      const seq = lastPrint().sequence_id;
+      ingest({ print: { command: 'ams_change_filament', sequence_id: seq, result: 'success' } });
+      const record = tracker.getCommand(first.commandId)!;
+      expect(record.status).toBe('VERIFYING');
+      expect(record.acknowledgedAt).not.toBeNull();
+
+      tracker.clear();
+      const second = (await app.inject({ method: 'POST', url: '/api/ams/load', payload: { amsId: 0, slotId: 3 } })).json();
+      ingest({ print: { command: 'ams_change_filament', sequence_id: lastPrint().sequence_id, result: 'fail', reason: 'nozzle busy' } });
+      const failed = tracker.getCommand(second.commandId)!;
+      expect(failed.status).toBe('FAILED');
+      expect(failed.error).toContain('nozzle busy');
+    });
+
+    it('ignores replies to other sequence ids', async () => {
+      const { commandId } = (await app.inject({ method: 'POST', url: '/api/ams/load', payload: { amsId: 0, slotId: 2 } })).json();
+      ingest({ print: { command: 'ams_change_filament', sequence_id: '1', result: 'fail' } });
+      expect(tracker.getCommand(commandId)?.status).toBe('WAITING_FOR_PRINTER');
+    });
+
+    it('times out when telemetry never confirms', async () => {
+      const { commandId } = (await app.inject({ method: 'POST', url: '/api/ams/load', payload: { amsId: 0, slotId: 2 } })).json();
+      tracker.verifyTelemetry(stateStore.getState(), 0);
+      const record = tracker.getCommand(commandId)!;
+      expect(record.status).toBe('TIMEOUT');
+      expect(record.error).toContain('timed out');
+    });
+
+    it('fails on a new AMS HMS error but not on old or non-AMS ones', async () => {
+      ingest({ print: { hms: [{ attr: 0x07002000, code: 0x00020001 }] } });
+      const { commandId } = (await app.inject({ method: 'POST', url: '/api/ams/load', payload: { amsId: 0, slotId: 2 } })).json();
+
+      ingest({ print: { hms: [{ attr: 0x07002000, code: 0x00020001 }, { attr: 0x03002000, code: 0x00010001 }] } });
+      expect(tracker.getCommand(commandId)?.status).toBe('WAITING_FOR_PRINTER');
+
+      ingest({ print: { hms: [{ attr: 0x07012000, code: 0x00020002 }] } });
+      const record = tracker.getCommand(commandId)!;
+      expect(record.status).toBe('FAILED');
+      expect(record.error).toContain('0701-2000-0002-0002');
+    });
   });
 
-  // Test 21: Multi-field Telemetry Verifier HMS Failure Detection
-  it('21. Should fail active AMS command if printer reports HMS hardware error', () => {
-    const cmd = tracker.createCommand({
-      type: 'load',
-      amsId: 0,
-      trayId: 0,
-      target: 0,
-      rawRequest: { command: 'ams_change_filament', target: 0 },
+  describe('POST /api/ams/unload', () => {
+    it('sends the 255 sentinel and completes once no tray is loaded', async () => {
+      ingest(h2dReport(slotWord(0, 1)));
+      const res = await app.inject({ method: 'POST', url: '/api/ams/unload', payload: {} });
+      expect(res.statusCode).toBe(200);
+      expect(lastPrint()).toMatchObject({ command: 'ams_change_filament', target: 255, ams_id: 255, slot_id: 255, curr_temp: 215, tar_temp: 215 });
+      const { commandId } = res.json();
+      expect(tracker.getCommand(commandId)?.target).toBe(255);
+      expect(tracker.getCommand(commandId)?.status).toBe('WAITING_FOR_PRINTER');
+
+      ingest(h2dReport());
+      expect(tracker.getCommand(commandId)?.status).toBe('COMPLETED');
     });
-    tracker.markSent(cmd.commandId);
 
-    const errorState = {
-      ...stateStore.getState(),
-      hmsErrors: [{ attr: 'AMS_TANGLE', code: '0300_8000' }],
-    };
+    it('does not complete immediately when nothing was loaded and the printer has not answered', async () => {
+      ingest(h2dReport());
+      const { commandId } = (await app.inject({ method: 'POST', url: '/api/ams/unload', payload: {} })).json();
+      ingest(h2dReport());
+      expect(tracker.getCommand(commandId)?.status).toBe('WAITING_FOR_PRINTER');
+      ingest({ print: { command: 'ams_change_filament', sequence_id: lastPrint().sequence_id, result: 'success' } });
+      expect(tracker.getCommand(commandId)?.status).toBe('COMPLETED');
+    });
+  });
 
-    tracker.verifyTelemetry(errorState as any);
+  describe('POST /api/ams/setting', () => {
+    beforeEach(() => ingest(h2dReport()));
 
-    expect(cmd.status).toBe('FAILED');
-    expect(cmd.error).toContain('0300_8000');
+    it('sends a Bambu generic profile id as tray_info_idx', async () => {
+      const res = await app.inject({
+        method: 'POST',
+        url: '/api/ams/setting',
+        payload: { amsId: 1, slotId: 1, color: '#ff5733', type: 'petg', minTemp: 220, maxTemp: 260 },
+      });
+      expect(res.statusCode).toBe(200);
+      expect(lastPrint()).toMatchObject({
+        command: 'ams_filament_setting',
+        ams_id: 1,
+        tray_id: 1,
+        slot_id: 1,
+        tray_info_idx: 'GFG99',
+        tray_type: 'PETG',
+        tray_color: 'FF5733FF',
+        nozzle_temp_min: 220,
+        nozzle_temp_max: 260,
+      });
+    });
+
+    it('completes when the printer acknowledges', async () => {
+      const { commandId } = (await app.inject({ method: 'POST', url: '/api/ams/setting', payload: { slotId: 0, color: '#FFFFFF', type: 'PLA' } })).json();
+      ingest({ print: { command: 'ams_filament_setting', sequence_id: lastPrint().sequence_id, result: 'success' } });
+      expect(tracker.getCommand(commandId)?.status).toBe('COMPLETED');
+    });
+
+    it.each([
+      [{ slotId: 0, color: 'red', type: 'PLA' }, 'INVALID_COLOR'],
+      [{ slotId: 0, color: '#FFFFFF', type: 'PEEK' }, 'UNKNOWN_FILAMENT_PROFILE'],
+      [{ slotId: 0, color: '#FFFFFF', type: 'PLA', minTemp: 250, maxTemp: 200 }, 'INVALID_TEMPERATURE'],
+      [{ amsId: 5, slotId: 0, color: '#FFFFFF', type: 'PLA' }, 'TRAY_NOT_FOUND'],
+    ])('rejects %j with %s', async (payload, error) => {
+      const res = await app.inject({ method: 'POST', url: '/api/ams/setting', payload });
+      expect(res.statusCode).toBe(400);
+      expect(res.json().error).toBe(error);
+    });
+
+    it('returns 503 when MQTT publish fails', async () => {
+      mockMqttClient.publishRequest = async () => false;
+      const res = await app.inject({ method: 'POST', url: '/api/ams/setting', payload: { slotId: 0, color: '#FFFFFF', type: 'PLA' } });
+      expect(res.statusCode).toBe(503);
+    });
+  });
+
+  describe('retry & rfid', () => {
+    it('sends retry even while a load is pending, marked PROTOCOL_UNVERIFIED', async () => {
+      ingest(h2dReport());
+      await app.inject({ method: 'POST', url: '/api/ams/load', payload: { slotId: 1 } });
+      const res = await app.inject({ method: 'POST', url: '/api/ams/retry', payload: {} });
+      expect(res.statusCode).toBe(200);
+      expect(res.json().protocolConfidence).toBe('PROTOCOL_UNVERIFIED');
+      expect(lastPrint()).toMatchObject({ command: 'ams_control', param: 'retry' });
+    });
+
+    it('returns 503 for retry when MQTT publish fails', async () => {
+      mockMqttClient.publishRequest = async () => false;
+      const res = await app.inject({ method: 'POST', url: '/api/ams/retry', payload: {} });
+      expect(res.statusCode).toBe(503);
+    });
+
+    it('requests an RFID read and returns the cached tag data', async () => {
+      ingest(h2dReport());
+      const res = await app.inject({ method: 'GET', url: '/api/ams/0/tray/1/rfid' });
+      expect(res.statusCode).toBe(200);
+      const body = res.json();
+      expect(body.rfidData).toMatchObject({ amsId: 0, slotId: 1, tagUid: 'RFID-1' });
+      expect(lastPrint()).toMatchObject({ command: 'ams_get_rfid', ams_id: 0, slot_id: 1 });
+    });
+  });
+
+  it('GET /api/ams exposes loaded trays and per-tray extruder', async () => {
+    ingest(h2dReport(slotWord(0, 3)));
+    const body = (await app.inject({ method: 'GET', url: '/api/ams' })).json();
+    expect(body.activeTrayId).toBe(3);
+    expect(body.loadedTrays).toEqual([{ trayIndex: 3, amsId: 0, slotId: 3, extruderId: 0 }]);
+    expect(body.units[0].trays[3]).toMatchObject({ isLoaded: true, loadedExtruderId: 0, nozzleTempMin: 230 });
   });
 });

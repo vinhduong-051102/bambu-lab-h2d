@@ -1,3 +1,5 @@
+import { trayIndexOf } from '../../domain/ams/amsTrays';
+
 // Stored on globalThis so the custom server and Next.js route bundles share one sequence counter
 const globalForSequence = globalThis as unknown as { __bambuSequenceId?: number };
 
@@ -135,46 +137,69 @@ export class BambuCommandBuilder {
     };
   }
 
-  public static buildAmsChangeFilamentPayload(
-    target: number,
-    currTemp = 220,
-    tarTemp = 220
+  /**
+   * ams_change_filament (load). `target` is the absolute tray index (ams_id * 4 + slot, AMS HT = ams_id);
+   * H2-series firmware additionally reads `ams_id` / `slot_id`, as sent by Bambu Studio for multi-extruder printers.
+   * curr_temp is the temperature for purging the filament being replaced, tar_temp the one for the new filament.
+   */
+  public static buildAmsLoadFilamentPayload(
+    amsId: number,
+    slotId: number,
+    currTemp: number,
+    tarTemp: number
   ): Record<string, unknown> {
     return {
       print: {
         sequence_id: this.getNextSequenceId(),
         command: 'ams_change_filament',
-        target,
-        curr_temp: currTemp,
-        tar_temp: tarTemp,
+        target: trayIndexOf(amsId, slotId),
+        ams_id: amsId,
+        slot_id: slotId,
+        curr_temp: Math.round(currTemp),
+        tar_temp: Math.round(tarTemp),
       },
     };
   }
 
-  public static buildAmsFilamentSettingPayload(
-    amsId: number,
-    trayId: number,
-    trayInfoIdx: string,
-    trayColor: string,
-    nozzleTempMin = 190,
-    nozzleTempMax = 240,
-    trayType?: string
-  ): Record<string, unknown> {
-    const formattedColor = trayColor.replace('#', '').toUpperCase();
+  /** ams_change_filament with the 255 sentinel in target / ams_id / slot_id: retract the loaded filament */
+  public static buildAmsUnloadFilamentPayload(currTemp: number, tarTemp = currTemp): Record<string, unknown> {
+    return {
+      print: {
+        sequence_id: this.getNextSequenceId(),
+        command: 'ams_change_filament',
+        target: 255,
+        ams_id: 255,
+        slot_id: 255,
+        curr_temp: Math.round(currTemp),
+        tar_temp: Math.round(tarTemp),
+      },
+    };
+  }
+
+  public static buildAmsFilamentSettingPayload(options: {
+    amsId: number;
+    slotId: number;
+    trayInfoIdx: string;
+    trayType: string;
+    trayColor: string;
+    nozzleTempMin: number;
+    nozzleTempMax: number;
+  }): Record<string, unknown> {
+    const formattedColor = options.trayColor.replace('#', '').toUpperCase();
     const colorHex = formattedColor.length === 6 ? `${formattedColor}FF` : formattedColor;
-    const materialType = trayType || trayInfoIdx;
 
     return {
       print: {
         sequence_id: this.getNextSequenceId(),
         command: 'ams_filament_setting',
-        ams_id: amsId,
-        tray_id: trayId,
-        tray_info_idx: trayInfoIdx,
-        tray_type: materialType,
+        ams_id: options.amsId,
+        tray_id: options.slotId,
+        slot_id: options.slotId,
+        tray_info_idx: options.trayInfoIdx,
+        tray_type: options.trayType,
         tray_color: colorHex,
-        nozzle_temp_min: nozzleTempMin,
-        nozzle_temp_max: nozzleTempMax,
+        nozzle_temp_min: Math.round(options.nozzleTempMin),
+        nozzle_temp_max: Math.round(options.nozzleTempMax),
       },
     };
   }

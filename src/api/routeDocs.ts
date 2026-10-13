@@ -28,9 +28,9 @@ export const GATEWAY_ROUTES: RouteDoc[] = [
 
   // 3. AMS
   { method: 'GET', path: '/api/ams', category: 'AMS Control', description: 'Thông tin bộ AMS, khay nhựa, màu sắc & % còn lại', exampleUrl: '/api/ams' },
-  { method: 'POST', path: '/api/ams/load', category: 'AMS Control', description: 'Nạp nhựa từ khay AMS chỉ định (trayId: 0..3)', body: '{"trayId": 0, "temp": 220}' },
+  { method: 'POST', path: '/api/ams/load', category: 'AMS Control', description: 'Nạp nhựa từ khay AMS chỉ định (amsId + slotId 0..3, nhiệt độ mặc định theo khay)', body: '{"amsId": 0, "slotId": 1}' },
   { method: 'POST', path: '/api/ams/unload', category: 'AMS Control', description: 'Rút nhựa hiện tại khỏi đầu in về bộ AMS', body: '{}' },
-  { method: 'POST', path: '/api/ams/setting', category: 'AMS Control', description: 'Cài đặt loại nhựa, màu sắc hex & giới hạn nhiệt độ cho khay AMS', body: '{"amsId": 0, "trayId": 0, "color": "#FF0000", "type": "PLA", "minTemp": 190, "maxTemp": 230}' },
+  { method: 'POST', path: '/api/ams/setting', category: 'AMS Control', description: 'Cài đặt loại nhựa, màu sắc hex & giới hạn nhiệt độ cho khay AMS', body: '{"amsId": 0, "slotId": 0, "color": "#FF0000", "type": "PLA", "minTemp": 190, "maxTemp": 230}' },
   { method: 'POST', path: '/api/ams/retry', category: 'AMS Control', description: 'Thử lại lệnh đùn/kéo nhựa AMS sau khi gặp lỗi rối nhựa', body: '{}' },
   { method: 'GET', path: '/api/ams/command/:commandId', category: 'AMS Control', description: 'Trạng thái vòng đời của một lệnh AMS' },
   { method: 'GET', path: '/api/ams/debug', category: 'AMS Control', description: 'Debug protocol AMS thô (Raw Payload -> Parser -> State -> Command status)', exampleUrl: '/api/ams/debug' },

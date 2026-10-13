@@ -944,17 +944,17 @@ export function DashboardMarkup() {
                 Chọn Khay AMS:
               </label>
               <select id="amsSelectTray" style={{ background: "rgba(0,0,0,0.4)", border: "1px solid var(--card-border)", color: "var(--text-main)", padding: "8px", borderRadius: "var(--radius-sm)", fontSize: "0.85rem" }}>
-                <option value="0">
-                  Khay #1 (A1 - Slot 0)
+                <option value="0:0">
+                  AMS 1 • Khay 1
                 </option>
-                <option value="1">
-                  Khay #2 (A2 - Slot 1)
+                <option value="0:1">
+                  AMS 1 • Khay 2
                 </option>
-                <option value="2">
-                  Khay #3 (A3 - Slot 2)
+                <option value="0:2">
+                  AMS 1 • Khay 3
                 </option>
-                <option value="3">
-                  Khay #4 (A4 - Slot 3)
+                <option value="0:3">
+                  AMS 1 • Khay 4
                 </option>
               </select>
             </div>

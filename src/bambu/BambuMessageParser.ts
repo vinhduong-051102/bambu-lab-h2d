@@ -55,15 +55,13 @@ export class BambuMessageParser {
       remainingTimeMinutes: number | null;
     };
     fan?: FanState;
-    amsActiveTrayId?: number | null;
-    amsTargetTrayId?: number | null;
-    amsCurrentTrayId?: number | null;
     amsTrayNow?: string | number | null;
     amsTrayTar?: string | number | null;
     amsTrayPre?: string | number | null;
     amsExistBits?: string | number | null;
     trayExistBits?: string | number | null;
     trayIsBblBits?: string | number | null;
+    amsStatus?: number | null;
     ams?: AMSUnit[];
     rawAmsPayload?: Record<string, unknown>;
     hmsErrors?: HMSError[];
@@ -269,6 +267,9 @@ export class BambuMessageParser {
           hnow: parseNum(item?.hnow),
           hpre: parseNum(item?.hpre),
           htar: parseNum(item?.htar),
+          snow: parseNum(item?.snow),
+          spre: parseNum(item?.spre),
+          star: parseNum(item?.star),
           state: item?.stat !== undefined ? item.stat : (item?.state !== undefined ? item.state : null),
           metadata: {
             source: `print.extruder.info[${idx}]`,
@@ -376,6 +377,12 @@ export class BambuMessageParser {
 
     // 10. AMS
     let amsResult: ReturnType<typeof BambuMessageParser.parseAmsData> | undefined;
+    // print.ams_status: (main << 8) | sub; main 0 = idle, 1 = filament change, 2 = RFID read, 3 = assist
+    let amsStatus: number | null | undefined;
+    if (print.ams_status !== undefined) {
+      processedKeys.add('ams_status');
+      amsStatus = typeof print.ams_status === 'number' ? print.ams_status : null;
+    }
     if (print.ams !== undefined) {
       processedKeys.add('ams');
       amsResult = this.parseAmsData(print.ams, now);
@@ -383,10 +390,11 @@ export class BambuMessageParser {
 
     // 11. HMS Errors
     if (print.hms !== undefined) processedKeys.add('hms');
-    const hmsErrors: HMSError[] = [];
+    let hmsErrors: HMSError[] | undefined;
     if (Array.isArray(print.hms)) {
+      hmsErrors = [];
       print.hms.forEach((item: any) => {
-        hmsErrors.push({
+        hmsErrors!.push({
           attr: item?.attr ?? null,
           code: item?.code ?? null,
           metadata: {
@@ -440,15 +448,13 @@ export class BambuMessageParser {
       extruders,
       job,
       fan,
-      amsActiveTrayId: amsResult?.activeTrayId,
-      amsTargetTrayId: amsResult?.targetTrayId,
-      amsCurrentTrayId: amsResult?.currentTrayId,
       amsTrayNow: amsResult?.amsTrayNow,
       amsTrayTar: amsResult?.amsTrayTar,
       amsTrayPre: amsResult?.amsTrayPre,
       amsExistBits: amsResult?.amsExistBits,
       trayExistBits: amsResult?.trayExistBits,
       trayIsBblBits: amsResult?.trayIsBblBits,
+      amsStatus,
       ams: amsResult?.units,
       rawAmsPayload: amsResult?.rawAmsPayload,
       hmsErrors,
@@ -524,9 +530,6 @@ export class BambuMessageParser {
 
   private static parseAmsData(amsObj: unknown, now: number): {
     units: AMSUnit[];
-    activeTrayId: number | null;
-    targetTrayId: number | null;
-    currentTrayId: number | null;
     amsTrayNow: string | number | null;
     amsTrayTar: string | number | null;
     amsTrayPre: string | number | null;
@@ -538,9 +541,6 @@ export class BambuMessageParser {
     if (!amsObj || typeof amsObj !== 'object') {
       return {
         units: [],
-        activeTrayId: null,
-        targetTrayId: null,
-        currentTrayId: null,
         amsTrayNow: null,
         amsTrayTar: null,
         amsTrayPre: null,
@@ -562,28 +562,8 @@ export class BambuMessageParser {
       return null;
     };
 
-    const amsTrayNow = amsWrapper.tray_now ?? null;
-    const amsTrayTar = amsWrapper.tray_tar ?? null;
-    const amsTrayPre = amsWrapper.tray_pre ?? null;
-    const amsExistBits = amsWrapper.ams_exist_bits ?? null;
-    const trayExistBits = amsWrapper.tray_exist_bits ?? null;
-    const trayIsBblBits = amsWrapper.tray_is_bbl_bits ?? null;
-
-    const trayNowNum = parseNum(amsTrayNow);
-    const trayTarNum = parseNum(amsTrayTar);
-    const trayPreNum = parseNum(amsTrayPre);
-
-    // CRITICAL (Req 3, Req 11): 255 is sentinel value meaning UNLOADED / NO TRAY / INACTIVE
-    const activeTrayId = (trayNowNum !== null && trayNowNum !== 255 && trayNowNum >= 0 && trayNowNum < 254)
-      ? trayNowNum
-      : null;
-    const targetTrayId = (trayTarNum !== null && trayTarNum !== 255 && trayTarNum >= 0 && trayTarNum < 254)
-      ? trayTarNum
-      : null;
-    const currentTrayId = (trayPreNum !== null && trayPreNum !== 255 && trayPreNum >= 0 && trayPreNum < 254)
-      ? trayPreNum
-      : null;
-
+    // Which tray is loaded / targeted is derived after merging (deriveAmsActivity): H2-series printers
+    // keep tray_now at 255 and report the loaded slot per extruder in device.extruder.info[].snow.
     const amsUnitsList = Array.isArray(amsWrapper.ams) ? amsWrapper.ams : [];
 
     const units: AMSUnit[] = amsUnitsList.map((unit: any, unitIdx: number) => {
@@ -598,15 +578,11 @@ export class BambuMessageParser {
             }
 
             const trayIdNum = parseNum(tray?.id) ?? trayIdx;
-            const trayType = typeof tray?.tray_type === 'string' ? tray.tray_type : null;
+            const trayType = typeof tray?.tray_type === 'string' && tray.tray_type ? tray.tray_type : null;
             const subBrand = typeof tray?.tray_sub_brands === 'string' ? tray.tray_sub_brands : null;
             const remain = parseNum(tray?.remain);
             const state = tray?.state !== undefined ? tray.state : null;
-
-            const isActive = activeTrayId !== null && activeTrayId === trayIdNum;
-            const isTarget = targetTrayId !== null && targetTrayId === trayIdNum;
             const isEmpty = state === 0 || remain === 0 || (!trayType && remain === null);
-            const isLoaded = isActive || state === 11 || state === '11';
 
             return {
               id: String(trayIdNum),
@@ -621,11 +597,13 @@ export class BambuMessageParser {
               uuid: tray?.tray_uuid ? String(tray.tray_uuid) : null,
               tagUid: tray?.tag_uid ? String(tray.tag_uid) : null,
               state,
-              isActive,
-              isTarget,
+              isActive: false,
+              isTarget: false,
               isEmpty,
-              isLoaded,
-              infoIdx: parseNum(tray?.tray_info_idx),
+              isLoaded: false,
+              infoIdx: typeof tray?.tray_info_idx === 'string' && tray.tray_info_idx ? tray.tray_info_idx : null,
+              nozzleTempMin: parseNum(tray?.nozzle_temp_min),
+              nozzleTempMax: parseNum(tray?.nozzle_temp_max),
               metadata: {
                 source: `print.ams.ams[${unitIdx}].tray[${trayIdx}]`,
                 confidence: 'CONFIRMED',
@@ -642,9 +620,9 @@ export class BambuMessageParser {
         humidityRaw: unit?.humidity_raw ?? unit?.humidity ?? null,
         status: unit?.status ?? null,
         trays,
-        activeTrayId: activeTrayId,
-        targetTrayId: targetTrayId,
-        currentTrayId: currentTrayId,
+        activeTrayId: null,
+        targetTrayId: null,
+        currentTrayId: null,
         exists: true,
         metadata: {
           source: `print.ams.ams[${unitIdx}]`,
@@ -656,15 +634,12 @@ export class BambuMessageParser {
 
     return {
       units,
-      activeTrayId,
-      targetTrayId,
-      currentTrayId,
-      amsTrayNow,
-      amsTrayTar,
-      amsTrayPre,
-      amsExistBits,
-      trayExistBits,
-      trayIsBblBits,
+      amsTrayNow: amsWrapper.tray_now ?? null,
+      amsTrayTar: amsWrapper.tray_tar ?? null,
+      amsTrayPre: amsWrapper.tray_pre ?? null,
+      amsExistBits: amsWrapper.ams_exist_bits ?? null,
+      trayExistBits: amsWrapper.tray_exist_bits ?? null,
+      trayIsBblBits: amsWrapper.tray_is_bbl_bits ?? null,
       rawAmsPayload,
     };
   }

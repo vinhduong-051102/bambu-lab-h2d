@@ -243,7 +243,7 @@ export function initDashboard() {
     }
 
     if (state.ams) {
-      renderAMS(state.ams, state.amsActiveTrayId);
+      renderAMS(state.ams);
     }
 
     if (state.updatedAt) {
@@ -281,7 +281,9 @@ export function initDashboard() {
     addLog(`[COMMAND AUDIT] ⏳ Bắt đầu theo dõi kết quả lệnh ${commandId} từ MQTT telemetry...`, 'info');
 
     const start = Date.now();
-    const maxWaitMs = 30000;
+    // Load/unload heat, cut, feed and purge: the server times them out after 180s
+    const maxWaitMs = 200000;
+    let ackLogged = false;
 
     const restoreBtn = (label, border) => {
       if (btnElement) {
@@ -310,6 +312,11 @@ export function initDashboard() {
           const record = data.record;
           const status = record?.status;
 
+          if (status === 'VERIFYING' && !ackLogged) {
+            ackLogged = true;
+            addLog(`[KẾT QUẢ MÁY IN] 📨 Máy in đã nhận lệnh ${commandId}, đang chờ telemetry xác nhận...`, 'info');
+          }
+
           if (status === 'COMPLETED') {
             const successMsg = `[KẾT QUẢ MÁY IN] ✅ Lệnh ${commandId} (${record.type.toUpperCase()}) HOÀN TẤT THÀNH CÔNG! (Xác nhận từ MQTT Telemetry real-time)`;
             showToast(successMsg, 'success');
@@ -319,7 +326,7 @@ export function initDashboard() {
           }
 
           if (status === 'FAILED' || status === 'TIMEOUT') {
-            const failMsg = `[KẾT QUẢ MÁY IN] ❌ Lệnh ${commandId} ${status === 'TIMEOUT' ? 'HẾT GIỜ (TIMEOUT 30s)' : 'THẤT BẠI'}: ${record?.error || 'Máy in không phản hồi'}`;
+            const failMsg = `[KẾT QUẢ MÁY IN] ❌ Lệnh ${commandId} ${status === 'TIMEOUT' ? 'HẾT GIỜ (TIMEOUT)' : 'THẤT BẠI'}: ${record?.error || 'Máy in không phản hồi'}`;
             showToast(failMsg, 'warn');
             addLog(failMsg, 'warn');
             restoreBtn(failLabel, '#ef4444');
@@ -333,7 +340,7 @@ export function initDashboard() {
       if (Date.now() - start < maxWaitMs) {
         setTimeout(poll, 1500);
       } else {
-        addLog(`[KẾT QUẢ MÁY IN] ⚠️ Dừng theo dõi lệnh ${commandId} sau 30 giây.`, 'warn');
+        addLog(`[KẾT QUẢ MÁY IN] ⚠️ Dừng theo dõi lệnh ${commandId} sau ${Math.round(maxWaitMs / 1000)} giây.`, 'warn');
         restoreBtn(defaultLabel, '');
       }
     };
@@ -341,32 +348,33 @@ export function initDashboard() {
     setTimeout(poll, 1000);
   }
 
-  async function triggerAmsLoad(trayId, trayElement = null) {
+  async function triggerAmsLoad(amsId, slotId, label, trayElement = null) {
     if (trayElement && (trayElement.classList.contains('is-loading') || trayElement.style.pointerEvents === 'none')) {
       showToast('⚠️ Đang thực thi lệnh nạp nhựa, vui lòng chờ...', 'warn');
       return;
     }
 
-    if (!confirm(`Bạn có muốn NẠP NHỰA từ AMS Khay #${trayId + 1} vào đầu in không?`)) return;
+    if (!confirm(`Bạn có muốn NẠP NHỰA từ ${label} vào đầu in không?`)) return;
 
     if (trayElement) {
       trayElement.classList.add('is-loading');
       trayElement.style.pointerEvents = 'none';
     }
 
-    addLog(`[LỆNH NẠP NHỰA] ⏩ Gửi yêu cầu nạp nhựa từ AMS khay #${trayId + 1} (target: ${trayId})...`, 'info');
-    showToast(`Đang gửi lệnh nạp khay #${trayId + 1}...`, 'info');
+    addLog(`[LỆNH NẠP NHỰA] ⏩ Gửi yêu cầu nạp nhựa từ ${label} (amsId: ${amsId}, slotId: ${slotId})...`, 'info');
+    showToast(`Đang gửi lệnh nạp ${label}...`, 'info');
     try {
       const res = await fetch('/api/ams/load', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ amsId: 0, trayId, target: trayId, temp: 220 }),
+        // Temperature is picked by the gateway from the tray's recommended range
+        body: JSON.stringify({ amsId, slotId }),
       });
       const data = await res.json();
       if (res.ok && data.success) {
-        addLog(`[HTTP ${res.status}] ✅ Đã phát lệnh MQTT load khay #${trayId} (Command ID: ${data.commandId})`, 'success');
+        addLog(`[HTTP ${res.status}] ✅ Đã phát lệnh MQTT load ${label} (target: ${data.target}, ${data.temp}°C, Command ID: ${data.commandId})`, 'success');
         showToast(data.message || 'Đã gửi lệnh nạp nhựa, đang chờ xác nhận từ máy in...', 'info');
-        trackAmsCommandLifecycle(data.commandId, trayElement, `AMS #0 • Tray #${trayId}`, 'Loaded', 'Failed');
+        trackAmsCommandLifecycle(data.commandId, trayElement, label, 'Loaded', 'Failed');
       } else if (res.status === 409) {
         showToast(`⚠️ Lệnh bị hoãn: ${data.message}`, 'warn');
         addLog(`[HTTP 409 CONFLICT] ⚠️ AMS đang có lệnh chạy: ${data.message}`, 'warn');
@@ -392,44 +400,63 @@ export function initDashboard() {
     }
   }
 
-  function renderAMS(amsUnits, activeTrayId = null) {
+  // Latest AMS units, used to fill the tray picker of the setting modal
+  let lastAmsUnits = [];
+
+  function amsTrayLabel(amsId, slotId) {
+    return amsId >= 128 ? `AMS HT ${amsId - 127}` : `AMS ${amsId + 1} • Khay ${slotId + 1}`;
+  }
+
+  // H2D: extruder 0 is the right nozzle, 1 the left one
+  function extruderLabel(extruderId) {
+    if (extruderId === 0) return 'Đầu phải';
+    if (extruderId === 1) return 'Đầu trái';
+    return 'Đầu in';
+  }
+
+  function renderAMS(amsUnits) {
+    lastAmsUnits = amsUnits || [];
     if (!amsUnits || amsUnits.length === 0) {
       amsContainer.innerHTML = '<div class="empty-ams">Chưa có dữ liệu khay nhựa AMS</div>';
       return;
     }
 
     amsContainer.innerHTML = amsUnits.map((unit) => {
+      const amsId = Number(unit.id);
       const traysList = unit.trays || unit.filaments || [];
       const unitTemp = unit.temperature !== null && unit.temperature !== undefined ? `${unit.temperature}°C` : '--';
       const unitHum = unit.humidityRaw !== null && unit.humidityRaw !== undefined ? `${unit.humidityRaw}%` : (unit.humidity !== null ? `${unit.humidity}%` : '--');
 
       const filamentsHtml = traysList.map((fil, idx) => {
-        const trayIdNum = Number(fil.id ?? idx);
+        const slotId = Number(fil.id ?? idx);
+        const label = amsTrayLabel(amsId, slotId);
         const hexColor = formatHexColor(fil.color || fil.rawColor);
         const rawRem = fil.remain !== undefined && fil.remain !== null ? fil.remain : fil.remainingPercentage;
         let remText = '--';
-        if (rawRem !== null && rawRem !== undefined) {
+        if (rawRem !== null && rawRem !== undefined && Number(rawRem) >= 0) {
           const numRem = Number(rawRem);
-          remText = !isNaN(numRem) ? `${Math.max(0, numRem)}%` : `${rawRem}%`;
+          remText = !isNaN(numRem) ? `${numRem}%` : `${rawRem}%`;
         }
 
-        const isActive = fil.isActive ?? (activeTrayId === trayIdNum);
-        const isTarget = fil.isTarget ?? false;
-        const activeStatusText = isActive ? 'ACTIVE' : 'INACTIVE';
+        const isActive = !!fil.isActive;
+        const isTarget = !!fil.isTarget;
+        const isEmpty = !!fil.isEmpty;
         const activeClass = isActive ? 'active-tray' : '';
-        const activeBadge = isActive ? '<span class="active-tray-badge">ACTIVE</span>' : '';
-        const targetText = isTarget ? 'YES' : 'NO';
+        const activeBadge = isActive
+          ? `<span class="active-tray-badge">ĐANG NẠP • ${extruderLabel(fil.loadedExtruderId)}</span>`
+          : (isTarget ? '<span class="active-tray-badge">ĐANG CHUYỂN…</span>' : '');
+        const statusText = isEmpty ? 'Trống' : (isActive ? 'Đã nạp vào đầu in' : 'Sẵn sàng');
 
         return `
-          <div class="tray-item ${activeClass}" data-tray-id="${trayIdNum}" title="AMS #${unit.id} Slot #${trayIdNum + 1} - ${fil.type || 'N/A'}">
+          <div class="tray-item ${activeClass}" data-ams-id="${amsId}" data-slot-id="${slotId}" data-empty="${isEmpty}" data-loaded="${isActive}" style="${isEmpty ? 'opacity: 0.55; cursor: not-allowed;' : ''}" title="${label} - ${fil.type || 'Trống'}">
             ${activeBadge}
-            <div style="font-size: 0.72rem; font-weight: 700; color: var(--primary-accent); margin-bottom: 2px;">AMS #${unit.id} • Tray #${trayIdNum}</div>
-            <div class="color-dot" style="background-color: ${hexColor};" title="Màu: ${hexColor}"></div>
-            <div style="font-size: 0.76rem; font-weight: 700; color: #f8fafc;">${fil.type || 'N/A'}</div>
-            <div style="font-size: 0.68rem; color: #94a3b8;">${fil.subBrand || fil.subBrands || 'Generic'}</div>
+            <div style="font-size: 0.72rem; font-weight: 700; color: var(--primary-accent); margin-bottom: 2px;">${label}</div>
+            <div class="color-dot" style="background-color: ${isEmpty ? '#374151' : hexColor};" title="Màu: ${hexColor}"></div>
+            <div style="font-size: 0.76rem; font-weight: 700; color: #f8fafc;">${isEmpty ? 'Trống' : (fil.type || 'N/A')}</div>
+            <div style="font-size: 0.68rem; color: #94a3b8;">${isEmpty ? '&nbsp;' : (fil.subBrand || fil.subBrands || 'Generic')}</div>
             <div style="font-size: 0.7rem; font-weight: 600; color: #34d399; margin-top: 2px;">Remain: ${remText}</div>
             <div style="font-size: 0.65rem; color: #64748b; margin-top: 2px; text-align: center;">
-              State: ${fil.state ?? '--'} | Active: <strong style="color: ${isActive ? '#34d399' : '#94a3b8'}">${activeStatusText}</strong> (Target: ${targetText})
+              <strong style="color: ${isActive ? '#34d399' : '#94a3b8'}">${statusText}</strong>
             </div>
           </div>
         `;
@@ -438,7 +465,7 @@ export function initDashboard() {
       return `
         <div class="ams-unit" style="background: rgba(15, 23, 42, 0.6); padding: 12px; border-radius: 8px; margin-bottom: 12px; border: 1px solid rgba(255,255,255,0.06);">
           <div class="ams-unit-header" style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
-            <div class="ams-unit-title" style="font-weight: 700; color: #38bdf8;">AMS Unit #${unit.id}</div>
+            <div class="ams-unit-title" style="font-weight: 700; color: #38bdf8;">${amsId >= 128 ? `AMS HT ${amsId - 127}` : `AMS ${amsId + 1}`}</div>
             <div style="font-size: 0.75rem; color: #94a3b8; font-family: var(--font-mono);">
               Temp: <strong style="color: #4ade80;">${unitTemp}</strong> | Humidity: <strong style="color: #60a5fa;">${unitHum}</strong>
             </div>
@@ -451,10 +478,19 @@ export function initDashboard() {
     // Attach click handlers to trays for fast loading with anti-spam check
     document.querySelectorAll('.tray-item').forEach((el) => {
       el.addEventListener('click', () => {
-        const trayId = Number(el.getAttribute('data-tray-id'));
-        if (!isNaN(trayId)) {
-          triggerAmsLoad(trayId, el);
+        const amsId = Number(el.getAttribute('data-ams-id'));
+        const slotId = Number(el.getAttribute('data-slot-id'));
+        if (isNaN(amsId) || isNaN(slotId)) return;
+        const label = amsTrayLabel(amsId, slotId);
+        if (el.getAttribute('data-empty') === 'true') {
+          showToast(`${label} đang trống, không thể nạp nhựa.`, 'warn');
+          return;
         }
+        if (el.getAttribute('data-loaded') === 'true') {
+          showToast(`${label} đã được nạp vào đầu in.`, 'info');
+          return;
+        }
+        triggerAmsLoad(amsId, slotId, label, el);
       });
     });
   }
@@ -1124,6 +1160,17 @@ export function initDashboard() {
   });
 
   btnOpenAmsModal?.addEventListener('click', () => {
+    // Offer every tray the printer reports (value "amsId:slotId"), not just the first unit
+    if (amsSelectTray && lastAmsUnits.length > 0) {
+      const previous = amsSelectTray.value;
+      amsSelectTray.innerHTML = lastAmsUnits.flatMap((unit) => (unit.trays || []).map((tray) => {
+        const amsId = Number(unit.id);
+        const slotId = Number(tray.id);
+        const desc = tray.isEmpty ? 'Trống' : (tray.type || '?');
+        return `<option value="${amsId}:${slotId}">${amsTrayLabel(amsId, slotId)} (${desc})</option>`;
+      })).join('');
+      if ([...amsSelectTray.options].some((o) => o.value === previous)) amsSelectTray.value = previous;
+    }
     amsSettingModal?.classList.add('open');
   });
 
@@ -1146,15 +1193,15 @@ export function initDashboard() {
   });
 
   btnSaveAmsSetting?.addEventListener('click', (e) => {
-    const trayId = Number(amsSelectTray?.value || 0);
+    const [amsId, slotId] = String(amsSelectTray?.value || '0:0').split(':').map(Number);
     const type = amsSelectType?.value || 'PLA';
     const color = amsColorHex?.value || '#3B82F6';
     const minTemp = Number(amsMinTemp?.value || 190);
     const maxTemp = Number(amsMaxTemp?.value || 240);
 
     sendCommand('/api/ams/setting', 'POST', {
-      amsId: 0,
-      trayId,
+      amsId,
+      slotId,
       color,
       type,
       minTemp,

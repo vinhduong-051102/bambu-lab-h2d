@@ -61,6 +61,10 @@ This document defines the exact source mapping from real **Bambu Lab H2D MQTT Ra
 | `ams[].trays[].color` | `print.ams.ams[].tray[].tray_color` | **CONFIRMED** | Hex normalized color `#RRGGBB` (e.g. `#DBC8B6`) |
 | `ams[].trays[].rawColor` | `print.ams.ams[].tray[].tray_color` | **CONFIRMED** | Raw color string (e.g. `DBC8B6FF`) |
 | `ams[].trays[].remain` | `print.ams.ams[].tray[].remain` | **CONFIRMED** | Spool fill level percentage (0–100%) |
+| `ams[].trays[].infoIdx` | `print.ams.ams[].tray[].tray_info_idx` | **CONFIRMED** | Filament profile id (e.g. `GFA18`) |
+| `ams[].trays[].nozzleTempMin/Max` | `print.ams.ams[].tray[].nozzle_temp_min/max` | **CONFIRMED** | Recommended nozzle range; load temperature = midpoint |
+| `extruders[].snow/spre/star` | `print.device.extruder.info[].snow/spre/star` | **CONFIRMED** | Slot loaded / previous / target per extruder: `(ams_id << 8) \| slot_id`, `0xFFFF` = none, `ams_id` 254 = external spool |
+| `amsLoadedTrays`, `ams[].trays[].isLoaded/loadedExtruderId` | derived from `snow` | **CONFIRMED** | Trays fed into a toolhead. H2D keeps `print.ams.tray_now` at `255`; it is only used on printers without `snow` |
 | `hmsErrors[].attr` | `print.hms[].attr` | **CONFIRMED** | Attribute bitmask / category |
-| `hmsErrors[].code` | `print.hms[].code` | **CONFIRMED** | Raw integer error code (e.g. `65543`) |
+| `hmsErrors[].code` | `print.hms[].code` | **CONFIRMED** | Raw integer error code (e.g. `65543`). A report carrying `hms: []` clears the list |
 | `rawExtensions` | `print.*` (unparsed fields) | **CONFIRMED** | Preserves all unparsed raw H2D properties without duplicate keys |

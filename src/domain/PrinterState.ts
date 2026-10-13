@@ -56,6 +56,10 @@ export interface ExtruderState {
   hnow: number | null;
   hpre: number | null;
   htar: number | null;
+  /** H2 slot words, (ams_id << 8) | slot_id: tray now loaded / previously loaded / being loaded. 0xFFFF = none */
+  snow: number | null;
+  spre: number | null;
+  star: number | null;
   state: string | number | null;
   metadata?: FieldMetadata;
 }
@@ -82,9 +86,22 @@ export interface AMSTray {
   isActive: boolean;
   isTarget: boolean;
   isEmpty: boolean;
+  /** Filament from this tray is fed into a toolhead (not just present in the slot) */
   isLoaded: boolean;
-  infoIdx: number | null;
+  /** Extruder the tray is loaded into (H2D: 0 = right, 1 = left); null when not loaded or unknown */
+  loadedExtruderId?: number | null;
+  /** Filament profile id, e.g. "GFA18" */
+  infoIdx: string | null;
+  nozzleTempMin?: number | null;
+  nozzleTempMax?: number | null;
   metadata?: FieldMetadata;
+}
+
+export interface AmsLoadedTray {
+  trayIndex: number;
+  amsId: number;
+  slotId: number;
+  extruderId: number | null;
 }
 
 export interface AMSUnit {
@@ -94,6 +111,7 @@ export interface AMSUnit {
   humidityRaw: string | number | null;
   status: number | string | null;
   trays: AMSTray[];
+  /** Slot ids (within this unit) of the loaded / target / previous tray */
   activeTrayId: number | null;
   targetTrayId: number | null;
   currentTrayId: number | null;
@@ -144,15 +162,20 @@ export interface PrinterState {
   model?: string;
   firmware?: string;
   hmsErrors?: HMSError[];
+  /** Absolute tray indexes (ams_id * 4 + slot, AMS HT = ams_id) */
   amsActiveTrayId?: number | null;
   amsTargetTrayId?: number | null;
   amsCurrentTrayId?: number | null;
+  /** Every AMS tray currently fed into a toolhead (H2D can have one per extruder) */
+  amsLoadedTrays?: AmsLoadedTray[];
   amsTrayNow?: string | number | null;
   amsTrayTar?: string | number | null;
   amsTrayPre?: string | number | null;
   amsExistBits?: string | number | null;
   trayExistBits?: string | number | null;
   trayIsBblBits?: string | number | null;
+  /** print.ams_status: (main << 8) | sub; main 0 = idle, 1 = filament change in progress */
+  amsStatus?: number | null;
   ams?: AMSUnit[];
   ipcam?: IPCamData;
   rawAmsPayload?: Record<string, unknown>;

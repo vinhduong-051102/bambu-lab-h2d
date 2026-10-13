@@ -10,6 +10,7 @@ import { BambuCommandBuilder } from '../../bambu/commands/BambuCommandBuilder';
 import { parseThreeMf, type ThreeMfInfo } from '../../bambu/ThreeMfParser';
 import { BambuSlicer, TARGET_PRINTER, type SliceProfiles } from '../../bambu/BambuSlicer';
 import type { PrinterService } from '../PrinterService';
+import { formatHms } from '../hms';
 import {
   buildAmsMappingPayload,
   listAvailableTrays,
@@ -612,13 +613,4 @@ function subtaskNameOf(fileName: string): string {
 function formatPrintError(code: number): string {
   const hex = (code >>> 0).toString(16).toUpperCase().padStart(8, '0');
   return `${hex.slice(0, 4)}-${hex.slice(4)}`;
-}
-
-function formatHms(entry: unknown): string | null {
-  if (!entry || typeof entry !== 'object') return null;
-  const { attr, code } = entry as { attr?: unknown; code?: unknown };
-  if (typeof attr !== 'number' || typeof code !== 'number') return null;
-  const a = (attr >>> 0).toString(16).toUpperCase().padStart(8, '0');
-  const c = (code >>> 0).toString(16).toUpperCase().padStart(8, '0');
-  return `${a.slice(0, 4)}-${a.slice(4)}-${c.slice(0, 4)}-${c.slice(4)}`;
 }

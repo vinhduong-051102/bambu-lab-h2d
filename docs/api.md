@@ -46,7 +46,30 @@ Returns active HMS error codes and system error state.
 Returns active print job, progress percentage, current layer, total layers, and remaining time.
 
 ### `GET /api/ams`
-Returns normalized AMS units and tray information.
+Returns normalized AMS units and tray information. `loadedTrays` lists the trays fed into a toolhead
+(`{ trayIndex, amsId, slotId, extruderId }`, H2D extruder 0 = right, 1 = left); `activeTrayId` is the one on the
+active extruder. Tray indexes are absolute: `ams_id * 4 + slot`, AMS HT = `ams_id`.
+
+### `POST /api/ams/load`
+Body `{ "amsId": 0, "slotId": 2, "temp"?: 245 }` (`trayId` is accepted as an alias of `slotId`). Sends
+`ams_change_filament` with `target` (absolute index), `ams_id`, `slot_id`; `tar_temp` defaults to the middle of
+the tray's nozzle range, `curr_temp` to that of the filament being replaced.
+Errors: `400 INVALID_PARAMETER | TRAY_NOT_FOUND | TRAY_EMPTY | TRAY_ALREADY_LOADED | INVALID_TEMPERATURE`,
+`409 PRINTER_BUSY | AMS_COMMAND_IN_PROGRESS`, `503 MQTT_DISCONNECTED`.
+
+### `POST /api/ams/unload`
+Sends `ams_change_filament` with `target`, `ams_id`, `slot_id` = `255`.
+
+### `POST /api/ams/setting`
+Body `{ "amsId": 0, "slotId": 1, "type": "PETG", "color": "#FF5733", "minTemp": 230, "maxTemp": 260, "trayInfoIdx"?: "GFG99" }`.
+`tray_info_idx` defaults to the Bambu generic profile of `type` (PLA `GFL99`, PETG `GFG99`, ABS `GFB99`, …).
+
+### `GET /api/ams/command/:commandId`
+Command lifecycle: `WAITING_FOR_PRINTER` → `VERIFYING` (printer replied `result: success` to the same
+`sequence_id`) → `COMPLETED` once telemetry confirms (load: target slot in `extruder.info[].snow` and `ams_status` idle; unload: no AMS
+tray loaded and AMS idle). `FAILED` when the printer replies with a failure (`error` carries its `reason`) or raises a new AMS
+HMS error (module `07xx` / `12xx` / `18xx`). `TIMEOUT` after 180 s for load/unload, 30 s otherwise
+(`AMS_COMMAND_TIMEOUT_MS` overrides both).
 
 ---
 

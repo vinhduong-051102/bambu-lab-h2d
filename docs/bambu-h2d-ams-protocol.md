@@ -22,16 +22,19 @@ This document details the reverse-engineered and verified MQTT & G-code protocol
     "print": {
       "sequence_id": "2001",
       "command": "ams_change_filament",
-      "target": 0,
-      "curr_temp": 220,
-      "tar_temp": 220
+      "target": 6,
+      "ams_id": 1,
+      "slot_id": 2,
+      "curr_temp": 215,
+      "tar_temp": 245
     }
   }
   ```
 * **Parameters**:
-  * `target`: AMS Slot Index (`0..3` for unit 0, `4..7` for unit 1). [`CONFIRMED`]
-  * `curr_temp`: Current active nozzle temperature setting (°C). [`CONFIRMED`]
-  * `tar_temp`: Target nozzle temperature setting (°C). [`CONFIRMED`]
+  * `target`: absolute tray index, `ams_id * 4 + slot_id` (AMS HT: `ams_id`, 128+). [`CONFIRMED`]
+  * `ams_id` / `slot_id`: unit and slot, read by H2-series (multi-extruder) firmware as sent by Bambu Studio. [`POSSIBLE` – pending a printer reply capture]
+  * `curr_temp`: temperature for purging the filament being replaced (°C). The gateway uses the midpoint of the loaded tray's `nozzle_temp_min/max`. [`CONFIRMED`]
+  * `tar_temp`: temperature for the new filament; the gateway uses the midpoint of the target tray's range. [`CONFIRMED`]
 * **Protocol Confidence**: `CONFIRMED` (Verified via OpenBambuAPI & Bambu MCP).
 
 ### 2.2 Unload Filament (`ams_change_filament` with target `255`)
@@ -43,8 +46,10 @@ This document details the reverse-engineered and verified MQTT & G-code protocol
       "sequence_id": "2005",
       "command": "ams_change_filament",
       "target": 255,
-      "curr_temp": 220,
-      "tar_temp": 220
+      "ams_id": 255,
+      "slot_id": 255,
+      "curr_temp": 215,
+      "tar_temp": 215
     }
   }
   ```
@@ -63,7 +68,8 @@ This document details the reverse-engineered and verified MQTT & G-code protocol
       "command": "ams_filament_setting",
       "ams_id": 0,
       "tray_id": 0,
-      "tray_info_idx": "PETG",
+      "slot_id": 0,
+      "tray_info_idx": "GFG99",
       "tray_type": "PETG",
       "tray_color": "DBC8B6FF",
       "nozzle_temp_min": 190,
@@ -73,7 +79,7 @@ This document details the reverse-engineered and verified MQTT & G-code protocol
   ```
 * **Parameters**:
   * `tray_color`: 8-character uppercase RGBA Hex string (e.g. `DBC8B6FF` with `FF` alpha byte). [`CONFIRMED`]
-  * `tray_info_idx`: Material profile index / identifier string. [`CONFIRMED`]
+  * `tray_info_idx`: filament profile id such as `GFG99` (Generic PETG) or `GFA18` – not the material name. The gateway defaults to the Bambu generic profile of `tray_type`. [`CONFIRMED`]
   * `tray_type`: Material type string (PLA, PETG, ABS, TPU...). [`CONFIRMED`]
 * **Protocol Confidence**: `CONFIRMED`.
 
@@ -121,14 +127,17 @@ The H2D model features **2 Nozzles (Nozzle 0 & Nozzle 1)** and **2 Extruders (Ex
 
 ---
 
-## 4. Multi-Field Telemetry Verification Matrix
+## 4. Loaded-Tray Telemetry & Command Verification
 
-Command verification uses `AmsCommandVerifier` evaluating multiple telemetry fields:
-1. `print.ams.tray_now`: Trays `0..3` vs Sentinel `255`.
-2. `print.ams.tray_tar`: Target tray during transition.
-3. `print.nozzle.src_id`: Active nozzle ID.
-4. `print.hms`: HMS error codes (e.g., filament tangle `0300_8000`, feed fail).
-5. `print.gcode_state` / `stg_cur`: Machine operating stage (`RUNNING`, `PAUSED`, `IDLE`).
+* **H2D does not use `print.ams.tray_now`** – it stays `"255"` (also `tray_tar`, `tray_pre`). [`CONFIRMED` on live H2D telemetry]
+* The loaded slot is reported per extruder in `print.device.extruder.info[i]`: `snow` (now), `spre` (previous), `star` (target), each `(ams_id << 8) | slot_id`. `0xFFFF` = nothing loaded; `ams_id` 254 = external spool. Extruder 0 = right nozzle, 1 = left. [`CONFIRMED`]
+* Tray `state: 11` only means a spool is present in the slot, not that it is fed into a toolhead.
+
+`AmsCommandTracker` resolves each command from:
+1. **Printer reply** on the report topic with the same `command` and `sequence_id`: `result: "success"` → `VERIFYING`; anything else → `FAILED` with `reason`.
+2. **Telemetry**: load completes when the target tray is in an extruder's `snow` **and** `print.ams_status` is back to idle (main byte `(ams_status >> 8) & 0xFF` = 0); unload when no AMS tray is loaded and the AMS is idle. On H2D `snow`/`star` switch to the target as soon as the load starts while `ams_status` = `0x0102` (filament change), so `snow` alone is not proof of completion. [`CONFIRMED` on live H2D, 2026-10-13]
+3. **HMS**: a new error from an AMS module (`attr` top byte `0x07` AMS, `0x12` AMS lite, `0x18` AMS HT) that was not active when the command was sent → `FAILED`.
+4. **Timeout**: 180 s for load/unload (heat, cut, feed, purge), 30 s for setting / RFID / retry.
 
 ---
 

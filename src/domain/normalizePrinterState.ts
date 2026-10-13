@@ -1,6 +1,7 @@
 import { PrinterState, NozzleState, ExtruderState, AMSUnit, AMSTray } from './PrinterState';
 import { BambuRawReportPayload } from '../bambu/types';
 import { BambuMessageParser } from '../bambu/BambuMessageParser';
+import { deriveAmsActivity } from './ams/amsTrays';
 
 export function normalizePrinterState(
   currentState: PrinterState,
@@ -55,6 +56,9 @@ export function normalizePrinterState(
           hnow: incoming.hnow !== null ? incoming.hnow : existing.hnow,
           hpre: incoming.hpre !== null ? incoming.hpre : existing.hpre,
           htar: incoming.htar !== null ? incoming.htar : existing.htar,
+          snow: incoming.snow !== null ? incoming.snow : existing.snow,
+          spre: incoming.spre !== null ? incoming.spre : existing.spre,
+          star: incoming.star !== null ? incoming.star : existing.star,
           state: incoming.state !== null ? incoming.state : existing.state,
           metadata: incoming.metadata || existing.metadata,
         });
@@ -78,7 +82,8 @@ export function normalizePrinterState(
         existingUnit.trays.forEach((t) => trayMap.set(t.id, { ...t }));
         incomingUnit.trays.forEach((incomingTray) => {
           const existingTray = trayMap.get(incomingTray.id);
-          if (existingTray) {
+          // An emptied slot is reported as just { id, state }: replace it so the old filament doesn't linger
+          if (existingTray && !(incomingTray.isEmpty && incomingTray.type === null)) {
             trayMap.set(incomingTray.id, {
               ...existingTray,
               type: incomingTray.type !== null ? incomingTray.type : existingTray.type,
@@ -92,11 +97,10 @@ export function normalizePrinterState(
               uuid: incomingTray.uuid !== null ? incomingTray.uuid : existingTray.uuid,
               tagUid: incomingTray.tagUid !== null ? incomingTray.tagUid : existingTray.tagUid,
               state: incomingTray.state !== null ? incomingTray.state : existingTray.state,
-              isActive: incomingTray.isActive,
-              isTarget: incomingTray.isTarget,
               isEmpty: incomingTray.isEmpty,
-              isLoaded: incomingTray.isLoaded,
               infoIdx: incomingTray.infoIdx !== null ? incomingTray.infoIdx : existingTray.infoIdx,
+              nozzleTempMin: incomingTray.nozzleTempMin ?? existingTray.nozzleTempMin ?? null,
+              nozzleTempMax: incomingTray.nozzleTempMax ?? existingTray.nozzleTempMax ?? null,
               metadata: incomingTray.metadata || existingTray.metadata,
             });
           } else {
@@ -110,9 +114,6 @@ export function normalizePrinterState(
           humidityRaw: incomingUnit.humidityRaw !== null ? incomingUnit.humidityRaw : existingUnit.humidityRaw,
           temperature: incomingUnit.temperature !== null ? incomingUnit.temperature : existingUnit.temperature,
           status: incomingUnit.status !== null ? incomingUnit.status : existingUnit.status,
-          activeTrayId: incomingUnit.activeTrayId,
-          targetTrayId: incomingUnit.targetTrayId,
-          currentTrayId: incomingUnit.currentTrayId,
           exists: true,
           trays: Array.from(trayMap.values()),
           metadata: incomingUnit.metadata || existingUnit.metadata,
@@ -169,7 +170,7 @@ export function normalizePrinterState(
     metadata: parsed.fan?.metadata || currentState.fan.metadata,
   };
 
-  return {
+  return deriveAmsActivity({
     ...currentState,
     online: true,
     state: parsed.state ?? currentState.state,
@@ -189,16 +190,15 @@ export function normalizePrinterState(
       remainingTimeMinutes: parsed.job?.remainingTimeMinutes !== undefined && parsed.job?.remainingTimeMinutes !== null ? parsed.job.remainingTimeMinutes : currentState.job.remainingTimeMinutes,
     },
     fan,
-    hmsErrors: (parsed.hmsErrors && parsed.hmsErrors.length > 0) ? parsed.hmsErrors : currentState.hmsErrors,
-    amsActiveTrayId: parsed.amsActiveTrayId !== undefined ? parsed.amsActiveTrayId : currentState.amsActiveTrayId,
-    amsTargetTrayId: parsed.amsTargetTrayId !== undefined ? parsed.amsTargetTrayId : currentState.amsTargetTrayId,
-    amsCurrentTrayId: parsed.amsCurrentTrayId !== undefined ? parsed.amsCurrentTrayId : currentState.amsCurrentTrayId,
+    // A report that carries `hms` is the full list: an empty array means the errors were cleared
+    hmsErrors: parsed.hmsErrors !== undefined ? parsed.hmsErrors : currentState.hmsErrors,
     amsTrayNow: parsed.amsTrayNow !== undefined ? parsed.amsTrayNow : currentState.amsTrayNow,
     amsTrayTar: parsed.amsTrayTar !== undefined ? parsed.amsTrayTar : currentState.amsTrayTar,
     amsTrayPre: parsed.amsTrayPre !== undefined ? parsed.amsTrayPre : currentState.amsTrayPre,
     amsExistBits: parsed.amsExistBits !== undefined ? parsed.amsExistBits : currentState.amsExistBits,
     trayExistBits: parsed.trayExistBits !== undefined ? parsed.trayExistBits : currentState.trayExistBits,
     trayIsBblBits: parsed.trayIsBblBits !== undefined ? parsed.trayIsBblBits : currentState.trayIsBblBits,
+    amsStatus: parsed.amsStatus !== undefined ? parsed.amsStatus : currentState.amsStatus,
     ams: mergedAms,
     rawAmsPayload: parsed.rawAmsPayload ? { ...currentState.rawAmsPayload, ...parsed.rawAmsPayload } : currentState.rawAmsPayload,
     ipcam: parsed.ipcam ? { ...currentState.ipcam, ...parsed.ipcam } : currentState.ipcam,
@@ -207,5 +207,5 @@ export function normalizePrinterState(
       : currentState.rawExtensions,
     lastMessageAt: now,
     updatedAt: now,
-  };
+  });
 }
