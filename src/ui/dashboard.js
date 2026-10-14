@@ -833,13 +833,18 @@ export function initDashboard() {
   const apiModal = document.getElementById('apiModal');
   const apiListContainer = document.getElementById('apiListContainer');
 
+  const escapeApiHtml = (value) => String(value ?? '').replace(/[&<>"']/g, (c) => ({
+    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
+  })[c]);
+
   openApiModalBtn?.addEventListener('click', async () => {
     apiModal.classList.add('open');
     apiListContainer.innerHTML = '<div class="loading-spinner">Đang tải danh sách API...</div>';
 
     try {
       const res = await fetch('/api/routes');
-      if (res.ok) {
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      {
         const data = await res.json();
         const routes = data.routes || [];
 
@@ -854,22 +859,26 @@ export function initDashboard() {
         for (const [catName, catRoutes] of Object.entries(categories)) {
           html += `
             <div class="api-category-group" style="margin-bottom: 16px;">
-              <h4 style="color: #38bdf8; font-size: 0.9rem; margin-bottom: 8px; border-bottom: 1px solid rgba(255,255,255,0.1); padding-bottom: 4px;">📂 ${catName} (${catRoutes.length})</h4>
+              <h4 style="color: #38bdf8; font-size: 0.9rem; margin-bottom: 8px; border-bottom: 1px solid rgba(255,255,255,0.1); padding-bottom: 4px;">📂 ${escapeApiHtml(catName)} (${catRoutes.length})</h4>
               <div style="display: flex; flex-direction: column; gap: 8px;">
                 ${catRoutes.map((r) => {
-                  const isPost = r.method.includes('POST');
-                  const methodColor = isPost ? '#10b981' : '#3b82f6';
-                  const methodBg = isPost ? 'rgba(16, 185, 129, 0.15)' : 'rgba(59, 130, 246, 0.15)';
+                  const [methodColor, methodBg] = r.method.includes('POST')
+                    ? ['#10b981', 'rgba(16, 185, 129, 0.15)']
+                    : r.method.includes('DELETE')
+                      ? ['#ef4444', 'rgba(239, 68, 68, 0.15)']
+                      : ['#3b82f6', 'rgba(59, 130, 246, 0.15)'];
                   return `
                     <div style="background: rgba(15, 23, 42, 0.6); border: 1px solid var(--card-border); padding: 10px 12px; border-radius: var(--radius-sm); font-size: 0.8rem; overflow-x: hidden;">
                       <div style="display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 8px;">
                         <div style="display: flex; flex-wrap: wrap; align-items: center; gap: 8px; font-family: var(--font-mono); word-break: break-all; max-width: 100%;">
-                          <span style="background: ${methodBg}; color: ${methodColor}; padding: 2px 6px; border-radius: 4px; font-size: 0.72rem; font-weight: bold; flex-shrink: 0;">${r.method}</span>
-                          <a href="${r.exampleUrl || '#'}" target="_blank" style="color: #f8fafc; font-weight: 600; text-decoration: none; word-break: break-all;">${r.path}</a>
+                          <span style="background: ${methodBg}; color: ${methodColor}; padding: 2px 6px; border-radius: 4px; font-size: 0.72rem; font-weight: bold; flex-shrink: 0;">${escapeApiHtml(r.method)}</span>
+                          ${r.exampleUrl && !r.exampleUrl.startsWith('ws')
+                            ? `<a href="${escapeApiHtml(r.exampleUrl)}" target="_blank" rel="noopener" style="color: #f8fafc; font-weight: 600; text-decoration: none; word-break: break-all;">${escapeApiHtml(r.path)}</a>`
+                            : `<span style="color: #f8fafc; font-weight: 600; word-break: break-all;">${escapeApiHtml(r.path)}</span>`}
                         </div>
-                        ${r.body ? `<span style="font-family: var(--font-mono); font-size: 0.72rem; color: #94a3b8; background: rgba(255,255,255,0.05); padding: 2px 6px; border-radius: 4px; word-break: break-all;">Body: ${r.body}</span>` : ''}
+                        ${r.body ? `<span style="font-family: var(--font-mono); font-size: 0.72rem; color: #94a3b8; background: rgba(255,255,255,0.05); padding: 2px 6px; border-radius: 4px; word-break: break-all;">Body: ${escapeApiHtml(r.body)}</span>` : ''}
                       </div>
-                      <div style="margin-top: 4px; color: #94a3b8; font-size: 0.76rem; word-break: break-word;">${r.description}</div>
+                      <div style="margin-top: 4px; color: #94a3b8; font-size: 0.76rem; word-break: break-word;">${escapeApiHtml(r.description)}</div>
                     </div>
                   `;
                 }).join('')}
@@ -880,7 +889,7 @@ export function initDashboard() {
         apiListContainer.innerHTML = html;
       }
     } catch (err) {
-      apiListContainer.innerHTML = `<div style="color: #ef4444;">Không thể tải danh sách API: ${err.message}</div>`;
+      apiListContainer.innerHTML = `<div style="color: #ef4444;">Không thể tải danh sách API: ${escapeApiHtml(err.message)}</div>`;
     }
   });
 

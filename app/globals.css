@@ -1343,6 +1343,13 @@ body.compact-mode .app-footer {
   cursor: pointer;
 }
 
+.api-list-container {
+  max-height: 60vh;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding-right: 4px;
+}
+
 .cap-list {
   display: flex;
   flex-direction: column;
