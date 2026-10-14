@@ -444,10 +444,9 @@ export function initDashboard() {
         const isTarget = !!fil.isTarget;
         const isEmpty = !!fil.isEmpty;
         const activeClass = isActive ? 'active-tray' : '';
-        const activeBadge = isActive
-          ? `<span class="active-tray-badge">ĐANG NẠP • ${extruderLabel(fil.loadedExtruderId)}</span>`
-          : (isTarget ? '<span class="active-tray-badge">ĐANG CHUYỂN…</span>' : '');
-        const statusText = isEmpty ? 'Trống' : (isActive ? 'Đã nạp vào đầu in' : 'Sẵn sàng');
+        // The badge only marks a load in progress; a finished load shows in the status line instead
+        const activeBadge = isTarget && !isActive ? '<span class="active-tray-badge">ĐANG NẠP…</span>' : '';
+        const statusText = isEmpty ? 'Trống' : (isActive ? `Đã nạp • ${extruderLabel(fil.loadedExtruderId)}` : 'Sẵn sàng');
 
         return `
           <div class="tray-item ${activeClass}" data-ams-id="${amsId}" data-slot-id="${slotId}" data-empty="${isEmpty}" data-loaded="${isActive}" style="${isEmpty ? 'opacity: 0.55; cursor: not-allowed;' : ''}" title="${label} - ${fil.type || 'Trống'}">
