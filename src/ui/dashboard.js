@@ -1,5 +1,6 @@
 import { initPrintJob } from './printJob';
 import { initCameraZoom } from './cameraZoom';
+import { confirmDialog } from './confirmDialog';
 
 /**
  * Dashboard behaviour ported from the former public/app.js. Binds to the element ids rendered
@@ -356,7 +357,13 @@ export function initDashboard() {
       return;
     }
 
-    if (!confirm(`Bạn có muốn NẠP NHỰA từ ${label} vào đầu in không?`)) return;
+    const ok = await confirmDialog({
+      title: 'Nạp nhựa',
+      message: `Nạp nhựa từ ${label} vào đầu in?`,
+      confirmText: 'Nạp nhựa',
+      icon: '🧵',
+    });
+    if (!ok) return;
 
     if (trayElement) {
       trayElement.classList.add('is-loading');
@@ -609,10 +616,16 @@ export function initDashboard() {
   // Event Listeners for Quick Controls with Loading State
   btnPause?.addEventListener('click', (e) => sendCommand('/api/printer/actions/pause', 'POST', null, e.currentTarget));
   btnResume?.addEventListener('click', (e) => sendCommand('/api/printer/actions/resume', 'POST', null, e.currentTarget));
-  btnStop?.addEventListener('click', (e) => {
-    if (confirm('Bạn có chắc chắn muốn HỦY tác vụ in hiện tại?')) {
-      sendCommand('/api/printer/actions/stop', 'POST', null, e.currentTarget);
-    }
+  btnStop?.addEventListener('click', async (e) => {
+    const btn = e.currentTarget;
+    const ok = await confirmDialog({
+      title: 'Hủy lệnh in',
+      message: 'Bạn có chắc chắn muốn HỦY tác vụ in hiện tại? Không thể tiếp tục bản in sau khi hủy.',
+      confirmText: 'Hủy lệnh in',
+      cancelText: 'Quay lại',
+      danger: true,
+    });
+    if (ok) sendCommand('/api/printer/actions/stop', 'POST', null, btn);
   });
 
   // Temperature Controls with Loading State
@@ -1204,9 +1217,16 @@ export function initDashboard() {
   const amsMinTemp = document.getElementById('amsMinTemp');
   const amsMaxTemp = document.getElementById('amsMaxTemp');
 
-  btnAmsUnload?.addEventListener('click', (e) => {
-    if (!confirm('Bạn có chắc chắn muốn RÚT NHỰA hiện tại khỏi đầu in về bộ AMS?')) return;
-    sendCommand('/api/ams/unload', 'POST', {}, e.currentTarget);
+  btnAmsUnload?.addEventListener('click', async (e) => {
+    const btn = e.currentTarget;
+    const ok = await confirmDialog({
+      title: 'Rút nhựa',
+      message: 'Rút nhựa hiện tại khỏi đầu in về bộ AMS?',
+      confirmText: 'Rút nhựa',
+      icon: '⏏️',
+    });
+    if (!ok) return;
+    sendCommand('/api/ams/unload', 'POST', {}, btn);
   });
 
   btnAmsRetry?.addEventListener('click', (e) => {

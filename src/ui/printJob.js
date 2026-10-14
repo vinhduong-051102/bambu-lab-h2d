@@ -1,3 +1,4 @@
+import { confirmDialog } from './confirmDialog';
 /**
  * LAN print panel: stage a sliced 3MF (local upload or a file already on the printer), map each
  * filament to a live AMS tray, send POST /api/print/start and follow the job through the
@@ -368,9 +369,12 @@ export function initPrintJob({ showToast, addLog }) {
   btnStart.addEventListener('click', async () => {
     const plate = currentPlate();
     if (!staged || !plate) return;
-    const confirmed = window.confirm(
-      `Bắt đầu in "${staged.fileName}" – Plate ${plate.index}?\n\nĐảm bảo bàn in trống và đúng loại tấm in. Máy in sẽ bắt đầu gia nhiệt và di chuyển.`
-    );
+    const confirmed = await confirmDialog({
+      title: 'Bắt đầu in',
+      message: `"${staged.fileName}" – Plate ${plate.index}\n\nĐảm bảo bàn in trống và đúng loại tấm in. Máy in sẽ bắt đầu gia nhiệt và di chuyển.`,
+      confirmText: 'Bắt đầu in',
+      icon: '🖨️',
+    });
     if (!confirmed) return;
 
     btnStart.disabled = true;
