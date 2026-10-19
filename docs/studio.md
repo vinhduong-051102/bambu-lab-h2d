@@ -10,13 +10,14 @@ Setting this up is optional. Without it, the **Bambu Studio** card stays hidden.
    ```bash
    docker compose -f docker-compose.studio.yml up -d
    ```
-   Studio is then served on port **3100**. Its settings live in `data/studio/config`, and exports go to `data/studio/exports`.
+   Studio is then served on port **3100** (HTTP) and **3101** (HTTPS, self-signed certificate). Its settings live in `data/studio/config`, and exports go to `data/studio/exports`.
 2. Add the following to `.env`, then restart the gateway:
    ```env
-   STUDIO_URL=http://<gateway host>:3100/
+   STUDIO_URL=https://<gateway host LAN IP>:3101/
    STUDIO_EXPORT_DIR=./data/studio/exports
    ```
-   `STUDIO_URL` is loaded by the **browser**. Use the host name or IP that the people using the dashboard can reach, not `localhost`, unless you only use the dashboard on this machine.
+   `STUDIO_URL` is loaded by the **browser**, so use an address every dashboard user can reach. Use HTTPS: browsers only let the stream decode video on secure pages, and `localhost` is the only plain-HTTP exception. `http://localhost:3100/` is enough if the dashboard is only used on this machine.
+   The first time, open the Studio URL in its own tab (**↗ Tab mới**) and accept the self-signed certificate warning; after that the embedded frame loads too.
 3. Optional but recommended on a shared network: protect the stream with basic auth. Set `STUDIO_USER` and `STUDIO_PASSWORD` in the shell or in a `.env` next to the compose file before `up`.
 
 ## Use
@@ -28,12 +29,16 @@ Setting this up is optional. Without it, the **Bambu Studio** card stays hidden.
 
 You don't need to log in to Bambu Studio or connect it to the printer. The gateway does the upload and the start over LAN. If you do connect Studio to the printer as well, both open an MQTT connection to it.
 
+## Opening it from another machine
+
+A frame is only a secure page when the page around it is one too. When the dashboard itself is opened over plain HTTP from another machine (`http://<IP>:3000`), the embedded stream can't decode video, so the card opens Studio in a new HTTPS tab instead. On the Docker host (`http://localhost:3000`) it is embedded as usual.
+
 ## Limits
 
 - **3D performance.** Without a GPU, the container renders OpenGL on the CPU. Large models rotate slowly. If you have an NVIDIA GPU, see the linuxserver docs for passing it to the container.
 - **One session.** The container serves a single desktop. Two people who open it at the same time share the same screen.
 - **Mobile.** It works, but a desktop app on a phone screen is hard to use.
-- **Security.** The stream is a full desktop session inside the container. Keep it on the LAN, behind `STUDIO_PASSWORD`, and never expose port 3100 to the internet.
+- **Security.** The stream is a full desktop session inside the container. Keep it on the LAN, behind `STUDIO_PASSWORD`, and never expose ports 3100/3101 to the internet.
 
 ## API
 

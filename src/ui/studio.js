@@ -55,7 +55,17 @@ export function initStudio({ showToast, addLog }) {
     if (!open) frame.removeAttribute('src');
   }
 
-  btnToggle.addEventListener('click', () => setOpen(frameWrap.hidden));
+  // A frame is only a secure context when its parent is one too. Over plain HTTP from another machine
+  // the embedded stream can't use the browser's video decoder, so Studio opens as a top-level HTTPS tab.
+  const canEmbed = () => window.isSecureContext;
+
+  btnToggle.addEventListener('click', () => {
+    if (!canEmbed()) {
+      window.open(studioUrl, '_blank', 'noopener');
+      return;
+    }
+    setOpen(frameWrap.hidden);
+  });
   btnFullscreen.addEventListener('click', () => {
     frameWrap.requestFullscreen?.().catch((err) => showToast(`Không bật được toàn màn hình: ${err.message}`, 'error'));
   });
@@ -123,6 +133,14 @@ export function initStudio({ showToast, addLog }) {
       if (data.enabled && data.url !== studioUrl) {
         studioUrl = data.url;
         newTab.href = studioUrl;
+        if (!canEmbed()) {
+          btnToggle.textContent = '↗ Mở Studio (tab mới)';
+          idle.replaceChildren(
+            'Dashboard đang mở qua HTTP từ máy khác nên không nhúng được Studio (trình duyệt chặn bộ giải mã video). ',
+            'Studio sẽ mở trong tab mới qua HTTPS; lần đầu hãy chấp nhận cảnh báo chứng chỉ tự ký. ',
+            'Xuất file vào thư mục /exports rồi quay lại đây để in.'
+          );
+        }
       }
       btnToggle.hidden = !data.enabled;
       newTab.hidden = !data.enabled;
