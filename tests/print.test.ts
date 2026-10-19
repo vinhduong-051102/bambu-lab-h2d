@@ -264,6 +264,13 @@ describe('Print job API (/api/print/*)', () => {
     const res = await app.inject({ method: 'POST', url: '/api/print/prepare', form: unsliced });
     expect(res.statusCode).toBe(422);
     expect(res.json().error).toBe('NOT_SLICED');
+
+    // A bare model needs the gateway slicer, which is off here
+    const stl = new FormData();
+    stl.append('file', new File(['solid c\nendsolid c\n'], 'part.stl'));
+    const model = await app.inject({ method: 'POST', url: '/api/print/prepare', form: stl });
+    expect(model.statusCode).toBe(422);
+    expect(model.json().error).toBe('NOT_SLICED');
   });
 
   it('uploads over FTPS, sends project_file and confirms the start from printer reports', async () => {
@@ -516,6 +523,88 @@ describe('Print job API (/api/print/*)', () => {
     it('never runs the slicer for files that are already sliced', async () => {
       await prepare();
       expect(runs).toHaveLength(0);
+    });
+
+    it.each(['bracket.stl', 'bracket.OBJ', 'bracket.step', 'bracket.stp'])('slices a bare %s model and uploads it as .gcode.3mf', async (name) => {
+      const form = new FormData();
+      form.append('file', new File(['model bytes'], name));
+      const res = await app.inject({ method: 'POST', url: '/api/print/prepare', form });
+      expect(res.statusCode).toBe(201);
+
+      const ext = name.slice(name.lastIndexOf('.')).toLowerCase();
+      expect(runs[0].inputName).toBe(`input${ext}`);
+      const staged = res.json().staged;
+      expect(staged.fileName).toBe('bracket.gcode.3mf');
+      expect(staged.slicedByGateway).toMatchObject({ sourceFileName: name });
+    });
+
+    it('passes SLICER_BED_TYPE to the slicer and reports the plate it sliced for', async () => {
+      env.SLICER_BED_TYPE = 'High Temp Plate';
+      outcome.bedType = 'High Temp Plate';
+      try {
+        const res = await prepareUnsliced();
+        expect(runs[0].bedType).toBe('High Temp Plate');
+        expect(res.json().staged.slicedByGateway.bedType).toBe('High Temp Plate');
+      } finally {
+        env.SLICER_BED_TYPE = undefined;
+      }
+    });
+  });
+
+  describe('embedded Bambu Studio exports (/api/studio)', () => {
+    let exportDir: string;
+
+    beforeEach(async () => {
+      exportDir = await fs.mkdtemp(path.join(os.tmpdir(), 'studio-exports-'));
+      env.STUDIO_URL = 'http://localhost:3100/';
+      env.STUDIO_EXPORT_DIR = exportDir;
+    });
+
+    afterEach(async () => {
+      env.STUDIO_URL = undefined;
+      env.STUDIO_EXPORT_DIR = undefined;
+      await fs.rm(exportDir, { recursive: true, force: true });
+    });
+
+    it('lists printable exports, newest first, and the stream URL', async () => {
+      await fs.writeFile(path.join(exportDir, 'old.gcode.3mf'), buildSliced3mf());
+      await fs.utimes(path.join(exportDir, 'old.gcode.3mf'), new Date(2026, 0, 1), new Date(2026, 0, 1));
+      await fs.writeFile(path.join(exportDir, 'new.stl'), 'solid c\nendsolid c\n');
+      await fs.writeFile(path.join(exportDir, 'notes.txt'), 'ignored');
+      await fs.mkdir(path.join(exportDir, 'folder.3mf'));
+
+      const res = await app.inject({ method: 'GET', url: '/api/studio' });
+      expect(res.statusCode).toBe(200);
+      const body = res.json();
+      expect(body).toMatchObject({ enabled: true, url: 'http://localhost:3100/', exportsEnabled: true, exportError: null });
+      expect(body.files.map((f: { name: string }) => f.name)).toEqual(['new.stl', 'old.gcode.3mf']);
+    });
+
+    it('stages an export for printing like an upload', async () => {
+      await fs.writeFile(path.join(exportDir, 'Bracket.gcode.3mf'), buildSliced3mf());
+      const res = await app.inject({ method: 'POST', url: '/api/studio/prepare', payload: { name: 'Bracket.gcode.3mf' } });
+      expect(res.statusCode).toBe(201);
+      const staged = res.json().staged;
+      expect(staged).toMatchObject({ fileName: 'Bracket.gcode.3mf', source: 'local', remoteName: '/Bracket.gcode.3mf' });
+
+      expect((await start(staged.id)).statusCode).toBe(202);
+      await vi.waitFor(() => expect(storage.uploads[0]?.remotePath).toBe('/Bracket.gcode.3mf'));
+    });
+
+    it('only serves plain file names inside the export folder', async () => {
+      for (const name of ['../secret.3mf', 'sub/part.3mf', '..\\part.3mf', 'notes.txt']) {
+        const res = await app.inject({ method: 'POST', url: '/api/studio/prepare', payload: { name } });
+        expect(res.statusCode, name).toBe(400);
+      }
+      const missing = await app.inject({ method: 'POST', url: '/api/studio/prepare', payload: { name: 'missing.3mf' } });
+      expect(missing.statusCode).toBe(404);
+    });
+
+    it('reports when the gateway has no export folder', async () => {
+      env.STUDIO_EXPORT_DIR = undefined;
+      expect((await app.inject({ method: 'GET', url: '/api/studio' })).json()).toMatchObject({ exportsEnabled: false, files: [] });
+      const res = await app.inject({ method: 'POST', url: '/api/studio/prepare', payload: { name: 'a.3mf' } });
+      expect(res.statusCode).toBe(501);
     });
   });
 });

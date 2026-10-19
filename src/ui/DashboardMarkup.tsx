@@ -582,6 +582,42 @@ export function DashboardMarkup() {
               </div>
             </div>
           </section>
+          {/* Bambu Studio Card: the real app streamed from its container (STUDIO_URL), exports staged for printing */}
+          <section className="card studio-card" id="studioCard" hidden>
+            <div className="card-header">
+              <div className="header-title">
+                <svg className="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                  <rect x="2" y="3" width="20" height="14" rx="2" />
+                  <path d="M8 21h8M12 17v4" />
+                </svg>
+                <h2>Bambu Studio</h2>
+              </div>
+              <div className="studio-toolbar">
+                <button type="button" className="btn-ams-action" id="btnStudioToggle">▶ Mở Studio</button>
+                <button type="button" className="btn-ams-action" id="btnStudioFullscreen" hidden>⛶ Toàn màn hình</button>
+                <a className="btn-ams-action" id="studioNewTab" target="_blank" rel="noopener noreferrer">↗ Tab mới</a>
+              </div>
+            </div>
+
+            <div className="studio-frame-wrap" id="studioFrameWrap" hidden>
+              <iframe id="studioFrame" className="studio-frame" title="Bambu Studio" allow="clipboard-read; clipboard-write; fullscreen" />
+            </div>
+            <div className="print-muted" id="studioIdle">
+              Bambu Studio chạy trong container riêng và hiển thị qua trình duyệt. Mở Studio để chỉnh model, slice, rồi xuất file
+              (<b>File → Export → Export plate sliced file</b>) vào thư mục <code>/exports</code>.
+            </div>
+
+            <div className="studio-exports" id="studioExports" hidden>
+              <div className="print-remote-header">
+                <span>File Studio đã xuất</span>
+                <button type="button" className="btn-ams-action" id="btnStudioRefresh">🔄 Làm mới</button>
+              </div>
+              <ul className="print-remote-list" id="studioExportList">
+                <li className="print-muted">Đang tải…</li>
+              </ul>
+            </div>
+          </section>
+
           {/* LAN Print Job Card: 3MF upload → FTPS → print.project_file */}
           <section className="card print-card" id="printCard">
             <div className="card-header">
@@ -601,11 +637,11 @@ export function DashboardMarkup() {
 
             <div className="print-layout">
               <div className="print-step">
-                <h3 className="print-step-title">1. Chọn file đã slice</h3>
+                <h3 className="print-step-title">1. Chọn file</h3>
                 <label className="print-dropzone" htmlFor="printFileInput">
-                  <input type="file" id="printFileInput" accept=".3mf" />
-                  <span className="print-dropzone-main" id="printFileLabel">Chọn file .gcode.3mf từ máy tính</span>
-                  <span className="print-dropzone-sub">Bambu Studio → Export plate sliced file</span>
+                  <input type="file" id="printFileInput" accept=".3mf,.stl,.obj,.step,.stp" />
+                  <span className="print-dropzone-main" id="printFileLabel">Chọn file .3mf, .stl, .obj hoặc .step từ máy tính</span>
+                  <span className="print-dropzone-sub">File .gcode.3mf in ngay; project chưa slice và model STL/OBJ/STEP được gateway slice cho H2D</span>
                 </label>
                 <div className="print-upload-progress" id="printPrepareProgress" hidden>
                   <div className="print-progress-track"><div className="print-progress-fill" id="printPrepareBar" /></div>

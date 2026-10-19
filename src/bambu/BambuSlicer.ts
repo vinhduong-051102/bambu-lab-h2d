@@ -18,6 +18,8 @@ export interface SliceResult {
   data: Uint8Array;
   sourcePrinter: string | null;
   nozzle: string;
+  /** Build plate the G-code was sliced for (bed temperatures depend on it) */
+  bedType: string | null;
   /** System presets swapped in for a project made for another printer; null when its own settings were used */
   profiles: SliceProfiles | null;
   warnings: string[];
@@ -37,6 +39,7 @@ export interface SlicerRunRequest {
   inputName: string;
   outputName: string;
   nozzle: string | null;
+  bedType: string | null;
   timeoutMs: number;
 }
 
@@ -68,6 +71,7 @@ export const dockerSlicerRunner: SlicerRunner = (req) =>
       '--output', `/work/${req.outputName}`,
       '--printer', TARGET_PRINTER,
       ...(req.nozzle ? ['--nozzle', req.nozzle] : []),
+      ...(req.bedType ? ['--bed-type', req.bedType] : []),
     ];
 
     const child = spawn('docker', args, { stdio: ['ignore', 'pipe', 'pipe'] });
@@ -109,13 +113,14 @@ export class BambuSlicer {
     return !!env.SLICER_DOCKER_IMAGE && env.SLICER_DOCKER_IMAGE.trim() !== '';
   }
 
-  public slice(project: Uint8Array, options: { nozzle?: string | null } = {}): Promise<SliceResult> {
-    const run = this.queue.then(() => this.sliceNow(project, options.nozzle ?? null));
+  /** `extension` is the input's file type: ".3mf" (default) or a bare model (".stl", ".obj", ".step", ".stp") */
+  public slice(project: Uint8Array, options: { nozzle?: string | null; extension?: string } = {}): Promise<SliceResult> {
+    const run = this.queue.then(() => this.sliceNow(project, options.nozzle ?? null, options.extension ?? '.3mf'));
     this.queue = run.catch(() => undefined);
     return run;
   }
 
-  private async sliceNow(project: Uint8Array, nozzle: string | null): Promise<SliceResult> {
+  private async sliceNow(project: Uint8Array, nozzle: string | null, extension: string): Promise<SliceResult> {
     if (!this.isEnabled()) {
       throw new SlicerError('Gateway chưa bật slice tự động (SLICER_DOCKER_IMAGE).', 501, 'SLICER_DISABLED');
     }
@@ -124,16 +129,18 @@ export class BambuSlicer {
     const workDir = await fs.mkdtemp(path.join(this.workRoot, 'job-'));
     const startedAt = Date.now();
     try {
-      await fs.writeFile(path.join(workDir, 'input.3mf'), project);
+      const inputName = `input${extension}`;
+      await fs.writeFile(path.join(workDir, inputName), project);
       logger.info({ workDir, nozzle, image: env.SLICER_DOCKER_IMAGE }, 'Slicing project with Bambu Studio');
 
       let output: SlicerRunOutput;
       try {
         output = await this.runner({
           workDir,
-          inputName: 'input.3mf',
+          inputName,
           outputName: 'output.gcode.3mf',
           nozzle,
+          bedType: env.SLICER_BED_TYPE ?? null,
           timeoutMs: env.SLICER_TIMEOUT_MS,
         });
       } catch (err) {
@@ -165,6 +172,7 @@ export class BambuSlicer {
         data,
         sourcePrinter: typeof outcome.sourcePrinter === 'string' ? outcome.sourcePrinter : null,
         nozzle: String(outcome.nozzle ?? nozzle ?? ''),
+        bedType: typeof outcome.bedType === 'string' ? outcome.bedType : null,
         profiles: (outcome.profiles as SliceProfiles | null) ?? null,
         warnings: Array.isArray(outcome.warnings) ? outcome.warnings.filter((w): w is string => typeof w === 'string') : [],
         durationMs,

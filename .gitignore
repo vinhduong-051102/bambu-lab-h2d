@@ -61,3 +61,6 @@ tmp/
 # Next.js
 .next/
 next-env.d.ts
+
+# Gateway-side data (Bambu Studio container config and exports)
+data/

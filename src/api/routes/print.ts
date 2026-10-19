@@ -4,6 +4,7 @@ import path from 'path';
 import { z } from 'zod';
 import type { PrinterService } from '../../domain/PrinterService';
 import { PrintJobManager } from '../../domain/print/PrintJobManager';
+import { isSupportedUpload } from '../../domain/print/fileTypes';
 import { commandErrorResponse, handler, json, readJsonBody } from '../http';
 
 const MAX_PROJECT_BYTES = 1024 * 1024 * 1024;
@@ -32,7 +33,7 @@ const prepareRemoteSchema = z.object({
 });
 
 /** Installed nozzle diameter from telemetry ("0.4"), used to pick presets when slicing on the gateway */
-const installedNozzle = (printerService: PrinterService): string | null => {
+export const installedNozzle = (printerService: PrinterService): string | null => {
   const diameter = printerService.stateStore.getState().temperatures.nozzles.find((n) => n.diameter)?.diameter;
   return diameter ? diameter.toFixed(1) : null;
 };
@@ -92,7 +93,7 @@ export const stopPrint = handler(async ({ printerService }) => {
   }
 });
 
-// POST /api/print/prepare - multipart upload of a sliced 3MF to the gateway; returns plates + AMS suggestions
+// POST /api/print/prepare - multipart upload of a 3MF (or an STL/OBJ/STEP model, sliced on the gateway); returns plates + AMS suggestions
 export const preparePrint = handler(async ({ printerService, request }) => {
   const length = Number(request.headers.get('content-length') ?? 0);
   if (length > MAX_PROJECT_BYTES) {
@@ -109,12 +110,12 @@ export const preparePrint = handler(async ({ printerService, request }) => {
   if (!(file instanceof File)) {
     return json({ success: false, error: 'INVALID_PAYLOAD', message: 'Missing "file" field.' }, 400);
   }
-  if (!/\.3mf$/i.test(file.name)) {
+  if (!isSupportedUpload(file.name)) {
     return json(
       {
         success: false,
         error: 'UNSUPPORTED_FILE_TYPE',
-        message: 'Chỉ hỗ trợ file .3mf (project hoặc đã slice .gcode.3mf).',
+        message: 'Chỉ hỗ trợ file .3mf (project hoặc đã slice .gcode.3mf) và model .stl, .obj, .step, .stp.',
       },
       415
     );

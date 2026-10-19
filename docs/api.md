@@ -112,7 +112,7 @@ commands (detected from `print.fun` bit `0x20000000`; the gateway refuses with `
 Commands also require `BAMBU_REAL_PRINTER=true`.
 
 ### `POST /api/print/prepare`
-`multipart/form-data` with field `file`: a **sliced** `.3mf` (Bambu Studio → *Export plate sliced file*, `.gcode.3mf`).
+`multipart/form-data` with field `file`: a sliced `.gcode.3mf` (Bambu Studio → *Export plate sliced file*), or, with gateway slicing enabled (see [slicing.md](slicing.md)), an unsliced `.3mf` project or an `.stl`, `.obj`, `.step`, `.stp` model. Other types: `415 UNSUPPORTED_FILE_TYPE`.
 Returns `201 { staged }` with plates (`Metadata/plate_N.gcode`), the filaments each plate uses (0-based project
 index, type, colour, slicer extruder from `filament_maps`: 1 = left, 2 = right), live AMS trays and a suggested mapping.
 Errors: `415 UNSUPPORTED_FILE_TYPE`, `422 NOT_SLICED` / `INVALID_3MF`.

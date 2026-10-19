@@ -96,14 +96,14 @@ export function initPrintJob({ showToast, addLog }) {
     prepareProgress.hidden = percent === null;
     if (percent !== null) {
       prepareBar.style.width = `${percent}%`;
-      // An unsliced project is sliced by the gateway during this step, which can take a few minutes
+      // An unsliced project or a bare model is sliced by the gateway during this step, which can take a few minutes
       prepareText.textContent = percent >= 100 ? 'Đang phân tích / slice (file chưa slice có thể mất vài phút)…' : `${percent}%`;
     }
   }
 
   function uploadToGateway(file) {
-    if (!/\.3mf$/i.test(file.name)) {
-      showToast('Chỉ hỗ trợ file .3mf (project hoặc đã slice .gcode.3mf).', 'error');
+    if (!/\.(3mf|stl|obj|step|stp)$/i.test(file.name)) {
+      showToast('Chỉ hỗ trợ file .3mf (project hoặc đã slice .gcode.3mf) và model .stl, .obj, .step, .stp.', 'error');
       return;
     }
     fileLabel.textContent = file.name;
@@ -250,7 +250,8 @@ export function initPrintJob({ showToast, addLog }) {
     if (!sliced.profiles) {
       return `🔧 Gateway đã slice từ ${sliced.sourceFileName} (${seconds}s) bằng cấu hình có sẵn trong project.`;
     }
-    return `🔧 Gateway đã slice từ ${sliced.sourceFileName} (${seconds}s): ${sliced.profiles.process} · ${sliced.profiles.filaments.join(', ')}`;
+    const bed = sliced.bedType ? ` · ${sliced.bedType}` : '';
+    return `🔧 Gateway đã slice từ ${sliced.sourceFileName} (${seconds}s): ${sliced.profiles.process} · ${sliced.profiles.filaments.join(', ')}${bed}`;
   }
 
   function currentPlate() {
@@ -363,7 +364,7 @@ export function initPrintJob({ showToast, addLog }) {
     staged = null;
     config.hidden = true;
     configEmpty.hidden = false;
-    fileLabel.textContent = 'Chọn file .gcode.3mf từ máy tính';
+    fileLabel.textContent = 'Chọn file .3mf, .stl, .obj hoặc .step từ máy tính';
   });
 
   btnStart.addEventListener('click', async () => {
@@ -461,6 +462,15 @@ export function initPrintJob({ showToast, addLog }) {
   };
   window.addEventListener('gateway:print-job', onJobEvent);
 
+  // Files staged elsewhere on the dashboard (e.g. a Bambu Studio export) continue at step 2 here
+  const onStagedEvent = (event) => {
+    if (!event.detail) return;
+    fileLabel.textContent = event.detail.fileName;
+    showStaged(event.detail);
+    document.getElementById('printCard')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  };
+  window.addEventListener('gateway:staged', onStagedEvent);
+
   // Restore the latest job after a page reload
   fetch('/api/print/jobs')
     .then((res) => (res.ok ? res.json() : null))
@@ -475,6 +485,7 @@ export function initPrintJob({ showToast, addLog }) {
 
   return () => {
     window.removeEventListener('gateway:print-job', onJobEvent);
+    window.removeEventListener('gateway:staged', onStagedEvent);
     xhr?.abort();
   };
 }

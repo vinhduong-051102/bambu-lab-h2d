@@ -1,8 +1,8 @@
 # Gateway-side slicing
 
-The printer only runs sliced G-code. When you upload a `.3mf` **project** that hasn't been sliced, for example a model downloaded from MakerWorld, the gateway can slice it for the H2D with headless Bambu Studio. You then pick the plate and AMS trays as you would for a normal `.gcode.3mf`.
+The printer only runs sliced G-code. When you upload a `.3mf` **project** that hasn't been sliced, for example a model downloaded from MakerWorld, the gateway can slice it for the H2D with headless Bambu Studio. The same goes for a bare model: `.stl`, `.obj`, `.step` or `.stp` uploads are always sliced with the H2D system presets (0.20mm Standard, Generic PLA) and centered on the plate. You then pick the plate and AMS trays as you would for a normal `.gcode.3mf`.
 
-Slicing is optional. If it isn't enabled, unsliced projects are rejected with `422 NOT_SLICED`, as before.
+Slicing is optional. If it isn't enabled, unsliced projects and bare models are rejected with `422 NOT_SLICED`.
 
 ## Setup
 
@@ -35,10 +35,11 @@ The image runs Bambu Studio in an Ubuntu 22.04 container, so it also works on ol
    - **Project made for the H2D:** it is sliced with its own embedded settings, so your supports, infill and other tweaks are kept.
    - **Project made for another printer** (e.g. A1, X1C): the machine, process and filament presets are replaced with the closest H2D system presets.
      - Machine: `Bambu Lab H2D <nozzle> nozzle`. The nozzle is the one reported by the printer, falling back to the project's nozzle, then 0.4.
-     - Process: same name, then same layer height, then any compatible preset.
+     - Process: same name, then the same layer height (Standard first), then the H2D default (0.20mm Standard).
+     - Build plate: `SLICER_BED_TYPE` if set, otherwise the project's plate, otherwise Textured PEI.
      - Filament: same preset family, then `Generic <type>`, then `Bambu <type> Basic`, then `Generic PLA`.
      
-     The Studio CLI only accepts fully resolved presets, so each preset's `inherits` chain is flattened first.
+     The Studio CLI only accepts fully resolved presets, so each preset's `inherits` chain and `include` templates (start/end G-code) are flattened first.
 4. The output `<name>.gcode.3mf` is staged and later uploaded over FTPS. This also applies to an unsliced file picked from the printer's storage, which is never printed directly.
 
 The staged response includes `slicedByGateway` (source printer, presets used, duration). The dashboard shows it, together with the slicer's warnings such as "floating regions".
@@ -53,7 +54,7 @@ The staged response includes `slicedByGateway` (source printer, presets used, du
 
 | Code | HTTP | Meaning |
 |---|---|---|
-| `NOT_SLICED` | 422 | Unsliced file and `SLICER_DOCKER_IMAGE` is not set |
+| `NOT_SLICED` | 422 | Unsliced project or STL/OBJ/STEP model and `SLICER_DOCKER_IMAGE` is not set |
 | `SLICER_UNAVAILABLE` | 500 | `docker` could not be started |
 | `SLICE_TIMEOUT` | 504 | Exceeded `SLICER_TIMEOUT_MS` |
 | `SLICE_FAILED` | 500 | Bambu Studio reported an error (message included) |

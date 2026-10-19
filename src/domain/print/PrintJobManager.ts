@@ -17,6 +17,7 @@ import {
   suggestMapping,
   validateMapping,
 } from './amsMapping';
+import { isModelFile, uploadExtension } from './fileTypes';
 
 export type PrintJobStatus =
   | 'UPLOADING'
@@ -48,6 +49,7 @@ export interface GatewaySlice {
   sourcePrinter: string | null;
   printer: string;
   nozzle: string;
+  bedType: string | null;
   profiles: SliceProfiles | null;
   durationMs: number;
 }
@@ -165,16 +167,28 @@ export class PrintJobManager extends EventEmitter {
     await this.expireStaged();
 
     let { fileName, data, remotePath } = input;
-    let info: ThreeMfInfo;
+    let info: ThreeMfInfo | null = null;
     let slicedByGateway: GatewaySlice | null = null;
-    try {
-      info = parseThreeMf(data);
-    } catch (err) {
-      // Matched by name/code (see commandErrorResponse for why not instanceof)
-      const notSliced = err instanceof Error && err.name === 'ThreeMfParseError' && (err as { code?: string }).code === 'NOT_SLICED';
-      if (!notSliced || !this.slicer.isEnabled()) throw err;
+    const isModel = isModelFile(fileName);
+    if (isModel && !this.slicer.isEnabled()) {
+      throw new PrintJobError(
+        'File STL/OBJ/STEP cần được slice trước khi in: hãy bật slice tự động trên gateway (SLICER_DOCKER_IMAGE) hoặc slice trong Bambu Studio.',
+        422,
+        'NOT_SLICED'
+      );
+    }
+    if (!isModel) {
+      try {
+        info = parseThreeMf(data);
+      } catch (err) {
+        // Matched by name/code (see commandErrorResponse for why not instanceof)
+        const notSliced = err instanceof Error && err.name === 'ThreeMfParseError' && (err as { code?: string }).code === 'NOT_SLICED';
+        if (!notSliced || !this.slicer.isEnabled()) throw err;
+      }
+    }
 
-      const sliced = await this.slicer.slice(data, { nozzle: input.nozzle });
+    if (!info) {
+      const sliced = await this.slicer.slice(data, { nozzle: input.nozzle, extension: uploadExtension(fileName) });
       data = sliced.data;
       info = parseThreeMf(data);
       for (const plate of info.plates) plate.warnings = [...new Set([...plate.warnings, ...sliced.warnings])];
@@ -183,6 +197,7 @@ export class PrintJobManager extends EventEmitter {
         sourcePrinter: sliced.sourcePrinter,
         printer: TARGET_PRINTER,
         nozzle: sliced.nozzle,
+        bedType: sliced.bedType,
         profiles: sliced.profiles,
         durationMs: sliced.durationMs,
       };
@@ -587,9 +602,9 @@ export function describeUploadError(err: unknown): string {
   return `${reason}. Kiểm tra cổng FTPS ${env.BAMBU_FTP_PORT}, Access Code và chế độ LAN của máy in.`;
 }
 
-/** snoopy.3mf → snoopy.gcode.3mf */
+/** snoopy.3mf / snoopy.stl → snoopy.gcode.3mf */
 export function toSlicedFileName(fileName: string): string {
-  return fileName.replace(/(\.gcode)?\.3mf$/i, '') + '.gcode.3mf';
+  return fileName.replace(/(\.gcode)?\.3mf$|\.(stl|obj|step|stp)$/i, '') + '.gcode.3mf';
 }
 
 export function toRemoteName(fileName: string): string {

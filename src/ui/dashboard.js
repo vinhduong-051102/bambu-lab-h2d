@@ -1,4 +1,5 @@
 import { initPrintJob } from './printJob';
+import { initStudio } from './studio';
 import { initCameraZoom } from './cameraZoom';
 import { confirmDialog } from './confirmDialog';
 
@@ -1308,6 +1309,7 @@ export function initDashboard() {
   const cameraStatusTimer = setInterval(fetchCameraStatus, 5000);
 
   const disposePrintJob = initPrintJob({ showToast, addLog });
+  const disposeStudio = initStudio({ showToast, addLog });
   const disposeCameraZoom = initCameraZoom({
     viewport: document.getElementById('cameraViewport'),
     img: cameraImg,
@@ -1320,6 +1322,7 @@ export function initDashboard() {
   return () => {
     disposed = true;
     disposePrintJob();
+    disposeStudio();
     disposeCameraZoom();
     clearInterval(cameraStatusTimer);
     if (cameraRetryTimer) clearTimeout(cameraRetryTimer);

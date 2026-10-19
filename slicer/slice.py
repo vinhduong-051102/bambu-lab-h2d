@@ -2,7 +2,8 @@
 """
 Headless Bambu Studio slicing for the gateway (runs inside the slicer image).
 
-Slices every plate of an unsliced project .3mf into a .gcode.3mf for the target printer.
+Slices every plate of an unsliced project .3mf, or a bare STL/OBJ/STEP model, into a .gcode.3mf
+for the target printer.
 
 - A project already made for the target printer is sliced with its own embedded settings, so
   the user's process tweaks (supports, infill, ...) are kept.
@@ -26,6 +27,9 @@ import zipfile
 STUDIO_DIR = os.environ.get('BAMBU_STUDIO_DIR', '/opt/bambu-studio')
 PROFILES_DIR = os.path.join(STUDIO_DIR, 'resources', 'profiles', 'BBL')
 SUPPORTED_NOZZLES = ('0.2', '0.4', '0.6', '0.8')
+BED_TYPES = ('Textured PEI Plate', 'Cool Plate', 'Engineering Plate', 'High Temp Plate', 'Supertack Plate')
+# The H2D ships with the Textured PEI plate; the CLI would otherwise fall back to Cool Plate (35 °C bed for PLA)
+DEFAULT_BED_TYPE = 'Textured PEI Plate'
 
 
 def emit(outcome, code):
@@ -62,19 +66,25 @@ class PresetIndex:
         return [p for p in self.instantiable() if machine_name in (p.get('compatible_printers') or [])]
 
     def flatten(self, name):
-        seen = set()
+        path = []
 
         def resolve(n):
-            if n in seen:
-                raise ValueError(f'inherits cycle at {n}')
-            seen.add(n)
+            if n in path:
+                raise ValueError(f'inherits/include cycle at {n}')
+            path.append(n)
             preset = self.by_name[n]
             merged = dict(resolve(preset['inherits'])) if preset.get('inherits') else {}
+            # Since Studio 02.x the G-code (start/end/layer change/...) lives in "template" presets
+            # pulled in by `include`; dropping them falls back to fdm_machine_common's generic G-code
+            for included in as_list(preset.get('include')):
+                merged.update({k: v for k, v in resolve(included).items() if k not in ('name', 'instantiation')})
             merged.update(preset)
+            path.pop()
             return merged
 
         flat = resolve(name)
         flat.pop('inherits', None)
+        flat.pop('include', None)
         flat['name'] = name
         return flat
 
@@ -90,7 +100,7 @@ def as_list(value):
     return [] if value is None else [value]
 
 
-def pick_process(processes, machine_name, project_process):
+def pick_process(processes, machine_name, project_process, default_process=None):
     compatible = processes.compatible_with(machine_name)
     if not compatible:
         return None
@@ -98,8 +108,11 @@ def pick_process(processes, machine_name, project_process):
     layer = re.match(r'^(\d+\.\d+)mm', base)
     by_base = [p for p in compatible if strip_vendor_suffix(p['name']) == base]
     by_layer = [p for p in compatible if layer and p['name'].startswith(f'{layer.group(1)}mm')]
-    standard = [p for p in (by_layer or compatible) if 'Standard' in p['name']]
-    for group in (by_base, standard, by_layer, compatible):
+    layer_standard = [p for p in by_layer if 'Standard' in p['name']]
+    # The machine's own default (0.20mm Standard for the H2D), not the alphabetically first "Standard"
+    by_default = [p for p in compatible if p['name'] == default_process]
+    standard = [p for p in compatible if 'Standard' in p['name']]
+    for group in (by_base, layer_standard, by_layer, by_default, standard, compatible):
         if group:
             return sorted(group, key=lambda p: p['name'])[0]['name']
     return None
@@ -122,6 +135,12 @@ def pick_filament(filaments, machine_name, project_filament, filament_type):
 
 
 def read_project_settings(path):
+    # A bare model (STL/OBJ/STEP) carries no settings: it is always sliced with the H2D system presets.
+    # Studio centers it on the plate itself.
+    if not path.lower().endswith('.3mf'):
+        if not os.path.isfile(path):
+            raise OSError(f'No such file: {path}')
+        return {}
     with zipfile.ZipFile(path) as z:
         try:
             return json.loads(z.read('Metadata/project_settings.config'))
@@ -137,7 +156,8 @@ def retarget(project, printer, nozzle, workdir):
         fail('SLICER_PROFILE_NOT_FOUND', f'Không có profile máy "{machine_name}" trong Bambu Studio.')
 
     processes = PresetIndex('process')
-    process_name = pick_process(processes, machine_name, project.get('print_settings_id'))
+    default_process = machines.flatten(machine_name).get('default_print_profile')
+    process_name = pick_process(processes, machine_name, project.get('print_settings_id'), default_process)
     if not process_name:
         fail('SLICER_PROFILE_NOT_FOUND', f'Không tìm thấy profile process tương thích với {machine_name}.')
 
@@ -199,6 +219,7 @@ def main():
     parser.add_argument('--output', required=True)
     parser.add_argument('--printer', default='Bambu Lab H2D')
     parser.add_argument('--nozzle', default=None, help='Installed nozzle diameter, e.g. 0.4')
+    parser.add_argument('--bed-type', default=None, choices=BED_TYPES, help='Build plate on the printer; overrides the project')
     args = parser.parse_args()
 
     try:
@@ -217,6 +238,11 @@ def main():
         else:
             preset_args, profiles = retarget(project, args.printer, nozzle, workdir)
 
+        # An explicit plate always wins; a re-targeted project keeps its plate when it names one
+        project_bed = project.get('curr_bed_type') if project.get('curr_bed_type') in BED_TYPES else None
+        bed_type = args.bed_type or (project_bed if profiles is None else project_bed or DEFAULT_BED_TYPE)
+        bed_args = ['--curr-bed-type', bed_type] if bed_type and bed_type != project.get('curr_bed_type') else []
+
         outdir = os.path.join(workdir, 'out')
         os.makedirs(outdir)
         cmd = [
@@ -224,6 +250,7 @@ def main():
             '--debug', '1',
             '--datadir', os.path.join(workdir, 'data'),
             *preset_args,
+            *bed_args,
             '--slice', '0',
             '--outputdir', outdir,
             '--export-3mf', 'out.gcode.3mf',
@@ -258,6 +285,7 @@ def main():
             'printer': args.printer,
             'sourcePrinter': project_printer,
             'nozzle': nozzle,
+            'bedType': bed_type,
             'profiles': profiles,
             'warnings': warnings,
         }, 0)

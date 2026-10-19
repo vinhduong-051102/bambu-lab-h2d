@@ -68,6 +68,8 @@ export const GATEWAY_ROUTES: RouteDoc[] = [
   // 9. LAN Printing
   { method: 'POST', path: '/api/print/prepare', category: 'LAN Printing', description: 'Tải file .gcode.3mf (multipart, field "file") lên gateway & phân tích plate/filament', body: 'multipart/form-data: file=@part.gcode.3mf' },
   { method: 'POST', path: '/api/print/prepare-remote', category: 'LAN Printing', description: 'Phân tích file 3MF có sẵn trên máy in', body: '{"path": "/part.gcode.3mf"}' },
+  { method: 'GET', path: '/api/studio', category: 'LAN Printing', description: 'Cấu hình Bambu Studio nhúng + danh sách file Studio đã xuất (STUDIO_EXPORT_DIR)' },
+  { method: 'POST', path: '/api/studio/prepare', category: 'LAN Printing', description: 'Chuẩn bị in một file Bambu Studio đã xuất (như /api/print/prepare)', body: '{"name": "part.gcode.3mf"}' },
   { method: 'GET', path: '/api/print/staged/:id', category: 'LAN Printing', description: 'Thông tin file 3MF đã chuẩn bị (plate, filament)' },
   { method: 'GET', path: '/api/print/staged/:id/file', category: 'LAN Printing', description: 'Tải file .gcode.3mf đã chuẩn bị (dùng cho xem 3D đường in)' },
   { method: 'DELETE', path: '/api/print/staged/:id', category: 'LAN Printing', description: 'Hủy file 3MF đã chuẩn bị' },
