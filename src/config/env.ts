@@ -47,6 +47,12 @@ const envSchema = z.object({
   COMMAND_TIMEOUT_MS: z.coerce.number().default(10000),
   // Bambu Studio streamed to the browser (docker-compose.studio.yml), embedded in the dashboard
   STUDIO_URL: z.preprocess((val) => (typeof val === 'string' && val.trim() === '' ? undefined : val), z.string().url().optional()),
+  // Other addresses Studio is published at (comma-separated, e.g. a `tailscale serve` HTTPS port): the one on
+  // the host the dashboard was opened from wins over STUDIO_URL
+  STUDIO_ALT_URLS: z.preprocess(
+    (val) => (typeof val === 'string' ? val.split(',').map((s) => s.trim()).filter(Boolean) : []),
+    z.array(z.string().url())
+  ),
   // Host folder mounted at /imports in the Studio container: the dashboard drops models there to open in Studio
   STUDIO_IMPORT_DIR: z.preprocess((val) => (typeof val === 'string' && val.trim() === '' ? undefined : val), z.string().optional()),
 });

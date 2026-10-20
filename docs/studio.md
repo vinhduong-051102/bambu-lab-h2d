@@ -40,6 +40,21 @@ Studio and the gateway each keep their own MQTT connection to the printer.
 
 A frame is only a secure page when the page around it is one too. When the dashboard itself is opened over plain HTTP from another machine (`http://<IP>:3000`), the embedded stream can't decode video, so the card opens Studio in a new HTTPS tab instead. On the Docker host (`http://localhost:3000`) it is embedded as usual.
 
+When Studio runs on the gateway's machine, the card points it at the host the dashboard was opened with (LAN IP, Tailscale IP, `localhost`), keeping the port from `STUDIO_URL`.
+
+To embed it from other machines too, serve both over HTTPS with Tailscale (enable **HTTPS Certificates** in the Tailscale admin console first):
+
+```bash
+tailscale serve --bg 3000                               # https://<machine>.<tailnet>.ts.net → dashboard
+tailscale serve --bg --https=8443 http://localhost:3100 # https://<machine>.<tailnet>.ts.net:8443 → Studio
+```
+
+and add the Studio address to `.env`, so a dashboard opened from that name gets it:
+
+```env
+STUDIO_ALT_URLS=https://<machine>.<tailnet>.ts.net:8443/
+```
+
 ## Limits
 
 - **3D performance.** Without a GPU, the container renders OpenGL on the CPU. Large models rotate slowly. If you have an NVIDIA GPU, see the linuxserver docs for passing it to the container.

@@ -104,6 +104,32 @@ describe('Studio & printer files API', () => {
       expect(res.json()).toEqual({ enabled: true, url: 'https://192.168.1.10:3101/', importsEnabled: true });
     });
 
+    it('points a Studio on this machine at the host the dashboard was opened with', async () => {
+      env.STUDIO_URL = 'https://localhost:3101/';
+      const viaTailscale = await app.inject({ method: 'GET', url: 'http://100.64.0.5:3000/api/studio' });
+      expect(viaTailscale.json().url).toBe('https://100.64.0.5:3101/');
+      const local = await app.inject({ method: 'GET', url: 'http://localhost:3000/api/studio' });
+      expect(local.json().url).toBe('https://localhost:3101/');
+    });
+
+    it('prefers a STUDIO_ALT_URLS entry on the host the dashboard was opened with', async () => {
+      env.STUDIO_URL = 'https://localhost:3101/';
+      env.STUDIO_ALT_URLS = ['https://pc.example.ts.net:8443/'];
+      try {
+        const viaServe = await app.inject({ method: 'GET', url: 'https://pc.example.ts.net/api/studio' });
+        expect(viaServe.json().url).toBe('https://pc.example.ts.net:8443/');
+        const viaIp = await app.inject({ method: 'GET', url: 'http://100.64.0.5:3000/api/studio' });
+        expect(viaIp.json().url).toBe('https://100.64.0.5:3101/');
+      } finally {
+        env.STUDIO_ALT_URLS = [];
+      }
+    });
+
+    it('keeps a Studio on another machine as configured', async () => {
+      const res = await app.inject({ method: 'GET', url: 'http://100.64.0.5:3000/api/studio' });
+      expect(res.json().url).toBe('https://192.168.1.10:3101/');
+    });
+
     it('stores the model where Studio sees it as /imports, never overwriting', async () => {
       const first = await send('Bracket.stl', 'one');
       expect(first.statusCode).toBe(201);

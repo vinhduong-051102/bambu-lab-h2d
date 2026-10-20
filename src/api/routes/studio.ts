@@ -1,4 +1,5 @@
 import { promises as fs } from 'fs';
+import os from 'os';
 import path from 'path';
 import { env } from '../../config/env';
 import { handler, json } from '../http';
@@ -30,11 +31,40 @@ async function freeName(dir: string, name: string): Promise<string> {
   }
 }
 
+/** Whether a host name or IP is this machine, i.e. Studio's container runs next to the gateway */
+function isThisMachine(hostname: string): boolean {
+  const host = hostname.replace(/^\[|\]$/g, '').toLowerCase();
+  if (host === 'localhost' || host === os.hostname().toLowerCase()) return true;
+  return Object.values(os.networkInterfaces()).some((addrs) => addrs?.some((a) => a.address.toLowerCase() === host));
+}
+
+/**
+ * STUDIO_URL as seen from the browser: a STUDIO_ALT_URLS entry on the host the dashboard was opened
+ * with, else (when Studio runs on this machine) STUDIO_URL pointed at that host, so it works over LAN,
+ * Tailscale or localhost alike instead of only the address written in .env.
+ */
+function studioUrlFor(request: Request): string | null {
+  if (!env.STUDIO_URL) return null;
+  const studio = new URL(env.STUDIO_URL);
+  let requestHost: string;
+  try {
+    const host = request.headers.get('x-forwarded-host') ?? request.headers.get('host') ?? new URL(request.url).host;
+    requestHost = new URL(`http://${host.split(',')[0].trim()}`).hostname;
+  } catch {
+    return env.STUDIO_URL;
+  }
+  const alt = env.STUDIO_ALT_URLS.find((url) => new URL(url).hostname === requestHost);
+  if (alt) return alt;
+  if (!requestHost || requestHost === studio.hostname || !isThisMachine(studio.hostname)) return env.STUDIO_URL;
+  studio.hostname = requestHost;
+  return studio.toString();
+}
+
 // GET /api/studio - embedded Bambu Studio settings for the dashboard card
-export const getStudio = handler(() =>
+export const getStudio = handler(({ request }) =>
   json({
     enabled: !!env.STUDIO_URL,
-    url: env.STUDIO_URL ?? null,
+    url: studioUrlFor(request),
     importsEnabled: !!importDir(),
   })
 );
