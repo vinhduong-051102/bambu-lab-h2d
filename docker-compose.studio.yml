@@ -22,6 +22,8 @@ services:
       - ./data/studio/imports:/imports
       # Studio's settings, presets and login survive restarts
       - ./data/studio/config:/config
+      # Restart Studio when its window is closed (the stock autostart only launches it once)
+      - ./studio/labwc-autostart:/config/.config/labwc/autostart:ro
     ports:
       # HTTP: fine on the Docker host itself (localhost counts as a secure context)
       - "3100:3000"

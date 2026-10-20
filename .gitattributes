@@ -1,0 +1,2 @@
+# Mounted into the Bambu Studio container and run by sh: must keep LF line endings
+studio/** text eol=lf

@@ -1,0 +1,20 @@
+# Session autostart for the Bambu Studio container (mounted over ~/.config/labwc/autostart).
+# The stock one starts Studio once, so closing its window left an empty desktop with no way
+# back. Here Studio is started again a moment after it exits, whether it was closed or crashed.
+
+# Enable dark mode if defined
+if [ "${DARK_MODE}" = "true" ] && [ ! -f "$HOME/.config/gtk-3.0/settings.ini" ]; then
+  mkdir -p $HOME/.config/gtk-3.0
+  echo '[Settings]' > $HOME/.config/gtk-3.0/settings.ini
+  echo 'gtk-application-prefer-dark-theme=1' >> $HOME/.config/gtk-3.0/settings.ini
+elif [ "${DARK_MODE}" != "true" ] && [ -f "$HOME/.config/gtk-3.0/settings.ini" ]; then
+  rm -f "$HOME/.config/gtk-3.0/settings.ini"
+fi
+
+gio mime x-scheme-handler/http firefox.desktop
+gio mime x-scheme-handler/https firefox.desktop
+
+while true; do
+  /opt/bambustudio/AppRun
+  sleep 3
+done
