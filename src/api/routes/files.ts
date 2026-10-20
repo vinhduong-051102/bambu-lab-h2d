@@ -1,6 +1,6 @@
 import { z } from 'zod';
-import { PrintJobManager } from '../../domain/print/PrintJobManager';
 import type { PrinterFileEntry } from '../../bambu/BambuFtpClient';
+import { printerStorage } from '../../bambu/printerStorage';
 import { handler, json } from '../http';
 
 // Bambu Studio uploads to /cache, OrcaSlicer and this gateway to the FTPS root
@@ -23,7 +23,7 @@ const ftpError = (err: unknown) =>
 
 // GET /api/files - files on the printer storage (FTPS root and /cache)
 export const getFiles = handler(async () => {
-  const storage = PrintJobManager.getInstance().storage();
+  const storage = printerStorage();
   const files: (PrinterFileEntry & { printable: boolean })[] = [];
 
   for (const dir of LIST_DIRECTORIES) {
@@ -49,13 +49,8 @@ export const deleteFile = handler<{ id: string }>(async ({ params }) => {
     return json({ success: false, error: 'INVALID_PAYLOAD', message: 'Invalid file path', details: parsed.error.issues }, 400);
   }
 
-  const active = PrintJobManager.getInstance().getActiveJob();
-  if (active?.remotePath === parsed.data) {
-    return json({ success: false, error: 'FILE_IN_USE', message: 'File đang được dùng cho lệnh in hiện tại.' }, 409);
-  }
-
   try {
-    await PrintJobManager.getInstance().storage().remove(parsed.data);
+    await printerStorage().remove(parsed.data);
     return json({ success: true, path: parsed.data });
   } catch (err) {
     return ftpError(err);

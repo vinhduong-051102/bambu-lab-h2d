@@ -3,22 +3,6 @@ import { trayIndexOf } from '../../domain/ams/amsTrays';
 // Stored on globalThis so the custom server and Next.js route bundles share one sequence counter
 const globalForSequence = globalThis as unknown as { __bambuSequenceId?: number };
 
-export interface ProjectFilePrintOptions {
-  /** Path on the printer's FTPS root, e.g. "/my_part.gcode.3mf" */
-  remotePath: string;
-  plateIndex: number;
-  gcodeMd5: string;
-  subtaskName: string;
-  amsMapping: number[];
-  amsMapping2: { ams_id: number; slot_id: number }[];
-  useAms: boolean;
-  timelapse: boolean;
-  bedLeveling: boolean;
-  flowCalibration: boolean;
-  vibrationCalibration: boolean;
-  layerInspect: boolean;
-}
-
 export class BambuCommandBuilder {
   private static getNextSequenceId(): string {
     globalForSequence.__bambuSequenceId = ((globalForSequence.__bambuSequenceId ?? 2000) + 1) % 100000;
@@ -30,40 +14,6 @@ export class BambuCommandBuilder {
       pushing: {
         sequence_id: '0',
         command: 'pushall',
-      },
-    };
-  }
-
-  /**
-   * print.project_file: prints a sliced plate of a 3MF already stored on the printer.
-   * H2-series printers address FTPS-root files as `ftp:///<path>` (three slashes, empty host);
-   * the older X1/P1/A1 form `file:///sdcard/...` is not used here.
-   */
-  public static buildProjectFilePayload(options: ProjectFilePrintOptions): Record<string, unknown> {
-    return {
-      print: {
-        sequence_id: this.getNextSequenceId(),
-        command: 'project_file',
-        param: `Metadata/plate_${options.plateIndex}.gcode`,
-        url: `ftp:///${options.remotePath.replace(/^\/+/, '')}`,
-        file: '',
-        md5: options.gcodeMd5,
-        bed_type: 'auto',
-        timelapse: options.timelapse,
-        // Both spellings are in circulation (OpenBambuAPI vs. slicer/HA integrations)
-        bed_leveling: options.bedLeveling,
-        bed_levelling: options.bedLeveling,
-        flow_cali: options.flowCalibration,
-        vibration_cali: options.vibrationCalibration,
-        layer_inspect: options.layerInspect,
-        use_ams: options.useAms,
-        ams_mapping: options.amsMapping,
-        ams_mapping2: options.amsMapping2,
-        subtask_name: options.subtaskName,
-        profile_id: '0',
-        project_id: '0',
-        subtask_id: '0',
-        task_id: '0',
       },
     };
   }

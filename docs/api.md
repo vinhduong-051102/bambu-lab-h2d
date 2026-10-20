@@ -101,61 +101,15 @@ Set chamber fan speed. Body: `{ "speed": 30 }` (Validation: 0..100).
 
 ---
 
-## 5. LAN Printing (3MF → FTPS → `print.project_file`)
+## 5. Printer Files & Bambu Studio
 
-Flow: **prepare** (upload + inspect) → **start** (FTPS upload to printer + MQTT command) → follow the job
-via `GET /api/print/jobs/:id` or the `print.job` WebSocket event. Status only reaches `PRINTING` when the
-printer itself reports `gcode_state: RUNNING`.
+Prints are sliced and started from the embedded Bambu Studio (see [studio.md](studio.md)); the gateway no longer uploads or starts print jobs.
 
-Requirements on the printer: LAN mode, and **Developer Mode** on firmware that requires signed MQTT
-commands (detected from `print.fun` bit `0x20000000`; the gateway refuses with `412 DEVELOPER_MODE_REQUIRED`).
-Commands also require `BAMBU_REAL_PRINTER=true`.
+### `GET /api/studio`
+`{ enabled, url, importsEnabled }`: settings for the dashboard's Bambu Studio card.
 
-### `POST /api/print/prepare`
-`multipart/form-data` with field `file`: a sliced `.gcode.3mf` (Bambu Studio → *Export plate sliced file*), or, with gateway slicing enabled (see [slicing.md](slicing.md)), an unsliced `.3mf` project or an `.stl`, `.obj`, `.step`, `.stp` model. Other types: `415 UNSUPPORTED_FILE_TYPE`.
-Returns `201 { staged }` with plates (`Metadata/plate_N.gcode`), the filaments each plate uses (0-based project
-index, type, colour, slicer extruder from `filament_maps`: 1 = left, 2 = right), live AMS trays and a suggested mapping.
-Errors: `415 UNSUPPORTED_FILE_TYPE`, `422 NOT_SLICED` / `INVALID_3MF`.
-
-### `POST /api/print/prepare-remote`
-Body: `{ "path": "/part.gcode.3mf" }`. Downloads a 3MF already on the printer (FTPS) and inspects it; printing it skips the upload.
-
-### `GET /api/print/staged/:id` · `DELETE /api/print/staged/:id`
-Re-read or discard a prepared file (prepared files expire after 2 hours).
-
-### `GET /api/print/staged/:id/file`
-Returns the prepared `.gcode.3mf` as `application/octet-stream`. The dashboard's 3D toolpath preview uses it: the browser unzips `Metadata/plate_N.gcode`, parses it and renders it with three.js, so the gateway does no extra work.
-
-### `POST /api/print/start`
-```json
-{
-  "stagedId": "…",
-  "plateIndex": 1,
-  "amsMapping": { "0": 0, "2": 6 },
-  "options": { "bedLeveling": true, "flowCalibration": true, "vibrationCalibration": true, "layerInspect": true, "timelapse": false }
-}
-```
-`amsMapping` maps each used project filament index to an absolute tray: `ams_id * 4 + slot` for 4-slot AMS,
-128–135 for AMS HT, `254` for the external spool. Returns `202 { job }`.
-Errors: `400 INVALID_AMS_MAPPING` (unmapped filament, missing or empty tray; `details.errors`),
-`403 TEST_MODE_RESTRICTED`, `409 PRINTER_BUSY` (not IDLE/FINISH/FAILED), `409 PRINT_JOB_IN_PROGRESS`,
-`412 DEVELOPER_MODE_REQUIRED`, `503 PRINTER_OFFLINE`.
-
-MQTT payload sent (H2-series form):
-```json
-{ "print": { "command": "project_file", "param": "Metadata/plate_1.gcode", "url": "ftp:///part.gcode.3mf",
-  "md5": "<plate gcode md5>", "bed_type": "auto", "use_ams": true,
-  "ams_mapping": [0, -1, 6, -1],
-  "ams_mapping2": [{"ams_id":0,"slot_id":0},{"ams_id":255,"slot_id":255},{"ams_id":1,"slot_id":2},{"ams_id":255,"slot_id":255}],
-  "bed_leveling": true, "flow_cali": true, "vibration_cali": true, "layer_inspect": true, "timelapse": false, "…": "…" } }
-```
-`ams_mapping` has one entry per project filament (`-1` = unused).
-
-### `GET /api/print/jobs` · `GET /api/print/jobs/:id`
-Job statuses: `UPLOADING → UPLOADED → SENT → ACCEPTED → PREPARING → PRINTING`, or `FAILED` (FTPS error,
-`result: fail` from the printer, `gcode_state: FAILED`/`print_error`, with new HMS codes) or `TIMEOUT`
-(no answer within 90 s / no start within 10 min). The list also returns the printer snapshot
-(`gcodeState`, `fun`, `developerModeRequired`).
+### `POST /api/studio/import`
+`multipart/form-data` with field `file` (`.3mf`, `.stl`, `.obj`, `.step`, `.stp`). Saves it to `STUDIO_IMPORT_DIR`, seen as `/imports` inside Studio; an existing name gets a ` (2)` suffix. Returns `{ success, name, studioPath }`.
 
 ### `GET /api/files`
 Files in the printer's FTPS root and `/cache` (`printable: true` for `.3mf`).
@@ -200,4 +154,3 @@ Connect to `ws://HOST:PORT/ws` to receive event stream:
 - `command.started`
 - `command.completed`
 - `command.failed`
-- `print.job` (print job snapshot on every status/progress change)

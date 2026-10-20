@@ -65,17 +65,9 @@ export const GATEWAY_ROUTES: RouteDoc[] = [
   { method: 'GET', path: '/api/files', category: 'Audit & Files', description: 'Danh sách file trên bộ nhớ máy in (FTPS / và /cache)', exampleUrl: '/api/files' },
   { method: 'DELETE', path: '/api/files/:path', category: 'Audit & Files', description: 'Xóa file trên máy in (path URL-encoded, vd %2Fpart.gcode.3mf)' },
 
-  // 9. LAN Printing
-  { method: 'POST', path: '/api/print/prepare', category: 'LAN Printing', description: 'Tải file .gcode.3mf (multipart, field "file") lên gateway & phân tích plate/filament', body: 'multipart/form-data: file=@part.gcode.3mf' },
-  { method: 'POST', path: '/api/print/prepare-remote', category: 'LAN Printing', description: 'Phân tích file 3MF có sẵn trên máy in', body: '{"path": "/part.gcode.3mf"}' },
-  { method: 'GET', path: '/api/studio', category: 'LAN Printing', description: 'Cấu hình Bambu Studio nhúng + danh sách file Studio đã xuất (STUDIO_EXPORT_DIR)' },
-  { method: 'POST', path: '/api/studio/prepare', category: 'LAN Printing', description: 'Chuẩn bị in một file Bambu Studio đã xuất (như /api/print/prepare)', body: '{"name": "part.gcode.3mf"}' },
-  { method: 'GET', path: '/api/print/staged/:id', category: 'LAN Printing', description: 'Thông tin file 3MF đã chuẩn bị (plate, filament)' },
-  { method: 'GET', path: '/api/print/staged/:id/file', category: 'LAN Printing', description: 'Tải file .gcode.3mf đã chuẩn bị (dùng cho xem 3D đường in)' },
-  { method: 'DELETE', path: '/api/print/staged/:id', category: 'LAN Printing', description: 'Hủy file 3MF đã chuẩn bị' },
-  { method: 'POST', path: '/api/print/start', category: 'LAN Printing', description: 'Upload FTPS + gửi print.project_file, trả về print job', body: '{"stagedId": "...", "plateIndex": 1, "amsMapping": {"0": 0}}' },
-  { method: 'GET', path: '/api/print/jobs', category: 'LAN Printing', description: 'Danh sách lệnh in & trạng thái xác nhận từ máy in', exampleUrl: '/api/print/jobs' },
-  { method: 'GET', path: '/api/print/jobs/:id', category: 'LAN Printing', description: 'Chi tiết một lệnh in' },
+  // 9. Bambu Studio (embedded)
+  { method: 'GET', path: '/api/studio', category: 'Bambu Studio', description: 'Cấu hình Bambu Studio nhúng trong dashboard (STUDIO_URL, STUDIO_IMPORT_DIR)', exampleUrl: '/api/studio' },
+  { method: 'POST', path: '/api/studio/import', category: 'Bambu Studio', description: 'Gửi model từ máy tính vào thư mục /imports của Bambu Studio', body: 'multipart/form-data: file=@part.stl' },
 
   // 10. Real-time WebSocket Stream
   { method: 'GET (WS)', path: '/ws', category: 'Real-time WebSocket', description: 'Kết nối WebSocket đẩy dữ liệu telemetry & lệnh thời gian thực', exampleUrl: 'ws://localhost:3000/ws' },

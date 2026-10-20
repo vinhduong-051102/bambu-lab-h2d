@@ -75,15 +75,6 @@ export class CapabilityRegistry {
         status: 'SUPPORTED',
         description: 'Gửi lệnh hủy tác vụ in qua MQTT LAN Protocol (command: stop)',
       },
-      {
-        id: 'print.start',
-        name: 'Bắt đầu tác vụ in mới (Start Print)',
-        category: 'print',
-        read: false,
-        write: true,
-        status: 'SUPPORTED',
-        description: 'Upload 3MF đã slice qua FTPS rồi gửi print.project_file (url ftp:///, ams_mapping + ams_mapping2). Yêu cầu Developer Mode trên firmware có xác thực MQTT.',
-      },
 
       // Temperature Read & Control
       {
@@ -201,15 +192,6 @@ export class CapabilityRegistry {
         write: false,
         status: 'SUPPORTED',
         description: 'FTPS cổng 990 (implicit TLS, user bblp, mật khẩu = Access Code)',
-      },
-      {
-        id: 'file.upload',
-        name: 'Tải file Gcode/3MF lên máy in',
-        category: 'file',
-        read: false,
-        write: true,
-        status: 'SUPPORTED',
-        description: 'Upload qua FTPS cổng 990 vào thư mục gốc, kiểm tra kích thước sau khi tải',
       },
     ];
 

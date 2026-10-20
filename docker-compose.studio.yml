@@ -1,7 +1,7 @@
 # Bambu Studio streamed to the browser, embedded in the dashboard (see docs/studio.md).
 #   docker compose -f docker-compose.studio.yml up -d
 # Then in .env: STUDIO_URL=https://<this host's LAN IP>:3101/ (or http://localhost:3100/ for this machine only)
-# and STUDIO_EXPORT_DIR=./data/studio/exports
+# and STUDIO_IMPORT_DIR=./data/studio/imports
 services:
   bambustudio:
     image: lscr.io/linuxserver/bambustudio:latest
@@ -15,11 +15,13 @@ services:
       # Basic auth on the stream; strongly recommended when anyone else is on the network
       - CUSTOM_USER=${STUDIO_USER:-}
       - PASSWORD=${STUDIO_PASSWORD:-}
+      # Files uploaded through the stream (drag & drop / Selkies side panel) land here instead of ~/Desktop
+      - FILE_MANAGER_PATH=/imports
     volumes:
+      # Shared with the gateway (STUDIO_IMPORT_DIR): models sent from the dashboard, opened in Studio via File → Import
+      - ./data/studio/imports:/imports
       # Studio's settings, presets and login survive restarts
       - ./data/studio/config:/config
-      # Shared with the gateway (STUDIO_EXPORT_DIR): export sliced files here to print them from the dashboard
-      - ./data/studio/exports:/exports
     ports:
       # HTTP: fine on the Docker host itself (localhost counts as a secure context)
       - "3100:3000"

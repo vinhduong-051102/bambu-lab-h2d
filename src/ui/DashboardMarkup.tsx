@@ -593,6 +593,10 @@ export function DashboardMarkup() {
                 <h2>Bambu Studio</h2>
               </div>
               <div className="studio-toolbar">
+                <label className="btn-ams-action studio-import-btn" id="studioImportLabel" hidden>
+                  <input type="file" id="studioImportInput" accept=".3mf,.stl,.obj,.step,.stp" multiple hidden />
+                  📤 Gửi file vào Studio
+                </label>
                 <button type="button" className="btn-ams-action" id="btnStudioToggle">▶ Mở Studio</button>
                 <button type="button" className="btn-ams-action" id="btnStudioFullscreen" hidden>⛶ Toàn màn hình</button>
                 <a className="btn-ams-action" id="studioNewTab" target="_blank" rel="noopener noreferrer">↗ Tab mới</a>
@@ -602,117 +606,14 @@ export function DashboardMarkup() {
             <div className="studio-frame-wrap" id="studioFrameWrap" hidden>
               <iframe id="studioFrame" className="studio-frame" title="Bambu Studio" allow="clipboard-read; clipboard-write; fullscreen" />
             </div>
-            <div className="print-muted" id="studioIdle">
-              Bambu Studio chạy trong container riêng và hiển thị qua trình duyệt. Mở Studio để chỉnh model, slice, rồi xuất file
-              (<b>File → Export → Export plate sliced file</b>) vào thư mục <code>/exports</code>.
-            </div>
-
-            <div className="studio-exports" id="studioExports" hidden>
-              <div className="print-remote-header">
-                <span>File Studio đã xuất</span>
-                <button type="button" className="btn-ams-action" id="btnStudioRefresh">🔄 Làm mới</button>
-              </div>
-              <ul className="print-remote-list" id="studioExportList">
-                <li className="print-muted">Đang tải…</li>
-              </ul>
+            <div className="studio-note studio-import-status" id="studioImportStatus" hidden />
+            <div className="studio-note" id="studioIdle">
+              Bambu Studio chạy trong container riêng nên không thấy ổ đĩa máy bạn. Bấm <b>📤 Gửi file vào Studio</b>, rồi trong
+              Studio mở <b>File → Import</b> và chọn thư mục <code>/imports</code>. Slice và in trực tiếp từ Studio
+              (<b>Print plate</b>); Studio cần được kết nối với máy in.
             </div>
           </section>
 
-          {/* LAN Print Job Card: 3MF upload → FTPS → print.project_file */}
-          <section className="card print-card" id="printCard">
-            <div className="card-header">
-              <div className="header-title">
-                <svg className="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                  <polyline points="6 9 6 2 18 2 18 9" />
-                  <path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2" />
-                  <rect x="6" y="14" width="12" height="8" />
-                </svg>
-                <h2>In File 3MF Qua LAN</h2>
-              </div>
-              <div className="quick-links">
-                <a href="/api/print/jobs" target="_blank" className="api-link">GET /api/print/jobs</a>
-                <a href="/api/files" target="_blank" className="api-link">GET /api/files</a>
-              </div>
-            </div>
-
-            <div className="print-layout">
-              <div className="print-step">
-                <h3 className="print-step-title">1. Chọn file</h3>
-                <label className="print-dropzone" htmlFor="printFileInput">
-                  <input type="file" id="printFileInput" accept=".3mf,.stl,.obj,.step,.stp" />
-                  <span className="print-dropzone-main" id="printFileLabel">Chọn file .3mf, .stl, .obj hoặc .step từ máy tính</span>
-                  <span className="print-dropzone-sub">File .gcode.3mf in ngay; project chưa slice và model STL/OBJ/STEP được gateway slice cho H2D</span>
-                </label>
-                <div className="print-upload-progress" id="printPrepareProgress" hidden>
-                  <div className="print-progress-track"><div className="print-progress-fill" id="printPrepareBar" /></div>
-                  <span id="printPrepareText">0%</span>
-                </div>
-
-                <div className="print-remote">
-                  <div className="print-remote-header">
-                    <span>Hoặc chọn file có sẵn trên máy in</span>
-                    <button type="button" className="btn-ams-action" id="btnPrintListFiles">🔄 Tải danh sách</button>
-                  </div>
-                  <ul className="print-remote-list" id="printRemoteList">
-                    <li className="print-muted">Bấm “Tải danh sách” để đọc bộ nhớ máy in qua FTPS.</li>
-                  </ul>
-                </div>
-              </div>
-
-              <div className="print-step" id="printConfigStep">
-                <h3 className="print-step-title">2. Kiểm tra &amp; ánh xạ nhựa</h3>
-                <div className="print-muted" id="printConfigEmpty">Chưa có file nào được phân tích.</div>
-                <div id="printConfig" hidden>
-                  <div className="print-file-summary" id="printFileSummary" />
-                  <div className="print-plate-row">
-                    <img id="printPlateThumb" className="print-plate-thumb" alt="Plate preview" hidden />
-                    <div className="print-plate-meta">
-                      <label className="print-field-label" htmlFor="printPlateSelect">Plate</label>
-                      <select id="printPlateSelect" className="print-select" />
-                      <div className="print-muted" id="printPlateInfo" />
-                      <button type="button" className="btn-ams-action btn-print-preview" id="btnPrintPreview3d">🧊 Xem 3D đường in</button>
-                    </div>
-                  </div>
-                  <table className="print-mapping-table">
-                    <thead>
-                      <tr><th>Filament</th><th>Đầu phun (slice)</th><th>Khay AMS</th></tr>
-                    </thead>
-                    <tbody id="printMappingBody" />
-                  </table>
-                  <div className="print-options">
-                    <label><input type="checkbox" id="printOptBedLeveling" defaultChecked /> Cân bàn tự động</label>
-                    <label><input type="checkbox" id="printOptFlowCali" defaultChecked /> Hiệu chỉnh flow</label>
-                    <label><input type="checkbox" id="printOptVibrationCali" defaultChecked /> Hiệu chỉnh rung</label>
-                    <label><input type="checkbox" id="printOptLayerInspect" defaultChecked /> Kiểm tra lớp đầu</label>
-                    <label><input type="checkbox" id="printOptTimelapse" /> Timelapse</label>
-                  </div>
-                  <ul className="print-warnings" id="printWarnings" hidden />
-                  <div className="print-actions">
-                    <button type="button" className="btn-ams-action" id="btnPrintDiscard">Bỏ file</button>
-                    <button type="button" className="btn-print-start" id="btnPrintStart">▶ Bắt đầu in</button>
-                  </div>
-                </div>
-              </div>
-
-              <div className="print-step">
-                <h3 className="print-step-title">3. Trạng thái lệnh in</h3>
-                <div className="print-muted" id="printJobEmpty">Chưa có lệnh in nào.</div>
-                <div id="printJob" hidden>
-                  <div className="print-job-head">
-                    <span className="print-job-badge" id="printJobBadge">—</span>
-                    <span className="print-job-file" id="printJobFile" />
-                  </div>
-                  <div className="print-job-message" id="printJobMessage" />
-                  <div className="print-upload-progress" id="printJobUpload" hidden>
-                    <div className="print-progress-track"><div className="print-progress-fill" id="printJobUploadBar" /></div>
-                    <span id="printJobUploadText">0%</span>
-                  </div>
-                  <ul className="print-job-codes" id="printJobCodes" hidden />
-                  <ol className="print-job-history" id="printJobHistory" />
-                </div>
-              </div>
-            </div>
-          </section>
           {/* AMS System Card */}
           <section className="card ams-card">
             <div className="card-header">

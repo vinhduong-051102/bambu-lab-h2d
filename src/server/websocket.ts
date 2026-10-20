@@ -2,7 +2,6 @@ import type { IncomingMessage } from 'http';
 import type { Duplex } from 'stream';
 import { WebSocket, WebSocketServer } from 'ws';
 import { PrinterService } from '../domain/PrinterService';
-import { PrintJobManager } from '../domain/print/PrintJobManager';
 import { logger } from '../logger/logger';
 
 /**
@@ -47,9 +46,6 @@ export function createWebSocketHub(printerService: PrinterService) {
   commandService.on('command.started', (data) => broadcast('command.started', data));
   commandService.on('command.completed', (data) => broadcast('command.completed', data));
   commandService.on('command.failed', (data) => broadcast('command.failed', data));
-
-  // 4. Print job lifecycle (upload progress, printer acknowledgement, start/failure)
-  PrintJobManager.getInstance().on('job.updated', (job) => broadcast('print.job', job));
 
   wss.on('connection', (socket: WebSocket, req: IncomingMessage) => {
     logger.info({ remoteAddress: req.socket.remoteAddress }, 'WebSocket client connected');

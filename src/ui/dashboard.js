@@ -1,4 +1,3 @@
-import { initPrintJob } from './printJob';
 import { initStudio } from './studio';
 import { initCameraZoom } from './cameraZoom';
 import { confirmDialog } from './confirmDialog';
@@ -1097,10 +1096,6 @@ export function initDashboard() {
         const message = JSON.parse(event.data);
 
         switch (message.type) {
-          case 'print.job': {
-            window.dispatchEvent(new CustomEvent('gateway:print-job', { detail: message.data }));
-            break;
-          }
           case 'printer.state': {
             if (message.data) {
               updateDashboardUI(message.data);
@@ -1308,7 +1303,6 @@ export function initDashboard() {
   }
   const cameraStatusTimer = setInterval(fetchCameraStatus, 5000);
 
-  const disposePrintJob = initPrintJob({ showToast, addLog });
   const disposeStudio = initStudio({ showToast, addLog });
   const disposeCameraZoom = initCameraZoom({
     viewport: document.getElementById('cameraViewport'),
@@ -1321,7 +1315,6 @@ export function initDashboard() {
 
   return () => {
     disposed = true;
-    disposePrintJob();
     disposeStudio();
     disposeCameraZoom();
     clearInterval(cameraStatusTimer);

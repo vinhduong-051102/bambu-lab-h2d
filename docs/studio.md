@@ -1,8 +1,8 @@
 # Embedded Bambu Studio
 
-The dashboard can embed the real Bambu Studio app. It runs in its own container ([linuxserver/bambustudio](https://docs.linuxserver.io/images/docker-bambustudio/)) and is streamed to the browser. You get every Studio feature (painting, supports, cutting, calibration…). Files you export from it show up on the dashboard and go through the normal print flow: plate, AMS mapping, upload over FTPS, start.
+The dashboard embeds the real Bambu Studio app. It runs in its own container ([linuxserver/bambustudio](https://docs.linuxserver.io/images/docker-bambustudio/)) and is streamed to the browser. Models are sliced and printed **from Studio itself**; the gateway only streams it and sends files into it. The gateway does not upload or start print jobs.
 
-Setting this up is optional. Without it, the **Bambu Studio** card stays hidden.
+Without this setup, the **Bambu Studio** card stays hidden.
 
 ## Setup
 
@@ -10,24 +10,29 @@ Setting this up is optional. Without it, the **Bambu Studio** card stays hidden.
    ```bash
    docker compose -f docker-compose.studio.yml up -d
    ```
-   Studio is then served on port **3100** (HTTP) and **3101** (HTTPS, self-signed certificate). Its settings live in `data/studio/config`, and exports go to `data/studio/exports`.
+   Studio is then served on port **3100** (HTTP) and **3101** (HTTPS, self-signed certificate). Its settings live in `data/studio/config`, and files sent to it go to `data/studio/imports`.
 2. Add the following to `.env`, then restart the gateway:
    ```env
    STUDIO_URL=https://<gateway host LAN IP>:3101/
-   STUDIO_EXPORT_DIR=./data/studio/exports
+   STUDIO_IMPORT_DIR=./data/studio/imports
+   STUDIO_USER=admin
+   STUDIO_PASSWORD=<password>
    ```
-   `STUDIO_URL` is loaded by the **browser**, so use an address every dashboard user can reach. Use HTTPS: browsers only let the stream decode video on secure pages, and `localhost` is the only plain-HTTP exception. `http://localhost:3100/` is enough if the dashboard is only used on this machine.
-   The first time, open the Studio URL in its own tab (**↗ Tab mới**) and accept the self-signed certificate warning; after that the embedded frame loads too.
-3. Optional but recommended on a shared network: protect the stream with basic auth. Set `STUDIO_USER` and `STUDIO_PASSWORD` in the shell or in a `.env` next to the compose file before `up`.
+   - `STUDIO_URL` is loaded by the **browser**, so use an address every dashboard user can reach. Use HTTPS: browsers only let the stream decode video on secure pages, and `localhost` is the only plain-HTTP exception. `http://localhost:3100/` is enough if the dashboard is only used on this machine.
+   - `STUDIO_USER` and `STUDIO_PASSWORD` turn on basic auth for the stream. Docker Compose reads them from the same `.env`. Run `docker compose -f docker-compose.studio.yml up -d` again after you change them.
+3. The first time, open the Studio URL in its own tab (**↗ Tab mới**) and accept the self-signed certificate warning, then log in. After that the embedded frame loads too.
 
 ## Use
 
-1. On the dashboard, open **Bambu Studio → ▶ Mở Studio**. You can also use **↗ Tab mới** for a full browser tab, or **⛶ Toàn màn hình**.
-2. In Studio, prepare and slice the model, then **File → Export → Export plate sliced file** into the `/exports` folder.
-   - You can also export an unsliced project `.3mf`. The gateway slices it (see [slicing.md](slicing.md)).
-3. The file appears under **File Studio đã xuất** within about 10 seconds. Click **In** to continue in the print card at step 2: check the plate and the AMS mapping, then start.
+1. **Send the model in.** Studio runs in a container, so its file dialogs can't see your computer. On the dashboard, use **📤 Gửi file vào Studio** to send `.3mf`, `.stl`, `.obj`, `.step` or `.stp` files. They are saved to `/imports` inside Studio, and an existing name gets a ` (2)` suffix. You can also drag files onto the Studio stream; those land in `/imports` too.
+2. **Open it in Studio:** **▶ Mở Studio**, then **File → Import** (or **Open project** for a `.3mf`), and choose the `/imports` folder.
+3. **Slice and print from Studio:** **Slice plate**, then **Print plate**.
 
-You don't need to log in to Bambu Studio or connect it to the printer. The gateway does the upload and the start over LAN. If you do connect Studio to the printer as well, both open an MQTT connection to it.
+### Connecting Studio to the printer
+
+Studio sends the job to the printer itself, so it has to be connected to it once. In the **Device** tab, add the H2D in LAN mode with its IP address and access code. Inside the container Studio can't discover the printer by broadcast, so enter the IP address by hand. Studio downloads Bambu's network plug-in on first use. The connection is saved in `data/studio/config`.
+
+Studio and the gateway each keep their own MQTT connection to the printer.
 
 ## Opening it from another machine
 
@@ -44,5 +49,5 @@ A frame is only a secure page when the page around it is one too. When the dashb
 
 | Method | Path | |
 |---|---|---|
-| GET | `/api/studio` | `{ enabled, url, exportsEnabled, exportError, files: [{ name, size, modifiedAt }] }`. Lists `.3mf`, `.stl`, `.obj`, `.step`, `.stp` files, newest first |
-| POST | `/api/studio/prepare` | Body `{ "name": "part.gcode.3mf" }`. Stages the file like `POST /api/print/prepare` and returns `{ staged }`. Only plain file names inside `STUDIO_EXPORT_DIR` are accepted |
+| GET | `/api/studio` | `{ enabled, url, importsEnabled }` |
+| POST | `/api/studio/import` | `multipart/form-data` field `file`. Saves it to `STUDIO_IMPORT_DIR` and returns `{ success, name, studioPath }` |

@@ -19,11 +19,8 @@ describe('Command Architecture & Capability System', () => {
     expect(pauseCap).toBeDefined();
     expect(pauseCap?.status).toBe('SUPPORTED');
 
-    const startCap = capabilityRegistry.getCapability('print.start');
-    expect(startCap?.status).toBe('SUPPORTED');
-
-    const uploadCap = capabilityRegistry.getCapability('file.upload');
-    expect(uploadCap?.status).toBe('SUPPORTED');
+    // Starting prints moved to the embedded Bambu Studio: the gateway no longer uploads or starts jobs
+    expect(capabilityRegistry.getCapability('print.start')).toBeUndefined();
   });
 
   it('BambuCommandBuilder should build valid Bambu LAN MQTT JSON payloads', () => {

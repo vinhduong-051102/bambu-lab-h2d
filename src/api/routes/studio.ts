@@ -1,93 +1,82 @@
 import { promises as fs } from 'fs';
 import path from 'path';
-import { z } from 'zod';
 import { env } from '../../config/env';
-import { PrintJobManager } from '../../domain/print/PrintJobManager';
-import { isSupportedUpload } from '../../domain/print/fileTypes';
-import { commandErrorResponse, handler, json, readJsonBody } from '../http';
-import { installedNozzle } from './print';
+import { handler, json } from '../http';
 
-const MAX_EXPORT_BYTES = 1024 * 1024 * 1024;
+const MAX_IMPORT_BYTES = 1024 * 1024 * 1024;
 
-// A bare file name inside STUDIO_EXPORT_DIR: no directories, so nothing outside the folder is reachable
-const prepareSchema = z.object({
-  name: z
-    .string({ required_error: 'name is required' })
-    .min(1)
-    .refine((n) => n === path.basename(n) && !n.includes('/') && !n.includes('\\') && n !== '..', 'Invalid file name')
-    .refine(isSupportedUpload, 'Only .3mf, .stl, .obj, .step and .stp files can be printed'),
-});
+// Files Bambu Studio can open with File → Import / Open
+const STUDIO_FILE_RE = /\.(3mf|stl|obj|step|stp)$/i;
 
-const exportDir = (): string | null => (env.STUDIO_EXPORT_DIR ? path.resolve(env.STUDIO_EXPORT_DIR) : null);
+const importDir = (): string | null => (env.STUDIO_IMPORT_DIR ? path.resolve(env.STUDIO_IMPORT_DIR) : null);
 
-// ThreeMfParseError, matched by name (see commandErrorResponse for why not instanceof)
-const parseErrorResponse = (err: unknown): Response | null =>
-  err instanceof Error && err.name === 'ThreeMfParseError'
-    ? json({ success: false, error: (err as { code?: string }).code, message: err.message }, 422)
-    : null;
+/** Browser-supplied name → a plain file name with no path or control characters */
+function safeFileName(name: string): string {
+  const base = path.basename(name.replace(/\\/g, '/')).replace(/[\x00-\x1f<>:"|?*]/g, '_').trim();
+  return base === '.' || base === '..' ? '' : base;
+}
 
-// GET /api/studio - embedded Bambu Studio settings + printable files it exported (newest first)
-export const getStudio = handler(async () => {
-  const dir = exportDir();
-  const files: { name: string; size: number; modifiedAt: string }[] = [];
-  let exportError: string | null = null;
-
-  if (dir) {
+/** "part.stl" → "part (2).stl" when the name is taken, so an upload never replaces a file Studio has open */
+async function freeName(dir: string, name: string): Promise<string> {
+  const match = name.match(/^(.*?)((?:\.gcode)?\.[^.]+)$/);
+  const [stem, ext] = match ? [match[1], match[2]] : [name, ''];
+  for (let i = 1; ; i++) {
+    const candidate = i === 1 ? name : `${stem} (${i})${ext}`;
     try {
-      for (const entry of await fs.readdir(dir, { withFileTypes: true })) {
-        if (!entry.isFile() || !isSupportedUpload(entry.name)) continue;
-        const stat = await fs.stat(path.join(dir, entry.name));
-        files.push({ name: entry.name, size: stat.size, modifiedAt: stat.mtime.toISOString() });
-      }
-    } catch (err) {
-      exportError = `Không đọc được thư mục xuất của Studio: ${err instanceof Error ? err.message : String(err)}`;
+      await fs.access(path.join(dir, candidate));
+    } catch {
+      return candidate;
     }
   }
+}
 
-  files.sort((a, b) => b.modifiedAt.localeCompare(a.modifiedAt));
-  return json({
+// GET /api/studio - embedded Bambu Studio settings for the dashboard card
+export const getStudio = handler(() =>
+  json({
     enabled: !!env.STUDIO_URL,
     url: env.STUDIO_URL ?? null,
-    exportsEnabled: !!dir,
-    exportError,
-    files,
-  });
-});
+    importsEnabled: !!importDir(),
+  })
+);
 
-// POST /api/studio/prepare - stage a file Bambu Studio exported, like POST /api/print/prepare
-export const prepareStudioFile = handler(async ({ printerService, request }) => {
-  const dir = exportDir();
+// POST /api/studio/import - multipart "file": copy a model from the user's computer into Studio's /imports
+export const importToStudio = handler(async ({ request }) => {
+  const dir = importDir();
   if (!dir) {
-    return json({ success: false, error: 'STUDIO_EXPORTS_DISABLED', message: 'Chưa cấu hình STUDIO_EXPORT_DIR.' }, 501);
+    return json({ success: false, error: 'STUDIO_IMPORTS_DISABLED', message: 'Chưa cấu hình STUDIO_IMPORT_DIR.' }, 501);
   }
-  const parsed = prepareSchema.safeParse(await readJsonBody(request));
-  if (!parsed.success) {
-    return json({ success: false, error: 'INVALID_PAYLOAD', message: 'Invalid file name', details: parsed.error.issues }, 400);
+  if (Number(request.headers.get('content-length') ?? 0) > MAX_IMPORT_BYTES) {
+    return json({ success: false, error: 'FILE_TOO_LARGE', message: 'File vượt quá 1 GB.' }, 413);
   }
 
-  const filePath = path.join(dir, parsed.data.name);
-  let data: Uint8Array;
+  let form: FormData;
   try {
-    const stat = await fs.stat(filePath);
-    if (!stat.isFile()) throw new Error('not a file');
-    if (stat.size > MAX_EXPORT_BYTES) {
-      return json({ success: false, error: 'FILE_TOO_LARGE', message: 'File vượt quá 1 GB.' }, 413);
-    }
-    data = new Uint8Array(await fs.readFile(filePath));
+    form = await request.formData();
   } catch {
-    return json({ success: false, error: 'FILE_NOT_FOUND', message: `Không tìm thấy ${parsed.data.name} trong thư mục xuất của Studio.` }, 404);
+    return json({ success: false, error: 'INVALID_PAYLOAD', message: 'Expected multipart/form-data with a "file" field.' }, 400);
+  }
+  const file = form.get('file');
+  if (!(file instanceof File)) {
+    return json({ success: false, error: 'INVALID_PAYLOAD', message: 'Missing "file" field.' }, 400);
+  }
+  const name = safeFileName(file.name);
+  if (!name || !STUDIO_FILE_RE.test(name)) {
+    return json(
+      { success: false, error: 'UNSUPPORTED_FILE_TYPE', message: 'Chỉ gửi được file .3mf, .stl, .obj, .step, .stp vào Studio.' },
+      415
+    );
   }
 
-  const manager = PrintJobManager.getInstance();
+  await fs.mkdir(dir, { recursive: true });
+  const stored = await freeName(dir, name);
+  // Written to a temp name first so Studio never sees a half-copied file
+  const tempPath = path.join(dir, `.${stored}.part`);
   try {
-    const staged = await manager.stage({
-      fileName: parsed.data.name,
-      data,
-      source: 'local',
-      nozzle: installedNozzle(printerService),
-    });
-    return json({ success: true, staged: manager.describeStaged(staged, printerService) }, 201);
+    await fs.writeFile(tempPath, new Uint8Array(await file.arrayBuffer()));
+    await fs.rename(tempPath, path.join(dir, stored));
   } catch (err) {
-    return parseErrorResponse(err) ?? commandErrorResponse(err);
+    await fs.rm(tempPath, { force: true });
+    return json({ success: false, error: 'WRITE_FAILED', message: `Không lưu được file: ${err instanceof Error ? err.message : String(err)}` }, 500);
   }
+  return json({ success: true, name: stored, studioPath: `/imports/${stored}` }, 201);
 });

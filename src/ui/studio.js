@@ -1,30 +1,8 @@
 /**
- * Bambu Studio panel: embeds the real app streamed from its container (STUDIO_URL) and lists the
- * files it exported to STUDIO_EXPORT_DIR. "In" stages one through POST /api/studio/prepare and hands
- * it to the print panel (gateway:staged event), which takes over at the plate/AMS mapping step.
+ * Bambu Studio panel: embeds the real app streamed from its container (STUDIO_URL) and sends models
+ * from this computer into its /imports folder (POST /api/studio/import), since Studio's own file
+ * dialogs only see the container. Slicing and printing happen in Studio itself.
  */
-
-function el(tag, attrs = {}, children = []) {
-  const node = document.createElement(tag);
-  for (const [key, value] of Object.entries(attrs)) {
-    if (key === 'className') node.className = value;
-    else if (key === 'text') node.textContent = value;
-    else node.setAttribute(key, value);
-  }
-  for (const child of [].concat(children)) {
-    if (child !== null && child !== undefined) node.append(child);
-  }
-  return node;
-}
-
-function formatBytes(bytes) {
-  if (!Number.isFinite(bytes)) return '—';
-  if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-  return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
-}
-
-const EXPORT_POLL_MS = 10_000;
 
 export function initStudio({ showToast, addLog }) {
   const $ = (id) => document.getElementById(id);
@@ -35,15 +13,19 @@ export function initStudio({ showToast, addLog }) {
   const frameWrap = $('studioFrameWrap');
   const frame = $('studioFrame');
   const idle = $('studioIdle');
-  const exportsBox = $('studioExports');
-  const exportList = $('studioExportList');
-  const btnRefresh = $('btnStudioRefresh');
+  const importLabel = $('studioImportLabel');
+  const importInput = $('studioImportInput');
+  const importStatus = $('studioImportStatus');
 
   if (!card || !frame) return () => {};
 
   let studioUrl = null;
-  let pollTimer = null;
   let disposed = false;
+  let importXhr = null;
+
+  // A frame is only a secure context when its parent is one too. Over plain HTTP from another machine
+  // the embedded stream can't use the browser's video decoder, so Studio opens as a top-level HTTPS tab.
+  const canEmbed = () => window.isSecureContext;
 
   // The iframe is only loaded on demand: the stream costs CPU on the container and bandwidth here
   function setOpen(open) {
@@ -54,10 +36,6 @@ export function initStudio({ showToast, addLog }) {
     if (open && frame.getAttribute('src') !== studioUrl) frame.src = studioUrl;
     if (!open) frame.removeAttribute('src');
   }
-
-  // A frame is only a secure context when its parent is one too. Over plain HTTP from another machine
-  // the embedded stream can't use the browser's video decoder, so Studio opens as a top-level HTTPS tab.
-  const canEmbed = () => window.isSecureContext;
 
   btnToggle.addEventListener('click', () => {
     if (!canEmbed()) {
@@ -70,97 +48,88 @@ export function initStudio({ showToast, addLog }) {
     frameWrap.requestFullscreen?.().catch((err) => showToast(`Không bật được toàn màn hình: ${err.message}`, 'error'));
   });
 
-  async function prepare(name, btn) {
-    btn.disabled = true;
-    btn.textContent = '⏳';
-    try {
-      const res = await fetch('/api/studio/prepare', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name }),
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.message || `HTTP ${res.status}`);
-      window.dispatchEvent(new CustomEvent('gateway:staged', { detail: data.staged }));
-      addLog(`Đã chuẩn bị file ${name} từ Bambu Studio: ${data.staged.plates.length} plate.`, 'success');
-    } catch (err) {
-      showToast(err.message, 'error');
-      addLog(`Không chuẩn bị được ${name}: ${err.message}`, 'error');
-    } finally {
-      btn.disabled = false;
-      btn.textContent = 'In';
-    }
-  }
+  // ---------- Send files from this computer to Studio's /imports ----------
 
-  function renderExports(data) {
-    if (data.exportError) {
-      exportList.replaceChildren(el('li', { className: 'print-muted', text: data.exportError }));
-      return;
-    }
-    if (data.files.length === 0) {
-      exportList.replaceChildren(
-        el('li', { className: 'print-muted', text: 'Chưa có file nào. Trong Studio, xuất file vào thư mục /exports.' })
-      );
-      return;
-    }
-    exportList.replaceChildren(
-      ...data.files.map((f) => {
-        const btn = el('button', { type: 'button', className: 'btn-ams-action', text: 'In' });
-        btn.addEventListener('click', () => prepare(f.name, btn));
-        const sliced = /\.gcode\.3mf$/i.test(f.name);
-        return el('li', { className: 'print-remote-item', title: f.name }, [
-          el('div', { style: 'min-width:0' }, [
-            el('div', { className: 'name', text: f.name }),
-            el('div', {
-              className: 'meta',
-              text: `${new Date(f.modifiedAt).toLocaleString('vi-VN')} · ${formatBytes(f.size)}${sliced ? '' : ' · gateway sẽ slice'}`,
-            }),
-          ]),
-          btn,
-        ]);
-      })
-    );
-  }
-
-  async function load() {
-    try {
-      const res = await fetch('/api/studio');
-      if (!res.ok) return;
-      const data = await res.json();
-      if (disposed) return;
-
-      card.hidden = !data.enabled && !data.exportsEnabled;
-      if (data.enabled && data.url !== studioUrl) {
-        studioUrl = data.url;
-        newTab.href = studioUrl;
-        if (!canEmbed()) {
-          btnToggle.textContent = '↗ Mở Studio (tab mới)';
-          idle.replaceChildren(
-            'Dashboard đang mở qua HTTP từ máy khác nên không nhúng được Studio (trình duyệt chặn bộ giải mã video). ',
-            'Studio sẽ mở trong tab mới qua HTTPS; lần đầu hãy chấp nhận cảnh báo chứng chỉ tự ký. ',
-            'Xuất file vào thư mục /exports rồi quay lại đây để in.'
-          );
+  function uploadOne(file, index, total) {
+    return new Promise((resolve, reject) => {
+      const form = new FormData();
+      form.append('file', file);
+      importXhr = new XMLHttpRequest();
+      importXhr.open('POST', '/api/studio/import');
+      const prefix = total > 1 ? `(${index + 1}/${total}) ` : '';
+      importXhr.upload.onprogress = (e) => {
+        if (e.lengthComputable) {
+          importStatus.textContent = `⏳ ${prefix}Đang gửi ${file.name}: ${Math.round((e.loaded / e.total) * 100)}%`;
         }
+      };
+      importXhr.onload = () => {
+        let data = null;
+        try {
+          data = JSON.parse(importXhr.responseText);
+        } catch {
+          /* handled below */
+        }
+        if (importXhr.status === 201 && data?.success) resolve(data);
+        else reject(new Error(data?.message || `Lỗi HTTP ${importXhr.status}`));
+      };
+      importXhr.onerror = () => reject(new Error('Mất kết nối khi gửi file.'));
+      importXhr.send(form);
+    });
+  }
+
+  async function importFiles(files) {
+    if (files.length === 0) return;
+    importLabel.classList.add('disabled');
+    importStatus.hidden = false;
+    const sent = [];
+    try {
+      for (const [i, file] of files.entries()) {
+        const data = await uploadOne(file, i, files.length);
+        sent.push(data.studioPath);
       }
-      btnToggle.hidden = !data.enabled;
-      newTab.hidden = !data.enabled;
-      exportsBox.hidden = !data.exportsEnabled;
-      if (data.exportsEnabled) renderExports(data);
-    } catch {
-      /* gateway restarting: keep the last state, the next poll retries */
+      importStatus.textContent = `✅ Đã gửi: ${sent.join(', ')}. Trong Studio: File → Import → thư mục /imports.`;
+      addLog(`Đã gửi ${sent.length} file vào Bambu Studio (/imports).`, 'success');
+    } catch (err) {
+      importStatus.textContent = `❌ ${err.message}`;
+      showToast(err.message, 'error');
+    } finally {
+      importXhr = null;
+      importLabel.classList.remove('disabled');
     }
   }
 
-  btnRefresh.addEventListener('click', load);
-  load();
-  // New exports show up without a manual refresh while the dashboard is open
-  pollTimer = setInterval(() => {
-    if (!document.hidden) load();
-  }, EXPORT_POLL_MS);
+  importInput?.addEventListener('change', () => {
+    const files = [...(importInput.files ?? [])];
+    importInput.value = '';
+    importFiles(files);
+  });
+
+  // ---------- Configuration ----------
+
+  fetch('/api/studio')
+    .then((res) => (res.ok ? res.json() : null))
+    .then((data) => {
+      if (!data || disposed) return;
+      card.hidden = !data.enabled;
+      importLabel.hidden = !data.importsEnabled;
+      if (!data.enabled) return;
+
+      studioUrl = data.url;
+      newTab.href = studioUrl;
+      if (!canEmbed()) {
+        btnToggle.textContent = '↗ Mở Studio (tab mới)';
+        idle.replaceChildren(
+          'Dashboard đang mở qua HTTP từ máy khác nên không nhúng được Studio (trình duyệt chặn bộ giải mã video). ',
+          'Studio sẽ mở trong tab mới qua HTTPS; lần đầu hãy chấp nhận cảnh báo chứng chỉ tự ký. ',
+          'Dùng "📤 Gửi file vào Studio" để đưa model từ máy này vào thư mục /imports.'
+        );
+      }
+    })
+    .catch(() => {});
 
   return () => {
     disposed = true;
-    clearInterval(pollTimer);
+    importXhr?.abort();
     frame.removeAttribute('src');
   };
 }

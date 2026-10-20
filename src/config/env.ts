@@ -45,19 +45,10 @@ const envSchema = z.object({
     .optional()
     .transform((val) => val === 'true' || val === '1'),
   COMMAND_TIMEOUT_MS: z.coerce.number().default(10000),
-  // Docker image built from slicer/ (headless Bambu Studio). When set, unsliced .3mf projects are sliced for the H2D.
-  SLICER_DOCKER_IMAGE: z.string().optional(),
-  SLICER_TIMEOUT_MS: z.coerce.number().default(10 * 60_000),
-  // Bambu Studio streamed to the browser (docker-compose.studio.yml): URL embedded in the dashboard,
-  // and the host folder Studio exports to, which the gateway lists and stages for printing.
+  // Bambu Studio streamed to the browser (docker-compose.studio.yml), embedded in the dashboard
   STUDIO_URL: z.preprocess((val) => (typeof val === 'string' && val.trim() === '' ? undefined : val), z.string().url().optional()),
-  STUDIO_EXPORT_DIR: z.preprocess((val) => (typeof val === 'string' && val.trim() === '' ? undefined : val), z.string().optional()),
-  // Build plate on the printer. Unset: the project's plate, or Textured PEI for a project made for another printer.
-  SLICER_BED_TYPE: z
-    .preprocess(
-      (val) => (typeof val === 'string' && val.trim() === '' ? undefined : val),
-      z.enum(['Textured PEI Plate', 'Cool Plate', 'Engineering Plate', 'High Temp Plate', 'Supertack Plate']).optional()
-    ),
+  // Host folder mounted at /imports in the Studio container: the dashboard drops models there to open in Studio
+  STUDIO_IMPORT_DIR: z.preprocess((val) => (typeof val === 'string' && val.trim() === '' ? undefined : val), z.string().optional()),
 });
 
 const _env = envSchema.safeParse(process.env);

@@ -12,7 +12,6 @@ import { BambuMessageParser } from '../bambu/BambuMessageParser';
 import { BambuCommandBuilder } from '../bambu/commands/BambuCommandBuilder';
 import { BambuTopics } from '../bambu/BambuTopics';
 import { AmsCommandTracker } from '../domain/commands/AmsCommandTracker';
-import { PrintJobManager } from '../domain/print/PrintJobManager';
 import { setRuntime, type GatewayRuntime } from './runtime';
 
 export interface StartedGateway extends GatewayRuntime {
@@ -69,7 +68,6 @@ export async function startGateway(): Promise<StartedGateway> {
 
     const payloadObj = rawPayload as Record<string, unknown>;
     AmsCommandTracker.getInstance().recordRawResponse(payloadObj, topic);
-    PrintJobManager.getInstance().ingestReport(payloadObj);
     stateStore.setRawPayload(payloadObj);
     const currentState = stateStore.getState();
     const nextState = normalizePrinterState(currentState, rawPayload);
