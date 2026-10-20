@@ -2,7 +2,7 @@
 
 import { FormEvent, useEffect, useState } from 'react';
 import { DashboardMarkup } from './DashboardMarkup';
-import { initDashboard } from './dashboard';
+import { initDashboard } from './dashboardController';
 
 type AuthState = 'checking' | 'required' | 'ready';
 

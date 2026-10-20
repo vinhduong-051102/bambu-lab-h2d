@@ -1,5 +1,5 @@
 // Dashboard markup ported from the former public/index.html. Element ids are the contract
-// with ./dashboard.js, which wires up live data and controls.
+// with ./dashboardController.js, which wires up live data and controls.
 export function DashboardMarkup() {
   return (
     <>
