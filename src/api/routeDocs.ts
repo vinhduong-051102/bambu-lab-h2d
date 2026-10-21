@@ -68,6 +68,7 @@ export const GATEWAY_ROUTES: RouteDoc[] = [
   // 9. Bambu Studio (embedded)
   { method: 'GET', path: '/api/studio', category: 'Bambu Studio', description: 'Cấu hình Bambu Studio nhúng trong dashboard (STUDIO_URL, STUDIO_IMPORT_DIR)', exampleUrl: '/api/studio' },
   { method: 'POST', path: '/api/studio/import', category: 'Bambu Studio', description: 'Gửi model từ máy tính vào thư mục /imports của Bambu Studio', body: 'multipart/form-data: file=@part.stl' },
+  { method: 'POST', path: '/api/studio/ai-optimize', category: 'Bambu Studio', description: 'Nút "AI tối ưu" trong Studio: Claude đề xuất setting quá trình in cho plate đang mở', body: '{"version": 1, "printer_preset": "...", "settings": {...}, "objects": [...]}' },
 
   // 10. Real-time WebSocket Stream
   { method: 'GET (WS)', path: '/ws', category: 'Real-time WebSocket', description: 'Kết nối WebSocket đẩy dữ liệu telemetry & lệnh thời gian thực', exampleUrl: 'ws://localhost:3000/ws' },

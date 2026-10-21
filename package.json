@@ -25,6 +25,7 @@
   "author": "",
   "license": "MIT",
   "dependencies": {
+    "@anthropic-ai/sdk": "^1.0.0",
     "@ffmpeg-installer/ffmpeg": "^1.1.0",
     "basic-ftp": "^6.2.3",
     "dotenv": "^16.4.5",
