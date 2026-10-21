@@ -138,4 +138,35 @@ describe('POST /api/studio/ai-optimize', () => {
       if (saved.token !== undefined) process.env.ANTHROPIC_AUTH_TOKEN = saved.token;
     }
   });
+
+  it('hands out the prompts and schema for claude -p, without a Claude key', async () => {
+    setAiProposalSource(null);
+    const res = await app.inject({ method: 'POST', url: '/api/studio/ai-optimize/prompt', payload: studioRequest });
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    expect(body.system).toContain('Bambu Lab H2D');
+    expect(body.user).toContain('Máy in thực tế:');
+    expect(body.schema.properties.changes.items.properties.key.enum).toContain('enable_support');
+  });
+
+  it('checks a proposal made by claude -p', async () => {
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/studio/ai-optimize/check',
+      payload: {
+        request: studioRequest,
+        proposal: { summary: 'Cần support.', changes: [{ key: 'enable_support', value: 'true', reason: 'Phần nhô lớn' }, { key: 'machine_start_gcode', value: 'G28', reason: 'x' }] },
+      },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().changes).toEqual([{ key: 'enable_support', label: 'Bật support', value: '1', reason: 'Phần nhô lớn' }]);
+    expect(res.json().rejected.map((r: { key: string }) => r.key)).toEqual(['machine_start_gcode']);
+    expect(prompts).toEqual([]);
+  });
+
+  it('rejects a missing proposal', async () => {
+    const res = await app.inject({ method: 'POST', url: '/api/studio/ai-optimize/check', payload: { request: studioRequest } });
+    expect(res.statusCode).toBe(400);
+    expect(res.json().error).toBe('AI_NO_OUTPUT');
+  });
 });

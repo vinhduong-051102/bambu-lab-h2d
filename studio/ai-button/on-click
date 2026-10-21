@@ -1,42 +1,104 @@
 #!/bin/sh
 # Run by Studio's "AI tối ưu" button: on-click <request.json> <response.json>
-# Sends Studio's plate description to the gateway (POST /api/studio/ai-optimize) and writes the
-# gateway's JSON answer to <response.json>, which Studio reads once this script exits.
-# Any failure is written as {"success": false, "message": ...} so Studio can show it.
+# Writes the checked setting changes for Studio's plate to <response.json>, which Studio reads once this
+# script exits. Any failure is written as {"success": false, "message": ...} so Studio can show it.
+#
+# With CLAUDE_CODE_OAUTH_TOKEN (from `claude setup-token`), Claude is asked here with `claude -p`, on that
+# Claude subscription: the gateway builds the prompt (POST $STUDIO_AI_URL/prompt) and checks the answer
+# (POST $STUDIO_AI_URL/check). Without it, the gateway does all three with its ANTHROPIC_API_KEY
+# (POST $STUDIO_AI_URL).
 
 request="$1"
 response="$2"
 
 # Container variables from docker-compose.studio.yml; s6 keeps them here when the session didn't inherit them
-for var in STUDIO_AI_URL STUDIO_AI_TOKEN; do
+for var in STUDIO_AI_URL STUDIO_AI_TOKEN STUDIO_AI_MODEL CLAUDE_CODE_OAUTH_TOKEN DISABLE_AUTOUPDATER; do
   eval "current=\${$var:-}"
   if [ -z "$current" ] && [ -r "/run/s6/container_environment/$var" ]; then
     eval "$var=\$(cat /run/s6/container_environment/$var)"
+    eval "export $var"
   fi
 done
 url="${STUDIO_AI_URL:-http://host.docker.internal:3000/api/studio/ai-optimize}"
+work="$response.d"
 
 fail() {
-  # The message is plain Vietnamese text without quotes or backslashes, so it needs no JSON escaping
-  printf '{"success": false, "message": "%s"}\n' "$1" > "$response"
+  if command -v jq >/dev/null 2>&1; then
+    jq -n --arg message "$1" '{success: false, message: $message}' > "$response"
+  else
+    # Only the gateway path runs without jq, and its messages carry no quotes or backslashes
+    printf '{"success": false, "message": "%s"}\n' "$1" > "$response"
+  fi
+  rm -rf "$work"
   exit 0
 }
 
+# post <body file> <url> <output file>: fails the click unless the gateway answered with JSON
+post() {
+  status=$(curl -sS -o "$3" -w '%{http_code}' --max-time 300 \
+    -H 'Content-Type: application/json' \
+    ${STUDIO_AI_TOKEN:+-H "Authorization: Bearer $STUDIO_AI_TOKEN"} \
+    --data-binary "@$1" "$2" 2>/dev/null)
+  if [ -z "$status" ] || [ "$status" = "000" ]; then
+    fail "Không kết nối được gateway tại $2."
+  fi
+  if [ "$status" = "401" ]; then
+    fail "Gateway từ chối: STUDIO_AI_TOKEN phải bằng GATEWAY_API_KEY."
+  fi
+  if [ "$status" = "404" ]; then
+    fail "Gateway chưa có $2: cập nhật gateway rồi thử lại."
+  fi
+}
+
 [ -r "$request" ] || fail "Không đọc được dữ liệu từ Studio."
+rm -rf "$work"
+mkdir -p "$work" || fail "Không tạo được thư mục tạm cho AI."
 
-body="$response.part"
-status=$(curl -sS -o "$body" -w '%{http_code}' --max-time 300 \
-  -H 'Content-Type: application/json' \
-  ${STUDIO_AI_TOKEN:+-H "Authorization: Bearer $STUDIO_AI_TOKEN"} \
-  --data-binary "@$request" "$url" 2>/dev/null)
+if [ -z "$CLAUDE_CODE_OAUTH_TOKEN" ]; then
+  post "$request" "$url" "$work/answer.json"
+  # The gateway answers every other case, errors included, with JSON that carries its own message
+  mv "$work/answer.json" "$response"
+  rm -rf "$work"
+  exit 0
+fi
 
-if [ -z "$status" ] || [ "$status" = "000" ]; then
-  rm -f "$body"
-  fail "Không kết nối được gateway tại $url."
+command -v claude >/dev/null 2>&1 || fail "Image Studio chưa có Claude Code: build lại image (docs/studio.md)."
+command -v jq >/dev/null 2>&1 || fail "Image Studio chưa có jq: build lại image (docs/studio.md)."
+
+post "$request" "$url/prompt" "$work/prompt.json"
+if [ "$(jq -r '.success' "$work/prompt.json" 2>/dev/null)" != "true" ]; then
+  mv "$work/prompt.json" "$response" 2>/dev/null
+  rm -rf "$work"
+  exit 0
 fi
-if [ "$status" = "401" ]; then
-  rm -f "$body"
-  fail "Gateway từ chối: STUDIO_AI_TOKEN phải bằng GATEWAY_API_KEY."
+jq -r '.user' "$work/prompt.json" > "$work/user.txt"
+
+# No tools and no settings files: Claude only reads the plate and answers in the schema's JSON
+timeout 300 claude -p \
+  --model "${STUDIO_AI_MODEL:-claude-opus-5-5}" \
+  --tools "" \
+  --setting-sources "" \
+  --no-session-persistence \
+  --system-prompt "$(jq -r '.system' "$work/prompt.json")" \
+  --json-schema "$(jq -c '.schema' "$work/prompt.json")" \
+  --output-format json \
+  < "$work/user.txt" > "$work/claude.json" 2> "$work/claude.err"
+code=$?
+
+[ "$code" = "124" ] && fail "Claude không trả lời trong 5 phút."
+if ! jq -e '.structured_output' "$work/claude.json" >/dev/null 2>&1; then
+  detail=$(jq -r '.result // empty' "$work/claude.json" 2>/dev/null)
+  [ -n "$detail" ] || detail=$(tail -n 3 "$work/claude.err" 2>/dev/null)
+  case "$detail" in
+    *"401"*|*[Aa]uthenticat*|*"OAuth"*|*"token"*) fail "CLAUDE_CODE_OAUTH_TOKEN không hợp lệ hoặc đã hết hạn: chạy lại claude setup-token. ($detail)" ;;
+    *[Ll]imit*) fail "Đã hết lượt dùng Claude của gói hiện tại, thử lại sau. ($detail)" ;;
+  esac
+  fail "Claude không trả về kết quả hợp lệ (mã $code): ${detail:-không có thông báo lỗi}"
 fi
-# The gateway answers every other case, errors included, with JSON that carries its own message
-mv "$body" "$response"
+
+jq -n --slurpfile request "$request" --slurpfile claude "$work/claude.json" \
+  '{request: $request[0], proposal: $claude[0].structured_output}' > "$work/check.json" \
+  || fail "Không đọc được dữ liệu từ Studio."
+post "$work/check.json" "$url/check" "$work/answer.json"
+mv "$work/answer.json" "$response"
+rm -rf "$work"

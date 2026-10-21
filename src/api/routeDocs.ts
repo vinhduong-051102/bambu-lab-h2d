@@ -69,6 +69,8 @@ export const GATEWAY_ROUTES: RouteDoc[] = [
   { method: 'GET', path: '/api/studio', category: 'Bambu Studio', description: 'Cấu hình Bambu Studio nhúng trong dashboard (STUDIO_URL, STUDIO_IMPORT_DIR)', exampleUrl: '/api/studio' },
   { method: 'POST', path: '/api/studio/import', category: 'Bambu Studio', description: 'Gửi model từ máy tính vào thư mục /imports của Bambu Studio', body: 'multipart/form-data: file=@part.stl' },
   { method: 'POST', path: '/api/studio/ai-optimize', category: 'Bambu Studio', description: 'Nút "AI tối ưu" trong Studio: Claude đề xuất setting quá trình in cho plate đang mở', body: '{"version": 1, "printer_preset": "...", "settings": {...}, "objects": [...]}' },
+  { method: 'POST', path: '/api/studio/ai-optimize/prompt', category: 'Bambu Studio', description: 'Prompt và JSON schema cho plate, để `claude -p` trong container Studio tự gọi Claude (đăng nhập bằng gói Claude, không cần ANTHROPIC_API_KEY)', body: '{"version": 1, "printer_preset": "...", "settings": {...}, "objects": [...]}' },
+  { method: 'POST', path: '/api/studio/ai-optimize/check', category: 'Bambu Studio', description: 'Kiểm tra đề xuất từ `claude -p` như ai-optimize: chỉ giữ key được phép, giá trị hợp lệ và thực sự thay đổi', body: '{"request": {...}, "proposal": {"summary": "...", "changes": [{"key", "value", "reason"}]}}' },
 
   // 10. Real-time WebSocket Stream
   { method: 'GET (WS)', path: '/ws', category: 'Real-time WebSocket', description: 'Kết nối WebSocket đẩy dữ liệu telemetry & lệnh thời gian thực', exampleUrl: 'ws://localhost:3000/ws' },
