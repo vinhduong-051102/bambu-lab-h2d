@@ -52,5 +52,11 @@ COPY --from=builder /BambuStudio/build/package /opt/bambustudio
 # Claude Code for "AI tối ưu" (studio/ai-button/on-click runs `claude -p`, signed in with the
 # CLAUDE_CODE_OAUTH_TOKEN from `claude setup-token`); jq for the script's JSON. Installed for every
 # user: Studio runs as abc, and updates come from rebuilding the image (DISABLE_AUTOUPDATER in Compose).
+# The installer runs with a throwaway HOME: the base image sets HOME=/config, Studio's mounted settings.
 ARG CLAUDE_CODE_VERSION=stable
-RUN apt-get update && apt-get install -y --no-install-recommends jq && rm -rf /var/lib/apt/lists/*  && curl -fsSL https://claude.ai/install.sh | bash -s "${CLAUDE_CODE_VERSION}"  && install -m 755 "$(readlink -f /root/.local/bin/claude)" /usr/local/bin/claude  && rm -rf /root/.local/bin/claude /root/.local/share/claude /root/.claude /root/.claude.json  && claude --version
+RUN apt-get update && apt-get install -y --no-install-recommends jq && rm -rf /var/lib/apt/lists/* \
+ && export HOME=/tmp/claude-install \
+ && curl -fsSL https://claude.ai/install.sh | bash -s "${CLAUDE_CODE_VERSION}" \
+ && install -m 755 "$(readlink -f "$HOME/.local/bin/claude")" /usr/local/bin/claude \
+ && rm -rf "$HOME" \
+ && claude --version
