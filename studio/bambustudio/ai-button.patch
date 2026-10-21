@@ -61,7 +61,7 @@ index d38b5d2..479f9ca 100644
      sizer->Add(slice_panel);
      sizer->Add(FromDIP(8), 0, 0, 0, 0);
      sizer->Add(print_panel);
-@@ -2651,6 +2668,249 @@ void MainFrame::update_side_button_style()
+@@ -2651,6 +2668,245 @@ void MainFrame::update_side_button_style()
      m_print_option_btn->SetExtraSize(wxSize(FromDIP(10), FromDIP(10)));
      m_print_option_btn->SetIconOffset(FromDIP(2));
      m_print_option_btn->SetMinSize(wxSize(FromDIP(24), FromDIP(24)));
@@ -85,15 +85,6 @@ index d38b5d2..479f9ca 100644
 +namespace {
 +const std::string AI_HOOK = "/opt/studio-ai/on-click";
 +const std::string AI_DIR  = "/tmp/studio-ai";
-+
-+// Process settings whose current values go to the AI. The gateway decides which of them may change
-+// (src/domain/studio/aiOptimize.ts); this list only needs to cover them.
-+const std::vector<std::string> AI_SETTING_KEYS = {
-+    "layer_height", "initial_layer_print_height", "wall_loops", "top_shell_layers", "bottom_shell_layers",
-+    "sparse_infill_density", "sparse_infill_pattern", "top_surface_pattern", "wall_generator", "wall_sequence",
-+    "seam_position", "ironing_type", "detect_overhang_wall", "enable_support", "support_type", "support_style",
-+    "support_threshold_angle", "support_on_build_plate_only", "brim_type", "brim_width",
-+};
 +
 +std::vector<double> ai_floats(const DynamicPrintConfig &config, const std::string &key)
 +{
@@ -163,10 +154,15 @@ index d38b5d2..479f9ca 100644
 +        filaments.push_back(filament);
 +    }
 +
++    // The whole process preset: the gateway picks the settings the AI may change
++    // (src/domain/studio/aiOptimize.ts), so changing that list needs no rebuild. Text settings
++    // (names, notes, scripts) are left out: none is for the AI, and they may hold anything.
 +    nlohmann::json settings = nlohmann::json::object();
-+    for (const std::string &key : AI_SETTING_KEYS)
-+        if (print_config.has(key))
++    for (const std::string &key : print_config.keys()) {
++        const ConfigOptionDef *def = print_config_def.get(key);
++        if (def != nullptr && def->type != coString && def->type != coStrings)
 +            settings[key] = print_config.opt_serialize(key);
++    }
 +
 +    nlohmann::json objects = nlohmann::json::array();
 +    for (const ModelObject *object : wxGetApp().plater()->model().objects)

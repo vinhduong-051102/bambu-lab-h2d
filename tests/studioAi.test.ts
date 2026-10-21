@@ -50,6 +50,25 @@ describe('AI tối ưu: checking proposals', () => {
     expect(normalizeValue('support_type', 'tree(manual)', [0.4])).toHaveProperty('error');
   });
 
+  it('sets per-variant settings to one value for every variant Studio has', () => {
+    expect(normalizeValue('outer_wall_speed', '150', [0.4], '200,200,nil,200')).toEqual({ value: '150,150,nil,150' });
+    expect(normalizeValue('outer_wall_speed', '150, 150', [0.4], '200,200')).toEqual({ value: '150,150' });
+    expect(normalizeValue('enable_overhang_speed', 'false', [0.4], '1,1')).toEqual({ value: '0,0' });
+    expect(normalizeValue('outer_wall_speed', '150,200', [0.4], '200,200')).toHaveProperty('error');
+    expect(normalizeValue('outer_wall_speed', '900', [0.4], '200,200')).toHaveProperty('error');
+    expect(normalizeValue('outer_wall_speed', '150', [0.4])).toHaveProperty('error');
+  });
+
+  it('drops a per-variant change that keeps every value', () => {
+    const request = { ...studioRequest, settings: { ...studioRequest.settings, outer_wall_speed: '200,200.0' } };
+    const result = checkProposal(
+      { summary: '', changes: [{ key: 'outer_wall_speed', value: '200', reason: 'Giữ nguyên' }] },
+      request
+    );
+    expect(result.changes).toEqual([]);
+    expect(result.rejected).toEqual([]);
+  });
+
   it('keeps only allowed keys that change something, once each', () => {
     const result = checkProposal(
       {

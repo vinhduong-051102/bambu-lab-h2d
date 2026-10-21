@@ -6,8 +6,8 @@ result means rebuilding the image.
 
 A click (when this folder, mounted read-only at `/opt/studio-ai`, has an executable `on-click`):
 
-1. Studio writes `/tmp/studio-ai/request.json`: the printer, process and filament presets, the current values
-   of the process settings the AI may change, and each object's size, volume, bed-contact area and overhang area.
+1. Studio writes `/tmp/studio-ai/request.json`: the printer, process and filament presets, every numeric,
+   on/off and choice setting of the edited process preset (the gateway picks the ones the AI may change), and each object's size, volume, bed-contact area and overhang area.
 2. Studio runs `on-click /tmp/studio-ai/request.json /tmp/studio-ai/response.json` and waits without blocking
    (the button shows "AI đang phân tích...").
 3. `on-click` gets the setting changes from the gateway (`STUDIO_AI_URL`, default

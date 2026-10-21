@@ -14,16 +14,22 @@ type SettingSpec =
   | { kind: 'int'; min: number; max: number; label: string }
   | { kind: 'percent'; min: number; max: number; label: string }
   | { kind: 'bool'; label: string }
-  | { kind: 'enum'; values: readonly string[]; label: string };
+  | { kind: 'enum'; values: readonly string[]; label: string }
+  // One value per H2D extruder variant ("200,200"); the AI gives one value and it goes to every variant
+  | { kind: 'floats'; min: number; max: number; label: string }
+  | { kind: 'bools'; label: string };
 
 // Process (print preset) settings the AI may change, with the values Studio v02.08.04.57 accepts
-// (src/libslic3r/PrintConfig.cpp). Studio reports the current value of each of these keys.
+// (src/libslic3r/PrintConfig.cpp). Studio sends the whole process preset, so adding a key here is enough.
 export const AI_SETTINGS = {
   layer_height: { kind: 'float', min: 0.04, max: 0.6, label: 'Chiều cao lớp' },
   initial_layer_print_height: { kind: 'float', min: 0.08, max: 0.6, label: 'Chiều cao lớp đầu' },
   wall_loops: { kind: 'int', min: 1, max: 10, label: 'Số vòng tường' },
   top_shell_layers: { kind: 'int', min: 0, max: 30, label: 'Số lớp vỏ trên' },
   bottom_shell_layers: { kind: 'int', min: 0, max: 30, label: 'Số lớp vỏ dưới' },
+  top_shell_thickness: { kind: 'float', min: 0, max: 5, label: 'Độ dày vỏ trên' },
+  bottom_shell_thickness: { kind: 'float', min: 0, max: 5, label: 'Độ dày vỏ dưới' },
+  ensure_vertical_shell_thickness: { kind: 'enum', values: ['disabled', 'partial', 'enabled'], label: 'Đảm bảo độ dày vỏ đứng' },
   sparse_infill_density: { kind: 'percent', min: 0, max: 100, label: 'Mật độ infill' },
   sparse_infill_pattern: {
     kind: 'enum',
@@ -40,14 +46,28 @@ export const AI_SETTINGS = {
   seam_position: { kind: 'enum', values: ['nearest', 'aligned', 'back', 'random'], label: 'Vị trí đường nối' },
   ironing_type: { kind: 'enum', values: ['no ironing', 'top', 'topmost', 'solid'], label: 'Là phẳng (ironing)' },
   detect_overhang_wall: { kind: 'bool', label: 'Nhận diện tường nhô' },
+  thick_bridges: { kind: 'bool', label: 'Cầu dày' },
+  outer_wall_speed: { kind: 'floats', min: 10, max: 600, label: 'Tốc độ tường ngoài' },
+  inner_wall_speed: { kind: 'floats', min: 10, max: 600, label: 'Tốc độ tường trong' },
+  sparse_infill_speed: { kind: 'floats', min: 10, max: 600, label: 'Tốc độ infill' },
+  enable_overhang_speed: { kind: 'bools', label: 'Giảm tốc ở phần nhô' },
   enable_support: { kind: 'bool', label: 'Bật support' },
   // Manual support types only print where the user painted, so the AI sticks to the automatic ones
   support_type: { kind: 'enum', values: ['normal(auto)', 'tree(auto)'], label: 'Loại support' },
   support_style: { kind: 'enum', values: ['default', 'grid', 'snug', 'tree_slim', 'tree_strong', 'tree_hybrid', 'tree_organic'], label: 'Kiểu support' },
   support_threshold_angle: { kind: 'int', min: 0, max: 90, label: 'Góc ngưỡng support' },
   support_on_build_plate_only: { kind: 'bool', label: 'Support chỉ từ bàn in' },
+  support_top_z_distance: { kind: 'float', min: 0, max: 0.5, label: 'Khe hở Z trên support' },
+  support_bottom_z_distance: { kind: 'float', min: 0, max: 0.5, label: 'Khe hở Z dưới support' },
+  support_interface_top_layers: { kind: 'int', min: 0, max: 5, label: 'Số lớp tiếp xúc trên support' },
+  support_object_xy_distance: { kind: 'float', min: 0, max: 3, label: 'Khoảng cách XY support–vật' },
+  tree_support_branch_angle: { kind: 'float', min: 0, max: 60, label: 'Góc nhánh support cây' },
+  raft_layers: { kind: 'int', min: 0, max: 10, label: 'Số lớp raft' },
   brim_type: { kind: 'enum', values: ['auto_brim', 'outer_only', 'inner_only', 'outer_and_inner', 'no_brim'], label: 'Kiểu brim' },
   brim_width: { kind: 'float', min: 0, max: 20, label: 'Độ rộng brim' },
+  elefant_foot_compensation: { kind: 'float', min: 0, max: 1, label: 'Bù chân voi' },
+  xy_hole_compensation: { kind: 'float', min: -1, max: 1, label: 'Bù kích thước lỗ XY' },
+  xy_contour_compensation: { kind: 'float', min: -1, max: 1, label: 'Bù kích thước đường bao XY' },
 } as const satisfies Record<string, SettingSpec>;
 
 export type AiSettingKey = keyof typeof AI_SETTINGS;
@@ -140,18 +160,56 @@ export const aiProposalSchema = z.object({
 
 const round = (n: number, digits: number) => Number(n.toFixed(digits));
 
+function parseBool(text: string): '1' | '0' | null {
+  if (['1', 'true', 'yes', 'on'].includes(text)) return '1';
+  if (['0', 'false', 'no', 'off'].includes(text)) return '0';
+  return null;
+}
+
+/**
+ * A per-variant setting ("200,200") set to one value: every variant Studio has a value for gets it, and
+ * "nil" (a variant left to the printer preset) stays nil. A list from the model must hold a single value.
+ */
+function normalizeVector(
+  raw: string,
+  current: string | undefined,
+  parse: (text: string) => string | { error: string }
+): { value: string } | { error: string } {
+  if (current === undefined) return { error: 'Studio không gửi giá trị hiện tại của tham số này' };
+  const values = [...new Set(raw.split(',').map((v) => v.trim().toLowerCase()).filter(Boolean))];
+  if (values.length !== 1) return { error: `"${raw}" phải là một giá trị cho mọi đầu phun` };
+  const parsed = parse(values[0]);
+  if (typeof parsed !== 'string') return parsed;
+  return { value: current.split(',').map((v) => (v.trim() === 'nil' ? 'nil' : parsed)).join(',') };
+}
+
 /**
  * The model's value for `key` in Studio's serialized form, or an error message.
  * Out-of-range numbers are rejected rather than clamped: a clamped value is one nobody reasoned about.
+ * `current` is Studio's value: per-variant settings take their number of values from it.
  */
-export function normalizeValue(key: AiSettingKey, raw: string, nozzleDiameters: number[]): { value: string } | { error: string } {
+export function normalizeValue(
+  key: AiSettingKey,
+  raw: string,
+  nozzleDiameters: number[],
+  current?: string
+): { value: string } | { error: string } {
   const spec: SettingSpec = AI_SETTINGS[key];
   const text = raw.trim().toLowerCase();
   switch (spec.kind) {
-    case 'bool':
-      if (['1', 'true', 'yes', 'on'].includes(text)) return { value: '1' };
-      if (['0', 'false', 'no', 'off'].includes(text)) return { value: '0' };
-      return { error: `"${raw}" không phải giá trị bật/tắt` };
+    case 'bool': {
+      const value = parseBool(text);
+      return value ? { value } : { error: `"${raw}" không phải giá trị bật/tắt` };
+    }
+    case 'bools':
+      return normalizeVector(raw, current, (v) => parseBool(v) ?? { error: `"${raw}" không phải giá trị bật/tắt` });
+    case 'floats':
+      return normalizeVector(raw, current, (v) => {
+        const n = Number(v.replace(/mm\/s$/, '').trim());
+        if (!Number.isFinite(n)) return { error: `"${raw}" không phải số` };
+        if (n < spec.min || n > spec.max) return { error: `${n} nằm ngoài khoảng ${spec.min}–${spec.max}` };
+        return String(round(n, 3));
+      });
     case 'enum':
       return spec.values.includes(text) ? { value: text } : { error: `"${raw}" không nằm trong ${spec.values.join(', ')}` };
     default: {
@@ -174,7 +232,11 @@ export function normalizeValue(key: AiSettingKey, raw: string, nozzleDiameters: 
 function sameValue(key: AiSettingKey, a: string | undefined, b: string): boolean {
   if (a === undefined) return false;
   const kind = AI_SETTINGS[key].kind;
-  if (kind === 'enum' || kind === 'bool') return a.trim().toLowerCase() === b;
+  if (kind === 'enum' || kind === 'bool' || kind === 'bools') return a.trim().toLowerCase() === b;
+  if (kind === 'floats') {
+    const [x, y] = [a.split(','), b.split(',')];
+    return x.length === y.length && x.every((v, i) => (v.trim() === 'nil' ? y[i] === 'nil' : Number(v) === Number(y[i])));
+  }
   return Number(a.replace(/%$/, '')) === Number(b.replace(/%$/, ''));
 }
 
@@ -194,7 +256,7 @@ export function checkProposal(proposal: AiProposal, request: StudioRequest): AiO
       continue;
     }
     seen.add(settingKey);
-    const normalized = normalizeValue(settingKey, value, request.nozzle_diameters);
+    const normalized = normalizeValue(settingKey, value, request.nozzle_diameters, request.settings[settingKey]);
     if ('error' in normalized) {
       rejected.push({ key, value, reason: normalized.error });
       continue;
@@ -219,7 +281,10 @@ Bạn nhận mô tả plate đang mở: preset máy, preset quá trình in, fila
 Đề xuất thay đổi các tham số quá trình in để bản in thành công và phù hợp mục tiêu người dùng.
 - Chỉ dùng các key được liệt kê. Giá trị viết theo đúng cách Bambu Studio lưu: số thập phân dùng dấu chấm, phần trăm như "15%", bật/tắt là "1"/"0", enum đúng chính tả trong danh sách.
 - Chỉ đề xuất khi có lý do cụ thể từ hình học, vật liệu hoặc mục tiêu. Không đổi tham số đã hợp lý. Nếu mọi thứ đã ổn, trả về danh sách rỗng.
-- Cân nhắc: phần nhô lớn thì cần support (tree(auto) cho mẫu hữu cơ/phức tạp); vật cao, đáy nhỏ hoặc vật liệu dễ cong vênh (ABS, ASA, PA, PC) thì cần brim; chi tiết chịu lực thì thêm vòng tường và infill; mẫu trang trí thì giảm infill.
+- Cân nhắc: phần nhô lớn thì cần support (tree(auto) cho mẫu hữu cơ/phức tạp); vật cao, đáy nhỏ hoặc vật liệu dễ cong vênh (ABS, ASA, PA, PC) thì cần brim, chỉ dùng raft khi đáy quá nhỏ hoặc cong vênh nặng; chi tiết chịu lực thì thêm vòng tường và infill; mẫu trang trí thì giảm infill.
+- Số lớp vỏ trên/dưới thực tế là giá trị lớn hơn giữa số lớp và độ dày vỏ chia chiều cao lớp: muốn giảm vỏ thì giảm cả hai, muốn tăng thì tăng một trong hai là đủ.
+- Tốc độ áp cho mọi đầu phun; chỉ đổi khi mục tiêu là tốc độ hoặc bề mặt đẹp, và giữ trong mức vật liệu chịu được (TPU, vật liệu mềm phải in chậm).
+- Khe hở Z support lớn hơn thì dễ gỡ nhưng mặt dưới xấu hơn. Bù kích thước XY chỉ dùng cho chi tiết lắp ghép, giá trị nhỏ (vài phần trăm mm).
 - Thông tin hình học là ước lượng từ lưới tam giác, không phải kết quả slice.
 - Mỗi lý do viết bằng tiếng Việt, một câu ngắn, nêu dựa vào đâu. Phần summary bằng tiếng Việt, tối đa ba câu.`;
 
@@ -227,7 +292,15 @@ function describeSettings(request: StudioRequest): string {
   return AI_SETTING_KEYS.map((key) => {
     const spec: SettingSpec = AI_SETTINGS[key];
     const allowed =
-      spec.kind === 'enum' ? `một trong: ${spec.values.join(' | ')}` : spec.kind === 'bool' ? '"1" hoặc "0"' : `${spec.kind} ${spec.min}–${spec.max}${spec.kind === 'percent' ? '%' : ''}`;
+      spec.kind === 'enum'
+        ? `một trong: ${spec.values.join(' | ')}`
+        : spec.kind === 'bool'
+          ? '"1" hoặc "0"'
+          : spec.kind === 'bools'
+            ? '"1" hoặc "0", một giá trị cho mọi đầu phun'
+            : spec.kind === 'floats'
+              ? `một số ${spec.min}–${spec.max} mm/s cho mọi đầu phun`
+              : `${spec.kind} ${spec.min}–${spec.max}${spec.kind === 'percent' ? '%' : ''}`;
     return `- ${key} (${spec.label}): hiện tại ${request.settings[key] ?? 'không rõ'}; cho phép ${allowed}`;
   }).join('\n');
 }
