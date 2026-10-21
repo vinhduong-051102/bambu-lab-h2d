@@ -1,22 +1,27 @@
 diff --git a/src/slic3r/GUI/MainFrame.cpp b/src/slic3r/GUI/MainFrame.cpp
-index d38b5d2..479f9ca 100644
+index d38b5d2..f1db810 100644
 --- a/src/slic3r/GUI/MainFrame.cpp
 +++ b/src/slic3r/GUI/MainFrame.cpp
-@@ -12,6 +12,8 @@
+@@ -12,6 +12,11 @@
  #include <wx/tooltip.h>
  //#include <wx/glcanvas.h>
  #include <wx/filename.h>
 +#include <wx/utils.h>
 +#include <wx/process.h>
++#include <wx/checklst.h>
++#include <wx/choice.h>
++#include <wx/radiobox.h>
  #include <wx/debug.h>
  
  #include <boost/algorithm/string/predicate.hpp>
-@@ -49,6 +51,12 @@
+@@ -49,6 +54,14 @@
  #include "../Utils/MacDarkMode.hpp"
  
  #include <fstream>
 +#include <algorithm>
 +#include <cmath>
++#include <cctype>
++#include <optional>
 +#include <boost/filesystem.hpp>
 +#include <nlohmann/json.hpp>
 +#include "libslic3r/Model.hpp"
@@ -24,23 +29,25 @@ index d38b5d2..479f9ca 100644
  #include <string_view>
  
  #include "GUI_App.hpp"
-@@ -1289,6 +1297,7 @@ void MainFrame::show_option(bool show)
+@@ -1289,6 +1302,8 @@ void MainFrame::show_option(bool show)
              m_print_btn->Hide();
              m_slice_option_btn->Hide();
              m_print_option_btn->Hide();
 +            m_ai_btn->Hide();
++            m_ai_report_btn->Hide();
              split_line_icon->Hide();
              expand_program_holder->Hide();
              Layout();
-@@ -1299,6 +1308,7 @@ void MainFrame::show_option(bool show)
+@@ -1299,6 +1314,8 @@ void MainFrame::show_option(bool show)
              m_print_btn->Show();
              m_slice_option_btn->Show();
              m_print_option_btn->Show();
 +            m_ai_btn->Show();
++            m_ai_report_btn->Show();
              split_line_icon->Show();
              expand_program_holder->Show();
              Layout();
-@@ -2068,6 +2078,11 @@ wxBoxSizer* MainFrame::create_side_tools()
+@@ -2068,6 +2085,15 @@ wxBoxSizer* MainFrame::create_side_tools()
      print_sizer->Add(m_print_btn, 0, wxLEFT | wxALIGN_CENTER_VERTICAL, FromDIP(1));
      print_panel->SetSizer(print_sizer);
  
@@ -48,20 +55,26 @@ index d38b5d2..479f9ca 100644
 +    m_ai_btn = new SideButton(this, wxString::FromUTF8("AI tối ưu"), "");
 +    m_ai_btn->SetToolTip(wxString::FromUTF8("AI phân tích mẫu và tối ưu setting"));
 +    m_ai_btn->Bind(wxEVT_BUTTON, [this](wxCommandEvent &) { ai_optimize(); });
++    // "Báo cáo in": how a print with the AI's settings came out, sent to the gateway
++    m_ai_report_btn = new SideButton(this, wxString::FromUTF8("Báo cáo in"), "");
++    m_ai_report_btn->SetToolTip(wxString::FromUTF8("Báo cáo kết quả in với setting AI đề xuất"));
++    m_ai_report_btn->Bind(wxEVT_BUTTON, [this](wxCommandEvent &) { ai_report(); });
 +
      update_side_button_style();
      m_slice_option_btn->Enable();
      m_print_option_btn->Enable();
-@@ -2076,6 +2091,8 @@ wxBoxSizer* MainFrame::create_side_tools()
+@@ -2076,6 +2102,10 @@ wxBoxSizer* MainFrame::create_side_tools()
      sizer->Add(FromDIP(4), 0, 0, 0, 0);
      sizer->Add(split_line_icon, 0, wxALIGN_CENTER, 0);
      sizer->Add(FromDIP(6), 0, 0, 0, 0);
++    sizer->Add(m_ai_report_btn, 0, wxALIGN_CENTER_VERTICAL, 0);
++    sizer->Add(FromDIP(6), 0, 0, 0, 0);
 +    sizer->Add(m_ai_btn, 0, wxALIGN_CENTER_VERTICAL, 0);
 +    sizer->Add(FromDIP(8), 0, 0, 0, 0);
      sizer->Add(slice_panel);
      sizer->Add(FromDIP(8), 0, 0, 0, 0);
      sizer->Add(print_panel);
-@@ -2651,6 +2668,245 @@ void MainFrame::update_side_button_style()
+@@ -2651,6 +2681,557 @@ void MainFrame::update_side_button_style()
      m_print_option_btn->SetExtraSize(wxSize(FromDIP(10), FromDIP(10)));
      m_print_option_btn->SetIconOffset(FromDIP(2));
      m_print_option_btn->SetMinSize(wxSize(FromDIP(24), FromDIP(24)));
@@ -76,6 +89,19 @@ index d38b5d2..479f9ca 100644
 +    m_ai_btn->SetCornerRadius(FromDIP(12));
 +    m_ai_btn->SetExtraSize(wxSize(FromDIP(38), FromDIP(10)));
 +    m_ai_btn->SetMinSize(wxSize(-1, FromDIP(24)));
++
++    // The report button is the quieter one: white with the AI button's purple outline and text
++    StateColor report_bg(std::pair<wxColour, int>(wxColour(237, 233, 254), StateColor::Pressed),
++                         std::pair<wxColour, int>(wxColour(245, 243, 255), StateColor::Hovered),
++                         std::pair<wxColour, int>(*wxWHITE, StateColor::Normal));
++    m_ai_report_btn->SetBackgroundColor(report_bg);
++    m_ai_report_btn->SetBorderColor(StateColor(std::pair<wxColour, int>(wxColour(124, 58, 237), StateColor::Normal)));
++    m_ai_report_btn->SetForegroundColor(StateColor(std::pair<wxColour, int>(wxColour(172, 172, 172), StateColor::Disabled),
++                                                   std::pair<wxColour, int>(wxColour(91, 33, 182), StateColor::Normal)));
++    m_ai_report_btn->SetTextLayout(SideButton::EHorizontalOrientation::HO_Center, FromDIP(15));
++    m_ai_report_btn->SetCornerRadius(FromDIP(12));
++    m_ai_report_btn->SetExtraSize(wxSize(FromDIP(24), FromDIP(10)));
++    m_ai_report_btn->SetMinSize(wxSize(-1, FromDIP(24)));
 +}
 +
 +// "AI tối ưu" (bambu-lab-h2d patch). Studio writes a description of the plate to request.json and runs
@@ -184,9 +210,235 @@ index d38b5d2..479f9ca 100644
 +    auto it = value.find(key);
 +    return it != value.end() && it->is_string() ? wxString::FromUTF8(it->get<std::string>()) : wxString();
 +}
++// Runs a gateway route for Studio: gateway <GET|POST> <path under /api/studio> <body.json|-> <response.json>
++const std::string AI_GATEWAY = "/opt/studio-ai/gateway";
++
++void ai_write_json(const std::string &path, const nlohmann::json &value)
++{
++    boost::filesystem::create_directories(AI_DIR);
++    std::ofstream out(path, std::ios::binary | std::ios::trunc);
++    out << value.dump(1);
++    if (!out)
++        throw std::runtime_error("cannot write " + path);
++}
++
++// The JSON a hook wrote, or nullopt (logged) when it is missing or unreadable
++std::optional<nlohmann::json> ai_read_json(const std::string &path)
++{
++    try {
++        std::ifstream in(path, std::ios::binary);
++        return nlohmann::json::parse(in);
++    } catch (const std::exception &e) {
++        BOOST_LOG_TRIVIAL(error) << "AI: unreadable " << path << ": " << e.what();
++        return std::nullopt;
++    }
++}
++
++wxString ai_trimmed(wxString text)
++{
++    text.Trim(true).Trim(false);
++    return text;
++}
++
++// "20261022-141503-a1b2c3" (the gateway's local time) → "22/10 14:15"
++wxString ai_session_time(const std::string &id)
++{
++    if (id.size() < 13)
++        return wxString::FromUTF8(id);
++    return wxString::FromUTF8(id.substr(6, 2) + "/" + id.substr(4, 2) + " " + id.substr(9, 2) + ":" + id.substr(11, 2));
++}
++
++const int ID_AI_ASK_AGAIN = wxID_HIGHEST + 4201;
++
++// What the AI proposed, with room for the user's opinion: Áp dụng, Hỏi lại AI (with the opinion) or Đóng
++class AiResultDialog : public wxDialog
++{
++public:
++    AiResultDialog(wxWindow *parent, const wxString &summary, const wxString &changes, bool can_apply)
++        : wxDialog(parent, wxID_ANY, wxString::FromUTF8("AI tối ưu"), wxDefaultPosition, wxDefaultSize, wxDEFAULT_DIALOG_STYLE | wxRESIZE_BORDER)
++    {
++        const int gap = FromDIP(12);
++        auto *sizer = new wxBoxSizer(wxVERTICAL);
++
++        auto *summary_text = new wxStaticText(this, wxID_ANY, summary);
++        summary_text->Wrap(FromDIP(600));
++        sizer->Add(summary_text, 0, wxALL | wxEXPAND, gap);
++
++        auto *changes_text = new wxTextCtrl(this, wxID_ANY, changes, wxDefaultPosition, wxSize(FromDIP(620), FromDIP(260)),
++                                            wxTE_MULTILINE | wxTE_READONLY | wxTE_WORDWRAP);
++        sizer->Add(changes_text, 1, wxLEFT | wxRIGHT | wxEXPAND, gap);
++
++        sizer->Add(new wxStaticText(this, wxID_ANY, wxString::FromUTF8("Ý kiến của bạn về đề xuất này (AI sẽ đề xuất lại theo ý kiến):")),
++                   0, wxLEFT | wxRIGHT | wxTOP, gap);
++        m_comment = new wxTextCtrl(this, wxID_ANY, wxEmptyString, wxDefaultPosition, wxSize(-1, FromDIP(70)), wxTE_MULTILINE | wxTE_WORDWRAP);
++        sizer->Add(m_comment, 0, wxALL | wxEXPAND, gap);
++
++        auto *ask   = new wxButton(this, ID_AI_ASK_AGAIN, wxString::FromUTF8("Hỏi lại AI"));
++        auto *apply = new wxButton(this, wxID_APPLY, wxString::FromUTF8("Áp dụng"));
++        auto *close = new wxButton(this, wxID_CANCEL, wxString::FromUTF8("Đóng"));
++        ask->Enable(false);
++        apply->Enable(can_apply);
++        if (can_apply)
++            apply->SetDefault();
++        m_comment->Bind(wxEVT_TEXT, [this, ask](wxCommandEvent &) { ask->Enable(!comment().empty()); });
++        ask->Bind(wxEVT_BUTTON, [this](wxCommandEvent &) { EndModal(ID_AI_ASK_AGAIN); });
++        apply->Bind(wxEVT_BUTTON, [this](wxCommandEvent &) { EndModal(wxID_APPLY); });
++
++        auto *buttons = new wxBoxSizer(wxHORIZONTAL);
++        buttons->Add(ask);
++        buttons->AddStretchSpacer();
++        buttons->Add(apply, 0, wxRIGHT, FromDIP(8));
++        buttons->Add(close);
++        sizer->Add(buttons, 0, wxLEFT | wxRIGHT | wxBOTTOM | wxEXPAND, gap);
++
++        SetSizerAndFit(sizer);
++        CentreOnParent();
++    }
++
++    wxString comment() const { return ai_trimmed(m_comment->GetValue()); }
++
++private:
++    wxTextCtrl *m_comment;
++};
++
++// The print report: which AI proposal it is about, how the print came out, what went wrong, and notes.
++// Sessions, outcomes and problems all come from the gateway (GET ai-sessions).
++class AiReportDialog : public wxDialog
++{
++public:
++    explicit AiReportDialog(wxWindow *parent, const nlohmann::json &list)
++        : wxDialog(parent, wxID_ANY, wxString::FromUTF8("Báo cáo kết quả in"), wxDefaultPosition, wxDefaultSize, wxDEFAULT_DIALOG_STYLE | wxRESIZE_BORDER)
++        , m_sessions(list.value("sessions", nlohmann::json::array()))
++        , m_outcomes(list.value("outcomes", nlohmann::json::array()))
++        , m_issues(list.value("issues", nlohmann::json::array()))
++    {
++        const int gap = FromDIP(12);
++        auto *sizer = new wxBoxSizer(wxVERTICAL);
++
++        sizer->Add(new wxStaticText(this, wxID_ANY, wxString::FromUTF8("Lần AI tối ưu đã dùng cho bản in:")), 0, wxLEFT | wxRIGHT | wxTOP, gap);
++        wxArrayString labels;
++        int selected = -1;
++        for (size_t i = 0; i < m_sessions.size(); ++i) {
++            const nlohmann::json &s = m_sessions[i];
++            const bool applied  = s.contains("applied_at") && s["applied_at"].is_string();
++            const bool reported = s.contains("feedback_outcome") && s["feedback_outcome"].is_string();
++            // Preselect the newest proposal that was applied and has no report yet
++            if (selected < 0 && applied && !reported)
++                selected = int(i);
++            wxString objects;
++            for (const nlohmann::json &name : s.value("objects", nlohmann::json::array()))
++                objects += (objects.empty() ? "" : ", ") + wxString::FromUTF8(name.get<std::string>());
++            if (objects.length() > 40)
++                objects = objects.Left(39) + wxString::FromUTF8("…");
++            // Studio runs with LC_ALL=C, so text with accents or symbols always goes through FromUTF8
++            labels.Add(wxString::Format(wxString::FromUTF8("%s · %s · %d thay đổi · %s%s"), ai_session_time(s.value("id", "")), objects,
++                                        s.value("change_count", 0), wxString::FromUTF8(applied ? "đã áp dụng" : "chưa áp dụng"),
++                                        wxString::FromUTF8(reported ? " · đã báo cáo" : "")));
++        }
++        m_choice = new wxChoice(this, wxID_ANY, wxDefaultPosition, wxDefaultSize, labels);
++        m_choice->SetSelection(selected >= 0 ? selected : 0);
++        sizer->Add(m_choice, 0, wxALL | wxEXPAND, gap);
++
++        m_detail = new wxStaticText(this, wxID_ANY, wxEmptyString);
++        sizer->Add(m_detail, 0, wxLEFT | wxRIGHT | wxEXPAND, gap);
++
++        wxArrayString outcome_labels;
++        for (const nlohmann::json &o : m_outcomes)
++            outcome_labels.Add(wxString::FromUTF8(o.value("label", "")));
++        m_outcome = new wxRadioBox(this, wxID_ANY, wxString::FromUTF8("Kết quả in"), wxDefaultPosition, wxDefaultSize, outcome_labels,
++                                   int(outcome_labels.size()), wxRA_SPECIFY_COLS);
++        sizer->Add(m_outcome, 0, wxALL | wxEXPAND, gap);
++
++        sizer->Add(new wxStaticText(this, wxID_ANY, wxString::FromUTF8("Lỗi gặp phải:")), 0, wxLEFT | wxRIGHT, gap);
++        wxArrayString issue_labels;
++        for (const nlohmann::json &issue : m_issues)
++            issue_labels.Add(wxString::FromUTF8(issue.value("label", "")));
++        m_issue_list = new wxCheckListBox(this, wxID_ANY, wxDefaultPosition, wxSize(-1, FromDIP(170)), issue_labels);
++        sizer->Add(m_issue_list, 0, wxALL | wxEXPAND, gap);
++
++        sizer->Add(new wxStaticText(this, wxID_ANY, wxString::FromUTF8("Ghi chú (vị trí lỗi, bạn đã chỉnh gì thêm...):")), 0, wxLEFT | wxRIGHT, gap);
++        m_note = new wxTextCtrl(this, wxID_ANY, wxEmptyString, wxDefaultPosition, wxSize(FromDIP(560), FromDIP(80)), wxTE_MULTILINE | wxTE_WORDWRAP);
++        sizer->Add(m_note, 0, wxALL | wxEXPAND, gap);
++
++        auto *buttons = new wxBoxSizer(wxHORIZONTAL);
++        auto *send    = new wxButton(this, wxID_OK, wxString::FromUTF8("Gửi báo cáo"));
++        send->SetDefault();
++        buttons->AddStretchSpacer();
++        buttons->Add(send, 0, wxRIGHT, FromDIP(8));
++        buttons->Add(new wxButton(this, wxID_CANCEL, wxString::FromUTF8("Hủy")));
++        sizer->Add(buttons, 0, wxLEFT | wxRIGHT | wxBOTTOM | wxEXPAND, gap);
++
++        m_choice->Bind(wxEVT_CHOICE, [this](wxCommandEvent &) { show_detail(); });
++        show_detail();
++        SetSizerAndFit(sizer);
++        CentreOnParent();
++    }
++
++    std::string session_id() const { return m_sessions.at(size_t(m_choice->GetSelection())).value("id", ""); }
++
++    nlohmann::json feedback() const
++    {
++        nlohmann::json issues = nlohmann::json::array();
++        for (unsigned int i = 0; i < m_issue_list->GetCount(); ++i)
++            if (m_issue_list->IsChecked(i))
++                issues.push_back(m_issues.at(i).value("id", ""));
++        return {
++            {"outcome", m_outcomes.at(size_t(m_outcome->GetSelection())).value("id", "")},
++            {"issues", issues},
++            {"note", ai_trimmed(m_note->GetValue()).ToUTF8().data()},
++        };
++    }
++
++private:
++    void show_detail()
++    {
++        const nlohmann::json &s = m_sessions.at(size_t(m_choice->GetSelection()));
++        wxString text = wxString::FromUTF8(s.value("summary", ""));
++        if (s.contains("comment") && s["comment"].is_string())
++            text += wxString::FromUTF8("\nÝ kiến khi hỏi lại: ") + wxString::FromUTF8(s["comment"].get<std::string>());
++        if (s.contains("feedback_outcome") && s["feedback_outcome"].is_string())
++            text += wxString::FromUTF8("\nĐã có báo cáo cho lần này: gửi lại sẽ thay báo cáo cũ.");
++        m_detail->SetLabel(text);
++        m_detail->Wrap(FromDIP(560));
++        Layout();
++    }
++
++    nlohmann::json    m_sessions;
++    nlohmann::json    m_outcomes;
++    nlohmann::json    m_issues;
++    wxChoice         *m_choice;
++    wxStaticText     *m_detail;
++    wxRadioBox       *m_outcome;
++    wxCheckListBox   *m_issue_list;
++    wxTextCtrl       *m_note;
++};
++
++// Session ids go on a command line: only the gateway's own shape (digits, a-f and dashes) is used
++bool ai_safe_id(const std::string &id)
++{
++    return !id.empty() && id.size() <= 64 && std::all_of(id.begin(), id.end(), [](char c) { return std::isdigit((unsigned char) c) || (c >= 'a' && c <= 'f') || c == '-'; });
++}
++
 +} // namespace
 +
-+void MainFrame::ai_optimize()
++bool MainFrame::ai_run(const std::string &command, std::function<void()> done)
++{
++    auto *process = new wxProcess();
++    process->Bind(wxEVT_END_PROCESS, [this, process, done](wxProcessEvent &) {
++        // Deleted once its own event is done with it
++        CallAfter([process]() { delete process; });
++        done();
++    });
++    if (wxExecute(wxString::FromUTF8(command), wxEXEC_ASYNC, process) <= 0) {
++        // The process object is left alone here: leaking it beats a double delete if wx frees it
++        MessageDialog dlg(this, wxString::FromUTF8("Không chạy được ") + wxString::FromUTF8(command), wxString::FromUTF8("AI tối ưu"), wxOK | wxICON_ERROR);
++        dlg.ShowModal();
++        return false;
++    }
++    return true;
++}
++
++void MainFrame::ai_optimize(const std::string &follow_up_session, const wxString &comment)
 +{
 +    if (m_ai_running)
 +        return;
@@ -204,12 +456,12 @@ index d38b5d2..479f9ca 100644
 +    const std::string request_path  = AI_DIR + "/request.json";
 +    const std::string response_path = AI_DIR + "/response.json";
 +    try {
-+        boost::filesystem::create_directories(AI_DIR);
++        nlohmann::json request = ai_describe_plate();
++        // "Hỏi lại AI": the gateway puts the earlier proposal and this comment in the prompt
++        if (!follow_up_session.empty())
++            request["follow_up"] = {{"session_id", follow_up_session}, {"comment", comment.ToUTF8().data()}};
 +        boost::filesystem::remove(response_path);
-+        std::ofstream out(request_path, std::ios::binary | std::ios::trunc);
-+        out << ai_describe_plate().dump(1);
-+        if (!out)
-+            throw std::runtime_error("cannot write " + request_path);
++        ai_write_json(request_path, request);
 +    } catch (const std::exception &e) {
 +        BOOST_LOG_TRIVIAL(error) << "AI optimize: " << e.what();
 +        MessageDialog dlg(this, wxString::FromUTF8("Không ghi được dữ liệu mẫu để gửi cho AI."), wxString::FromUTF8("AI tối ưu"), wxOK | wxICON_ERROR);
@@ -217,23 +469,15 @@ index d38b5d2..479f9ca 100644
 +        return;
 +    }
 +
-+    auto *process = new wxProcess();
-+    process->Bind(wxEVT_END_PROCESS, [this, process, response_path](wxProcessEvent &) {
-+        // Deleted once its own event is done with it
-+        CallAfter([process]() { delete process; });
++    const bool started = ai_run(AI_HOOK + " " + request_path + " " + response_path, [this, response_path]() {
 +        m_ai_running = false;
 +        m_ai_btn->SetLabel(wxString::FromUTF8("AI tối ưu"));
 +        m_ai_btn->Enable();
 +        Layout();
 +        ai_optimize_apply(response_path);
 +    });
-+    const wxString command = wxString::FromUTF8(AI_HOOK + " " + request_path + " " + response_path);
-+    if (wxExecute(command, wxEXEC_ASYNC, process) <= 0) {
-+        // The process object is left alone here: leaking it beats a double delete if wx frees it
-+        MessageDialog dlg(this, wxString::FromUTF8("Không chạy được ") + wxString::FromUTF8(AI_HOOK), wxString::FromUTF8("AI tối ưu"), wxOK | wxICON_ERROR);
-+        dlg.ShowModal();
++    if (!started)
 +        return;
-+    }
 +    m_ai_running = true;
 +    m_ai_btn->SetLabel(wxString::FromUTF8("AI đang phân tích..."));
 +    m_ai_btn->Enable(false);
@@ -243,29 +487,29 @@ index d38b5d2..479f9ca 100644
 +void MainFrame::ai_optimize_apply(const std::string &response_path)
 +{
 +    const wxString title = wxString::FromUTF8("AI tối ưu");
-+    nlohmann::json response;
-+    try {
-+        std::ifstream in(response_path, std::ios::binary);
-+        response = nlohmann::json::parse(in);
-+    } catch (const std::exception &e) {
-+        BOOST_LOG_TRIVIAL(error) << "AI optimize: unreadable response: " << e.what();
++    const std::optional<nlohmann::json> response = ai_read_json(response_path);
++    if (!response) {
 +        MessageDialog dlg(this, wxString::FromUTF8("Không đọc được kết quả từ AI. Kiểm tra gateway và STUDIO_AI_URL."), title, wxOK | wxICON_ERROR);
 +        dlg.ShowModal();
 +        return;
 +    }
-+    if (!response.value("success", false)) {
-+        wxString message = ai_text(response, "message");
++    if (!response->value("success", false)) {
++        wxString message = ai_text(*response, "message");
 +        MessageDialog dlg(this, message.empty() ? wxString::FromUTF8("AI không xử lý được yêu cầu.") : message, title, wxOK | wxICON_ERROR);
 +        dlg.ShowModal();
 +        return;
 +    }
++    std::string session_id = response->value("session_id", "");
++    if (!ai_safe_id(session_id))
++        session_id.clear();
 +
 +    // The gateway already checked the keys and values; Studio still refuses anything that is not a
 +    // non-text setting of the process preset, and anything its own parser rejects.
 +    const DynamicPrintConfig &print_config = wxGetApp().preset_bundle->prints.get_edited_preset().config;
 +    DynamicPrintConfig proposed;
++    nlohmann::json applied = nlohmann::json::array();
 +    wxString lines;
-+    const nlohmann::json changes = response.value("changes", nlohmann::json::array());
++    const nlohmann::json changes = response->value("changes", nlohmann::json::array());
 +    for (const nlohmann::json &change : changes) {
 +        const std::string key   = change.value("key", "");
 +        const std::string value = change.value("value", "");
@@ -279,21 +523,23 @@ index d38b5d2..479f9ca 100644
 +            BOOST_LOG_TRIVIAL(warning) << "AI optimize: " << key << " = " << value << " rejected: " << e.what();
 +            continue;
 +        }
++        applied.push_back({{"key", key}, {"value", value}});
 +        wxString label = ai_text(change, "label");
-+        lines += wxString::Format("\n• %s: %s → %s\n   %s", label.empty() ? wxString::FromUTF8(key) : label,
++        lines += wxString::Format(wxString::FromUTF8("• %s: %s → %s\n   %s\n\n"), label.empty() ? wxString::FromUTF8(key) : label,
 +                                  wxString::FromUTF8(print_config.opt_serialize(key)), wxString::FromUTF8(value), ai_text(change, "reason"));
 +    }
++    if (proposed.empty())
++        lines = wxString::FromUTF8("Setting hiện tại đã phù hợp, AI không đề xuất thay đổi nào.");
 +
-+    wxString message = ai_text(response, "summary");
-+    if (proposed.empty()) {
-+        message += wxString::FromUTF8("\n\nSetting hiện tại đã phù hợp, AI không đề xuất thay đổi nào.");
-+        MessageDialog dlg(this, message, title, wxOK | wxICON_INFORMATION);
-+        dlg.ShowModal();
++    AiResultDialog dlg(this, ai_text(*response, "summary"), lines, !proposed.empty());
++    const int answer = dlg.ShowModal();
++    if (answer == ID_AI_ASK_AGAIN) {
++        // Back to the button's busy state; the new answer opens this dialog again
++        const wxString comment = dlg.comment();
++        CallAfter([this, session_id, comment]() { ai_optimize(session_id, comment); });
 +        return;
 +    }
-+    message += wxString::FromUTF8("\n") + lines + wxString::FromUTF8("\n\nÁp dụng các thay đổi này vào preset quá trình in?");
-+    MessageDialog dlg(this, message, title, wxYES_NO | wxICON_QUESTION);
-+    if (dlg.ShowModal() != wxID_YES)
++    if (answer != wxID_APPLY)
 +        return;
 +
 +    // Same follow-up as editing the density in the Process tab (Tab::on_value_change)
@@ -304,23 +550,117 @@ index d38b5d2..479f9ca 100644
 +    }
 +    if (Tab *tab = wxGetApp().get_tab(Preset::TYPE_PRINT))
 +        tab->load_config(proposed);
++
++    // Lets the print report know which proposal was used; nothing for the user to wait on or see
++    if (!session_id.empty() && wxFileName::IsFileExecutable(AI_GATEWAY)) {
++        try {
++            const std::string body = AI_DIR + "/applied.json";
++            ai_write_json(body, {{"changes", applied}});
++            ai_run(AI_GATEWAY + " POST ai-sessions/" + session_id + "/applied " + body + " " + AI_DIR + "/applied-response.json", []() {});
++        } catch (const std::exception &e) {
++            BOOST_LOG_TRIVIAL(warning) << "AI optimize: applied changes not recorded: " << e.what();
++        }
++    }
++}
++
++void MainFrame::ai_report()
++{
++    if (m_ai_reporting)
++        return;
++    const wxString title = wxString::FromUTF8("Báo cáo kết quả in");
++    if (!wxFileName::IsFileExecutable(AI_GATEWAY)) {
++        MessageDialog dlg(this, wxString::FromUTF8("Chưa có script /opt/studio-ai/gateway để gửi báo cáo."), title, wxOK | wxICON_INFORMATION);
++        dlg.ShowModal();
++        return;
++    }
++    const std::string list_path = AI_DIR + "/sessions.json";
++    try {
++        boost::filesystem::create_directories(AI_DIR);
++        boost::filesystem::remove(list_path);
++    } catch (const std::exception &e) {
++        BOOST_LOG_TRIVIAL(error) << "AI report: " << e.what();
++    }
++
++    const bool started = ai_run(AI_GATEWAY + " GET ai-sessions?limit=30 - " + list_path, [this, list_path]() {
++        m_ai_reporting = false;
++        m_ai_report_btn->Enable();
++        ai_report_show(list_path);
++    });
++    if (!started)
++        return;
++    m_ai_reporting = true;
++    m_ai_report_btn->Enable(false);
++}
++
++void MainFrame::ai_report_show(const std::string &list_path)
++{
++    const wxString title = wxString::FromUTF8("Báo cáo kết quả in");
++    const std::optional<nlohmann::json> list = ai_read_json(list_path);
++    if (!list || !list->value("success", false)) {
++        wxString message = list ? ai_text(*list, "message") : wxString();
++        MessageDialog dlg(this, message.empty() ? wxString::FromUTF8("Không lấy được danh sách các lần AI tối ưu từ gateway.") : message, title, wxOK | wxICON_ERROR);
++        dlg.ShowModal();
++        return;
++    }
++    if (list->value("sessions", nlohmann::json::array()).empty()) {
++        MessageDialog dlg(this, wxString::FromUTF8("Chưa có lần AI tối ưu nào để báo cáo. Hãy dùng nút AI tối ưu trước."), title, wxOK | wxICON_INFORMATION);
++        dlg.ShowModal();
++        return;
++    }
++
++    AiReportDialog dlg(this, *list);
++    if (dlg.ShowModal() != wxID_OK || !ai_safe_id(dlg.session_id()))
++        return;
++    const std::string body          = AI_DIR + "/feedback.json";
++    const std::string response_path = AI_DIR + "/feedback-response.json";
++    try {
++        boost::filesystem::remove(response_path);
++        ai_write_json(body, dlg.feedback());
++    } catch (const std::exception &e) {
++        BOOST_LOG_TRIVIAL(error) << "AI report: " << e.what();
++        MessageDialog error(this, wxString::FromUTF8("Không ghi được báo cáo để gửi."), title, wxOK | wxICON_ERROR);
++        error.ShowModal();
++        return;
++    }
++    ai_run(AI_GATEWAY + " POST ai-sessions/" + dlg.session_id() + "/feedback " + body + " " + response_path, [this, response_path, title]() {
++        const std::optional<nlohmann::json> response = ai_read_json(response_path);
++        const bool ok = response && response->value("success", false);
++        wxString message = ok ? wxString::FromUTF8("Đã gửi báo cáo. Cảm ơn bạn!") : (response ? ai_text(*response, "message") : wxString());
++        MessageDialog dlg(this, message.empty() ? wxString::FromUTF8("Không gửi được báo cáo.") : message, title, wxOK | (ok ? wxICON_INFORMATION : wxICON_ERROR));
++        dlg.ShowModal();
++    });
  }
  
  void MainFrame::update_slice_print_status(SlicePrintEventType event, bool can_slice, bool can_print)
 diff --git a/src/slic3r/GUI/MainFrame.hpp b/src/slic3r/GUI/MainFrame.hpp
-index 93422a8..fe336f9 100644
+index 93422a8..c401eaa 100644
 --- a/src/slic3r/GUI/MainFrame.hpp
 +++ b/src/slic3r/GUI/MainFrame.hpp
-@@ -420,6 +420,12 @@ public:
+@@ -1,6 +1,7 @@
+ #ifndef slic3r_MainFrame_hpp_
+ #define slic3r_MainFrame_hpp_
+ 
++#include <functional>
+ #include "libslic3r/PrintConfig.hpp"
+ 
+ #include <boost/property_tree/ptree_fwd.hpp>
+@@ -420,6 +421,19 @@ public:
      SideButton* m_slice_option_btn{ nullptr };
      SideButton* m_print_btn{ nullptr };
      SideButton* m_print_option_btn{ nullptr };
 +    // "AI tối ưu" button left of the slice button (bambu-lab-h2d patch)
 +    SideButton* m_ai_btn{ nullptr };
++    SideButton* m_ai_report_btn{ nullptr };
 +    bool m_ai_running{ false };
-+    // Runs the AI hook on the open plate, then offers its process-setting changes
-+    void ai_optimize();
++    bool m_ai_reporting{ false };
++    // Runs an /opt/studio-ai command without blocking; done runs on the UI thread once it exits
++    bool ai_run(const std::string &command, std::function<void()> done);
++    // Runs the AI hook on the open plate (again, with the user's comment on an earlier session), then offers its changes
++    void ai_optimize(const std::string &follow_up_session = "", const wxString &comment = wxString());
 +    void ai_optimize_apply(const std::string &response_path);
++    // "Báo cáo in": lists the AI sessions, then sends the user's report on one of them
++    void ai_report();
++    void ai_report_show(const std::string &list_path);
  
      wxWindowID expand_program_id = wxNewId();
      wxWindowID expand_helio_id = wxNewId();

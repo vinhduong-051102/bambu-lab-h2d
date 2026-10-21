@@ -1,9 +1,13 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { mkdtempSync, rmSync } from 'fs';
+import os from 'os';
+import path from 'path';
 import { PrinterStateStore } from '../src/domain/PrinterStateStore';
 import { CapabilityRegistry } from '../src/domain/capabilities/CapabilityRegistry';
 import { PrinterCommandService } from '../src/domain/commands/PrinterCommandService';
 import { PrinterService } from '../src/domain/PrinterService';
-import { setAiProposalSource } from '../src/api/routes/studio';
+import { setAiProposalSource, setAiSessionStore } from '../src/api/routes/studio';
+import { AiSessionStore } from '../src/domain/studio/aiSessions';
 import { buildUserPrompt, checkProposal, normalizeValue, type StudioRequest } from '../src/domain/studio/aiOptimize';
 import { createTestApp, type TestApp } from './helpers/testApp';
 
@@ -103,8 +107,11 @@ describe('POST /api/studio/ai-optimize', () => {
   let app: TestApp;
   let stateStore: PrinterStateStore;
   let prompts: string[];
+  let sessionDir: string;
 
   beforeEach(() => {
+    sessionDir = mkdtempSync(path.join(os.tmpdir(), 'ai-sessions-'));
+    setAiSessionStore(new AiSessionStore(sessionDir));
     stateStore = new PrinterStateStore('TEST_SERIAL_AI');
     const capabilityRegistry = new CapabilityRegistry();
     const mqtt = { publishRequest: async () => true };
@@ -120,6 +127,8 @@ describe('POST /api/studio/ai-optimize', () => {
 
   afterEach(() => {
     setAiProposalSource(null);
+    setAiSessionStore(null);
+    rmSync(sessionDir, { recursive: true, force: true });
     stateStore.destroy();
     app.close();
   });
@@ -129,6 +138,7 @@ describe('POST /api/studio/ai-optimize', () => {
     expect(res.statusCode).toBe(200);
     expect(res.json()).toEqual({
       success: true,
+      session_id: expect.stringMatching(/^\d{8}-\d{6}-[0-9a-f]{6}$/),
       summary: 'Cần support.',
       changes: [{ key: 'enable_support', label: 'Bật support', value: '1', reason: 'Phần nhô lớn' }],
       rejected: [],
@@ -187,5 +197,116 @@ describe('POST /api/studio/ai-optimize', () => {
     const res = await app.inject({ method: 'POST', url: '/api/studio/ai-optimize/check', payload: { request: studioRequest } });
     expect(res.statusCode).toBe(400);
     expect(res.json().error).toBe('AI_NO_OUTPUT');
+  });
+});
+
+describe('AI sessions: re-ask, applied changes and print reports', () => {
+  let app: TestApp;
+  let stateStore: PrinterStateStore;
+  let prompts: string[];
+  let sessionDir: string;
+
+  beforeEach(() => {
+    sessionDir = mkdtempSync(path.join(os.tmpdir(), 'ai-sessions-'));
+    setAiSessionStore(new AiSessionStore(sessionDir));
+    stateStore = new PrinterStateStore('TEST_SERIAL_AI_SESSIONS');
+    const capabilityRegistry = new CapabilityRegistry();
+    const mqtt = { publishRequest: async () => true };
+    const commandService = new PrinterCommandService(capabilityRegistry, stateStore, mqtt as any);
+    const printerService = new PrinterService({ serial: 'TEST_SERIAL_AI_SESSIONS', stateStore, capabilityRegistry, commandService, mqttClient: mqtt as any });
+    app = createTestApp(printerService);
+    prompts = [];
+    setAiProposalSource(async (_system, user) => {
+      prompts.push(user);
+      return prompts.length === 1
+        ? { summary: 'Cần support.', changes: [{ key: 'enable_support', value: '1', reason: 'Phần nhô lớn' }] }
+        : { summary: 'Dùng brim thay support.', changes: [{ key: 'brim_type', value: 'outer_only', reason: 'Theo ý người dùng' }] };
+    });
+  });
+
+  afterEach(() => {
+    setAiProposalSource(null);
+    setAiSessionStore(null);
+    rmSync(sessionDir, { recursive: true, force: true });
+    stateStore.destroy();
+    app.close();
+  });
+
+  const ask = async (payload: unknown) => {
+    const res = await app.inject({ method: 'POST', url: '/api/studio/ai-optimize', payload });
+    expect(res.statusCode).toBe(200);
+    return res.json();
+  };
+
+  it('re-asks with the previous proposal and the user comment in the prompt', async () => {
+    const first = await ask(studioRequest);
+    const second = await ask({ ...studioRequest, follow_up: { session_id: first.session_id, comment: 'Không muốn support, gỡ khó lắm' } });
+
+    expect(prompts[1]).toContain('Lần trước bạn đã đề xuất');
+    expect(prompts[1]).toContain('- enable_support (Bật support) = 1: Phần nhô lớn');
+    expect(prompts[1]).toContain('"Không muốn support, gỡ khó lắm"');
+    expect(second.changes.map((c: { key: string }) => c.key)).toEqual(['brim_type']);
+
+    const res = await app.inject({ method: 'GET', url: `/api/studio/ai-sessions/${second.session_id}` });
+    expect(res.json().session).toMatchObject({ previous_id: first.session_id, comment: 'Không muốn support, gỡ khó lắm' });
+  });
+
+  it('builds the claude -p prompt for a re-ask too', async () => {
+    const first = await ask(studioRequest);
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/studio/ai-optimize/prompt',
+      payload: { ...studioRequest, follow_up: { session_id: first.session_id, comment: 'In nhanh hơn' } },
+    });
+    expect(res.json().user).toContain('"In nhanh hơn"');
+  });
+
+  it('rejects an empty comment', async () => {
+    const res = await app.inject({ method: 'POST', url: '/api/studio/ai-optimize', payload: { ...studioRequest, follow_up: { session_id: 'x', comment: '  ' } } });
+    expect(res.statusCode).toBe(400);
+  });
+
+  it('records the applied changes and the print report, and lists sessions newest first', async () => {
+    const first = await ask(studioRequest);
+    const second = await ask(studioRequest);
+
+    const applied = await app.inject({
+      method: 'POST',
+      url: `/api/studio/ai-sessions/${first.session_id}/applied`,
+      payload: { changes: [{ key: 'enable_support', value: '1' }] },
+    });
+    expect(applied.statusCode).toBe(200);
+
+    const feedback = await app.inject({
+      method: 'POST',
+      url: `/api/studio/ai-sessions/${first.session_id}/feedback`,
+      payload: { outcome: 'usable', issues: ['support_removal'], note: 'Support dính chặt ở mặt dưới' },
+    });
+    expect(feedback.statusCode).toBe(200);
+
+    const list = (await app.inject({ method: 'GET', url: '/api/studio/ai-sessions' })).json();
+    expect(list.sessions.map((s: { id: string }) => s.id)).toEqual([second.session_id, first.session_id].sort().reverse());
+    expect(list.sessions.find((s: { id: string }) => s.id === first.session_id)).toMatchObject({
+      objects: ['Bracket.stl'],
+      change_count: 1,
+      applied_at: expect.any(String),
+      feedback_outcome: 'usable',
+    });
+    expect(list.issues).toContainEqual({ id: 'support_removal', label: 'Support khó gỡ' });
+    expect(list.outcomes.map((o: { id: string }) => o.id)).toEqual(['success', 'usable', 'failed']);
+
+    const session = (await app.inject({ method: 'GET', url: `/api/studio/ai-sessions/${first.session_id}` })).json().session;
+    expect(session.settings_before).toEqual({ enable_support: '0' });
+    expect(session.feedback).toMatchObject({ outcome: 'usable', issues: ['support_removal'], note: 'Support dính chặt ở mặt dưới' });
+  });
+
+  it('rejects unknown issues and unknown or malformed session ids', async () => {
+    const first = await ask(studioRequest);
+    const bad = await app.inject({ method: 'POST', url: `/api/studio/ai-sessions/${first.session_id}/feedback`, payload: { outcome: 'failed', issues: ['aliens'] } });
+    expect(bad.statusCode).toBe(400);
+    for (const id of ['20990101-000000-abcdef', '..%2F..%2Fetc']) {
+      const res = await app.inject({ method: 'POST', url: `/api/studio/ai-sessions/${id}/feedback`, payload: { outcome: 'success' } });
+      expect(res.statusCode, id).toBe(404);
+    }
   });
 });

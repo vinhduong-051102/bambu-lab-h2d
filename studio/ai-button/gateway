@@ -1,0 +1,55 @@
+#!/bin/sh
+# Run by Studio for the AI session routes: gateway <GET|POST> <path> <body.json|-> <response.json>
+# <path> is under the gateway's /api/studio (e.g. ai-sessions, ai-sessions/<id>/feedback). Writes the
+# gateway's JSON answer to <response.json>; any failure is written as {"success": false, "message": ...}.
+
+method="$1"
+route="$2"
+body="$3"
+response="$4"
+
+# Container variables from docker-compose.studio.yml; s6 keeps them here when the session didn't inherit them
+for var in STUDIO_AI_URL STUDIO_AI_TOKEN; do
+  eval "current=\${$var:-}"
+  if [ -z "$current" ] && [ -r "/run/s6/container_environment/$var" ]; then
+    eval "$var=\$(cat /run/s6/container_environment/$var)"
+  fi
+done
+url="${STUDIO_AI_URL:-http://host.docker.internal:3000/api/studio/ai-optimize}"
+base="${url%/ai-optimize}"
+
+fail() {
+  if command -v jq >/dev/null 2>&1; then
+    jq -n --arg message "$1" '{success: false, message: $message}' > "$response"
+  else
+    # The messages below carry no quotes or backslashes, so they need no JSON escaping
+    printf '{"success": false, "message": "%s"}\n' "$1" > "$response"
+  fi
+  rm -f "$response.part"
+  exit 0
+}
+
+case "$method" in
+  GET) data="" ;;
+  POST)
+    [ -r "$body" ] || fail "Không đọc được dữ liệu từ Studio."
+    data="--data-binary @$body"
+    ;;
+  *) fail "Lệnh $method không được hỗ trợ." ;;
+esac
+
+# $data is left unquoted on purpose: empty for GET, two words for POST
+status=$(curl -sS -o "$response.part" -w '%{http_code}' --max-time 60 -X "$method" \
+  -H 'Content-Type: application/json' \
+  ${STUDIO_AI_TOKEN:+-H "Authorization: Bearer $STUDIO_AI_TOKEN"} \
+  $data "$base/$route" 2>/dev/null)
+
+case "$status" in
+  ""|000) fail "Không kết nối được gateway tại $base." ;;
+  401) fail "Gateway từ chối: STUDIO_AI_TOKEN phải bằng GATEWAY_API_KEY." ;;
+esac
+if ! grep -q '"success"' "$response.part" 2>/dev/null; then
+  fail "Gateway chưa có $base/$route (HTTP $status): cập nhật gateway rồi thử lại."
+fi
+# The gateway answers every other case, errors included, with JSON that carries its own message
+mv "$response.part" "$response"

@@ -16,10 +16,22 @@ A click (when this folder, mounted read-only at `/opt/studio-ai`, has an executa
      runs `claude -p` with that prompt and output schema (no tools, no settings files, 5-minute limit), and posts
      `{request, proposal}` to `$STUDIO_AI_URL/check`. Claude is billed to that Claude subscription.
    - without it: it posts the request to `$STUDIO_AI_URL`, and the gateway asks Claude with its `ANTHROPIC_API_KEY`.
-4. Studio lists the proposed changes with their reasons. On **Yes** it loads them into the edited process
-   preset, as if they had been typed in the Process tab: they show as modified and can be reset there.
+4. Studio lists the proposed changes with their reasons, with a box for the user's opinion:
+   - **Áp dụng** loads them into the edited process preset, as if they had been typed in the Process tab: they
+     show as modified and can be reset there. Studio then runs `gateway POST ai-sessions/<id>/applied` so the
+     gateway knows which proposal was used.
+   - **Hỏi lại AI** (once the box has text) runs step 1 again with `follow_up: {session_id, comment}` in the
+     request: the gateway puts the earlier proposal and the comment in the prompt.
 
-`on-click` changes without a rebuild. Without it, Studio shows a "coming soon" message.
+**Báo cáo in**, left of **AI tối ưu**, reports how a print with the AI's settings came out. Studio runs
+`gateway GET ai-sessions?limit=30` and shows the recent proposals (the newest applied one without a report is
+preselected), the outcomes and problems the gateway lists, and a note box. **Gửi báo cáo** runs
+`gateway POST ai-sessions/<id>/feedback`.
 
-`response.json` is `{"success": true, "summary": "...", "changes": [{"key", "label", "value", "reason"}]}`,
+`gateway <GET|POST> <path under /api/studio> <body.json|-> <response.json>` is the small script both buttons use
+for those routes. It finds the gateway from `STUDIO_AI_URL`, like `on-click`.
+
+`on-click` and `gateway` change without a rebuild. Without `on-click`, Studio shows a "coming soon" message.
+
+`response.json` is `{"success": true, "session_id": "...", "summary": "...", "changes": [{"key", "label", "value", "reason"}]}`,
 or `{"success": false, "message": "..."}`, which Studio shows as an error.

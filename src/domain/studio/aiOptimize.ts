@@ -98,8 +98,16 @@ export const studioRequestSchema = z.object({
       })
     )
     .max(200),
+  // "Hỏi lại AI" in Studio's result dialog: the session being answered and what the user said about it
+  follow_up: z.object({ session_id: z.string(), comment: z.string().trim().min(1).max(2000) }).optional(),
 });
 export type StudioRequest = z.infer<typeof studioRequestSchema>;
+
+/** The proposal a re-ask answers, and the user's comment on it */
+export interface FollowUp {
+  previous: { summary: string; changes: { key: string; label: string; value: string; reason: string }[] } | null;
+  comment: string;
+}
 
 export interface AiChange {
   key: AiSettingKey;
@@ -317,7 +325,26 @@ function describePrinter(state: PrinterState | null): string {
   return [`Đầu phun đang lắp: ${nozzles || 'không rõ'}`, `Filament trong AMS: ${trays || 'không rõ'}`].join('\n');
 }
 
-export function buildUserPrompt(request: StudioRequest, printerState: PrinterState | null): string {
+/** The re-ask part of the prompt: what was proposed before and what the user said about it */
+function describeFollowUp(followUp: FollowUp): string[] {
+  const previous = followUp.previous
+    ? [
+        'Lần trước bạn đã đề xuất (người dùng chưa áp dụng):',
+        followUp.previous.summary,
+        ...followUp.previous.changes.map((c) => `- ${c.key} (${c.label}) = ${c.value}: ${c.reason}`),
+      ]
+    : ['Không còn lưu đề xuất lần trước.'];
+  return [
+    '',
+    ...previous,
+    '',
+    'Ý kiến của người dùng về đề xuất đó:',
+    JSON.stringify(followUp.comment),
+    'Đề xuất lại theo ý kiến này, vẫn so với giá trị hiện tại ở trên. Nếu ý kiến làm tăng nguy cơ in hỏng, vẫn làm theo nhưng nói rõ rủi ro trong summary.',
+  ];
+}
+
+export function buildUserPrompt(request: StudioRequest, printerState: PrinterState | null, followUp: FollowUp | null = null): string {
   return [
     `Mục tiêu: ${GOALS[request.goal]}`,
     '',
@@ -334,6 +361,7 @@ export function buildUserPrompt(request: StudioRequest, printerState: PrinterSta
     '',
     'Vật thể trên plate:',
     JSON.stringify(request.objects, null, 1),
+    ...(followUp ? describeFollowUp(followUp) : []),
   ].join('\n');
 }
 
@@ -369,16 +397,21 @@ export function claudeProposalSource(model: string, client = new Anthropic()): P
 }
 
 /** The system and user prompts for a plate, for callers that ask Claude themselves */
-export function buildPrompts(request: StudioRequest, printerState: PrinterState | null): { system: string; user: string } {
-  return { system: SYSTEM_PROMPT, user: buildUserPrompt(request, printerState) };
+export function buildPrompts(
+  request: StudioRequest,
+  printerState: PrinterState | null,
+  followUp: FollowUp | null = null
+): { system: string; user: string } {
+  return { system: SYSTEM_PROMPT, user: buildUserPrompt(request, printerState, followUp) };
 }
 
 export async function optimizeSettings(
   request: StudioRequest,
   printerState: PrinterState | null,
-  source: ProposalSource
+  source: ProposalSource,
+  followUp: FollowUp | null = null
 ): Promise<AiOptimizeResult> {
-  const { system, user } = buildPrompts(request, printerState);
+  const { system, user } = buildPrompts(request, printerState, followUp);
   const proposal = await source(system, user);
   return checkProposal(proposal, request);
 }
