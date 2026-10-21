@@ -102,7 +102,7 @@ export interface AiOptimizeResult {
 }
 
 /** One proposal as the model writes it: the value is free text, checked against AI_SETTINGS afterwards */
-const proposalFormat = jsonSchemaOutputFormat({
+export const PROPOSAL_JSON_SCHEMA = {
   type: 'object',
   properties: {
     summary: { type: 'string' },
@@ -122,13 +122,21 @@ const proposalFormat = jsonSchemaOutputFormat({
   },
   required: ['summary', 'changes'],
   additionalProperties: false,
-  // Sent as written: the API enforces the key enum, which the SDK's transform would demote to a description
-} as const, { transform: false });
+} as const;
+
+// Sent as written: the API enforces the key enum, which the SDK's transform would demote to a description
+const proposalFormat = jsonSchemaOutputFormat(PROPOSAL_JSON_SCHEMA, { transform: false });
 
 export interface AiProposal {
   summary: string;
   changes: { key: string; value: string; reason: string }[];
 }
+
+/** A proposal made outside the gateway (`claude -p` in Studio's container), sent back to be checked */
+export const aiProposalSchema = z.object({
+  summary: z.string(),
+  changes: z.array(z.object({ key: z.string(), value: z.string(), reason: z.string() })).max(100),
+});
 
 const round = (n: number, digits: number) => Number(n.toFixed(digits));
 
@@ -287,11 +295,17 @@ export function claudeProposalSource(model: string, client = new Anthropic()): P
   };
 }
 
+/** The system and user prompts for a plate, for callers that ask Claude themselves */
+export function buildPrompts(request: StudioRequest, printerState: PrinterState | null): { system: string; user: string } {
+  return { system: SYSTEM_PROMPT, user: buildUserPrompt(request, printerState) };
+}
+
 export async function optimizeSettings(
   request: StudioRequest,
   printerState: PrinterState | null,
   source: ProposalSource
 ): Promise<AiOptimizeResult> {
-  const proposal = await source(SYSTEM_PROMPT, buildUserPrompt(request, printerState));
+  const { system, user } = buildPrompts(request, printerState);
+  const proposal = await source(system, user);
   return checkProposal(proposal, request);
 }

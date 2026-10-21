@@ -5,10 +5,15 @@ import Anthropic from '@anthropic-ai/sdk';
 import { env } from '../../config/env';
 import {
   AiOptimizeError,
+  aiProposalSchema,
+  buildPrompts,
+  checkProposal,
   claudeProposalSource,
   optimizeSettings,
+  PROPOSAL_JSON_SCHEMA,
   studioRequestSchema,
   type ProposalSource,
+  type StudioRequest,
 } from '../../domain/studio/aiOptimize';
 import { handler, json, readJsonBody } from '../http';
 
@@ -126,6 +131,17 @@ export function setAiProposalSource(source: ProposalSource | null): void {
   proposalSourceOverride = source;
 }
 
+/** The plate description Studio wrote, or the 400 response explaining what is wrong with it */
+function parseStudioRequest(body: unknown): StudioRequest | Response {
+  const parsed = studioRequestSchema.safeParse(body);
+  if (parsed.success) return parsed.data;
+  const issue = parsed.error.issues[0];
+  return json(
+    { success: false, error: 'INVALID_PAYLOAD', message: `Dữ liệu từ Studio không hợp lệ: ${issue.path.join('.') || '(gốc)'} ${issue.message}` },
+    400
+  );
+}
+
 const hasClaudeCredentials = () => !!(process.env.ANTHROPIC_API_KEY?.trim() || process.env.ANTHROPIC_AUTH_TOKEN?.trim());
 
 // POST /api/studio/ai-optimize - Studio's "AI tối ưu" button: plate description in, checked setting changes out
@@ -133,18 +149,12 @@ export const aiOptimize = handler(async ({ request, printerService }) => {
   if (!proposalSourceOverride && !hasClaudeCredentials()) {
     return json({ success: false, error: 'AI_DISABLED', message: 'Chưa cấu hình ANTHROPIC_API_KEY cho gateway.' }, 501);
   }
-  const parsed = studioRequestSchema.safeParse(await readJsonBody(request));
-  if (!parsed.success) {
-    const issue = parsed.error.issues[0];
-    return json(
-      { success: false, error: 'INVALID_PAYLOAD', message: `Dữ liệu từ Studio không hợp lệ: ${issue.path.join('.') || '(gốc)'} ${issue.message}` },
-      400
-    );
-  }
+  const parsed = parseStudioRequest(await readJsonBody(request));
+  if (parsed instanceof Response) return parsed;
 
   const source = proposalSourceOverride ?? claudeProposalSource(env.STUDIO_AI_MODEL);
   try {
-    const result = await optimizeSettings(parsed.data, printerService.stateStore.getState(), source);
+    const result = await optimizeSettings(parsed, printerService.stateStore.getState(), source);
     return json({ success: true, ...result });
   } catch (err) {
     if (err instanceof AiOptimizeError) {
@@ -161,4 +171,24 @@ export const aiOptimize = handler(async ({ request, printerService }) => {
     }
     throw err;
   }
+});
+
+// POST /api/studio/ai-optimize/prompt - The prompts and output schema for a plate, for `claude -p` in Studio's
+// container (signed in with a Claude subscription instead of the gateway's ANTHROPIC_API_KEY)
+export const aiOptimizePrompt = handler(async ({ request, printerService }) => {
+  const parsed = parseStudioRequest(await readJsonBody(request));
+  if (parsed instanceof Response) return parsed;
+  return json({ success: true, ...buildPrompts(parsed, printerService.stateStore.getState()), schema: PROPOSAL_JSON_SCHEMA });
+});
+
+// POST /api/studio/ai-optimize/check - {request, proposal}: the same checks as ai-optimize, on a proposal made elsewhere
+export const aiOptimizeCheck = handler(async ({ request }) => {
+  const body = (await readJsonBody(request)) as { request?: unknown; proposal?: unknown } | null;
+  const parsed = parseStudioRequest(body?.request);
+  if (parsed instanceof Response) return parsed;
+  const proposal = aiProposalSchema.safeParse(body?.proposal);
+  if (!proposal.success) {
+    return json({ success: false, error: 'AI_NO_OUTPUT', message: 'AI không trả về kết quả hợp lệ.' }, 400);
+  }
+  return json({ success: true, ...checkProposal(proposal.data, parsed) });
 });

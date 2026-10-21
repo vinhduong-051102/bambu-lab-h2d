@@ -28,6 +28,11 @@ services:
       # the gateway's API key when GATEWAY_API_KEY is set
       - STUDIO_AI_URL=${STUDIO_AI_URL:-http://host.docker.internal:3000/api/studio/ai-optimize}
       - STUDIO_AI_TOKEN=${GATEWAY_API_KEY:-}
+      # With a token from `claude setup-token`, on-click asks Claude itself (`claude -p`, billed to that
+      # Claude subscription) and the gateway only builds the prompt and checks the answer: no ANTHROPIC_API_KEY
+      - CLAUDE_CODE_OAUTH_TOKEN=${CLAUDE_CODE_OAUTH_TOKEN:-}
+      - STUDIO_AI_MODEL=${STUDIO_AI_MODEL:-claude-opus-5-5}
+      - DISABLE_AUTOUPDATER=1
       # Stream encoding stays on the CPU: NVENC can't work under WSL2, whose libcuda lacks the CUDA-EGL
       # interop Selkies needs (cuGraphicsEGLRegisterImage). 720p, H.264 across threads, capped at 30 fps.
       # H.264 only: JPEG costs several times the bandwidth, too much over a Tailscale relay, so clients

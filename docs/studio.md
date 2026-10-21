@@ -37,7 +37,26 @@ If you close Studio's window (✕), it starts again after a few seconds (`studio
 
 Load a model, then click **AI tối ưu**. Studio sends the plate to the gateway, which asks Claude for process settings that suit the model's shape, the filament and the nozzles. Studio lists each proposed change with its reason. **Yes** applies them to the process preset like a manual edit: they show as modified in the Process tab and can be reset there. **No** leaves everything as it was. The AI never slices or prints.
 
-To turn it on, add the Claude API key to the gateway's `.env` and restart the gateway:
+To turn it on, either sign in with a Claude subscription (Pro/Max) or give the gateway an API key.
+
+**With a Claude subscription, no API key.** Studio's container asks Claude itself with `claude -p` (Claude Code, installed in the image), billed to your subscription's usage limits. The gateway still builds the prompt and checks the answer. Create a long-lived token on any machine with Claude Code, put it in `.env`, then recreate the Studio container:
+
+```bash
+claude setup-token
+```
+
+```env
+CLAUDE_CODE_OAUTH_TOKEN=<token printed by claude setup-token>
+STUDIO_AI_MODEL=claude-opus-5-5   # optional
+```
+
+```bash
+docker compose -f docker-compose.studio.yml up -d
+```
+
+The token is for your own use: keep the stream behind `STUDIO_USER`/`STUDIO_PASSWORD` and don't let other people use the button on your subscription. Updating Claude Code means rebuilding the image (only the last layer changes).
+
+**With an API key.** Leave `CLAUDE_CODE_OAUTH_TOKEN` empty, add the key to the gateway's `.env` and restart the gateway:
 
 ```env
 ANTHROPIC_API_KEY=<key>
@@ -91,3 +110,5 @@ STUDIO_ALT_URLS=https://<machine>.<tailnet>.ts.net:8443/
 | GET | `/api/studio` | `{ enabled, url, importsEnabled }` |
 | POST | `/api/studio/import` | `multipart/form-data` field `file`. Saves it to `STUDIO_IMPORT_DIR` and returns `{ success, name, studioPath }` |
 | POST | `/api/studio/ai-optimize` | Called by Studio's **AI tối ưu** button with the plate description Studio writes. Returns `{ success, summary, changes: [{ key, label, value, reason }], rejected }`. 501 without `ANTHROPIC_API_KEY` |
+| POST | `/api/studio/ai-optimize/prompt` | The same plate description in; `{ success, system, user, schema }` out, for `claude -p` in Studio's container. Needs no `ANTHROPIC_API_KEY` |
+| POST | `/api/studio/ai-optimize/check` | `{ request, proposal }`: the plate description and the proposal from `claude -p`. Same checks and answer as `/api/studio/ai-optimize` |
