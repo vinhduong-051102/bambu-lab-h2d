@@ -1,8 +1,16 @@
 import { promises as fs } from 'fs';
 import os from 'os';
 import path from 'path';
+import Anthropic from '@anthropic-ai/sdk';
 import { env } from '../../config/env';
-import { handler, json } from '../http';
+import {
+  AiOptimizeError,
+  claudeProposalSource,
+  optimizeSettings,
+  studioRequestSchema,
+  type ProposalSource,
+} from '../../domain/studio/aiOptimize';
+import { handler, json, readJsonBody } from '../http';
 
 const MAX_IMPORT_BYTES = 1024 * 1024 * 1024;
 
@@ -109,4 +117,48 @@ export const importToStudio = handler(async ({ request }) => {
     return json({ success: false, error: 'WRITE_FAILED', message: `Không lưu được file: ${err instanceof Error ? err.message : String(err)}` }, 500);
   }
   return json({ success: true, name: stored, studioPath: `/imports/${stored}` }, 201);
+});
+
+let proposalSourceOverride: ProposalSource | null = null;
+
+/** Tests replace the Claude call with a canned proposal; null restores it */
+export function setAiProposalSource(source: ProposalSource | null): void {
+  proposalSourceOverride = source;
+}
+
+const hasClaudeCredentials = () => !!(process.env.ANTHROPIC_API_KEY?.trim() || process.env.ANTHROPIC_AUTH_TOKEN?.trim());
+
+// POST /api/studio/ai-optimize - Studio's "AI tối ưu" button: plate description in, checked setting changes out
+export const aiOptimize = handler(async ({ request, printerService }) => {
+  if (!proposalSourceOverride && !hasClaudeCredentials()) {
+    return json({ success: false, error: 'AI_DISABLED', message: 'Chưa cấu hình ANTHROPIC_API_KEY cho gateway.' }, 501);
+  }
+  const parsed = studioRequestSchema.safeParse(await readJsonBody(request));
+  if (!parsed.success) {
+    const issue = parsed.error.issues[0];
+    return json(
+      { success: false, error: 'INVALID_PAYLOAD', message: `Dữ liệu từ Studio không hợp lệ: ${issue.path.join('.') || '(gốc)'} ${issue.message}` },
+      400
+    );
+  }
+
+  const source = proposalSourceOverride ?? claudeProposalSource(env.STUDIO_AI_MODEL);
+  try {
+    const result = await optimizeSettings(parsed.data, printerService.stateStore.getState(), source);
+    return json({ success: true, ...result });
+  } catch (err) {
+    if (err instanceof AiOptimizeError) {
+      return json({ success: false, error: err.code, message: err.message }, 502);
+    }
+    if (err instanceof Anthropic.AuthenticationError) {
+      return json({ success: false, error: 'AI_AUTH_FAILED', message: 'ANTHROPIC_API_KEY không hợp lệ.' }, 502);
+    }
+    if (err instanceof Anthropic.RateLimitError) {
+      return json({ success: false, error: 'AI_RATE_LIMITED', message: 'AI đang quá tải, thử lại sau ít phút.' }, 503);
+    }
+    if (err instanceof Anthropic.APIError) {
+      return json({ success: false, error: 'AI_API_ERROR', message: `Lỗi từ Claude API (${err.status ?? 'mạng'}): ${err.message}` }, 502);
+    }
+    throw err;
+  }
 });

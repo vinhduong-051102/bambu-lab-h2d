@@ -1,0 +1,42 @@
+#!/bin/sh
+# Run by Studio's "AI tối ưu" button: on-click <request.json> <response.json>
+# Sends Studio's plate description to the gateway (POST /api/studio/ai-optimize) and writes the
+# gateway's JSON answer to <response.json>, which Studio reads once this script exits.
+# Any failure is written as {"success": false, "message": ...} so Studio can show it.
+
+request="$1"
+response="$2"
+
+# Container variables from docker-compose.studio.yml; s6 keeps them here when the session didn't inherit them
+for var in STUDIO_AI_URL STUDIO_AI_TOKEN; do
+  eval "current=\${$var:-}"
+  if [ -z "$current" ] && [ -r "/run/s6/container_environment/$var" ]; then
+    eval "$var=\$(cat /run/s6/container_environment/$var)"
+  fi
+done
+url="${STUDIO_AI_URL:-http://host.docker.internal:3000/api/studio/ai-optimize}"
+
+fail() {
+  # The message is plain Vietnamese text without quotes or backslashes, so it needs no JSON escaping
+  printf '{"success": false, "message": "%s"}\n' "$1" > "$response"
+  exit 0
+}
+
+[ -r "$request" ] || fail "Không đọc được dữ liệu từ Studio."
+
+body="$response.part"
+status=$(curl -sS -o "$body" -w '%{http_code}' --max-time 300 \
+  -H 'Content-Type: application/json' \
+  ${STUDIO_AI_TOKEN:+-H "Authorization: Bearer $STUDIO_AI_TOKEN"} \
+  --data-binary "@$request" "$url" 2>/dev/null)
+
+if [ -z "$status" ] || [ "$status" = "000" ]; then
+  rm -f "$body"
+  fail "Không kết nối được gateway tại $url."
+fi
+if [ "$status" = "401" ]; then
+  rm -f "$body"
+  fail "Gateway từ chối: STUDIO_AI_TOKEN phải bằng GATEWAY_API_KEY."
+fi
+# The gateway answers every other case, errors included, with JSON that carries its own message
+mv "$body" "$response"

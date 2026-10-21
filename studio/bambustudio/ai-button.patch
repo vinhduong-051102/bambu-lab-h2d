@@ -1,16 +1,30 @@
 diff --git a/src/slic3r/GUI/MainFrame.cpp b/src/slic3r/GUI/MainFrame.cpp
-index d38b5d2..55c0a29 100644
+index d38b5d2..479f9ca 100644
 --- a/src/slic3r/GUI/MainFrame.cpp
 +++ b/src/slic3r/GUI/MainFrame.cpp
-@@ -12,6 +12,7 @@
+@@ -12,6 +12,8 @@
  #include <wx/tooltip.h>
  //#include <wx/glcanvas.h>
  #include <wx/filename.h>
 +#include <wx/utils.h>
++#include <wx/process.h>
  #include <wx/debug.h>
  
  #include <boost/algorithm/string/predicate.hpp>
-@@ -1289,6 +1290,7 @@ void MainFrame::show_option(bool show)
+@@ -49,6 +51,12 @@
+ #include "../Utils/MacDarkMode.hpp"
+ 
+ #include <fstream>
++#include <algorithm>
++#include <cmath>
++#include <boost/filesystem.hpp>
++#include <nlohmann/json.hpp>
++#include "libslic3r/Model.hpp"
++#include "libslic3r/TriangleMesh.hpp"
+ #include <string_view>
+ 
+ #include "GUI_App.hpp"
+@@ -1289,6 +1297,7 @@ void MainFrame::show_option(bool show)
              m_print_btn->Hide();
              m_slice_option_btn->Hide();
              m_print_option_btn->Hide();
@@ -18,7 +32,7 @@ index d38b5d2..55c0a29 100644
              split_line_icon->Hide();
              expand_program_holder->Hide();
              Layout();
-@@ -1299,6 +1301,7 @@ void MainFrame::show_option(bool show)
+@@ -1299,6 +1308,7 @@ void MainFrame::show_option(bool show)
              m_print_btn->Show();
              m_slice_option_btn->Show();
              m_print_option_btn->Show();
@@ -26,27 +40,19 @@ index d38b5d2..55c0a29 100644
              split_line_icon->Show();
              expand_program_holder->Show();
              Layout();
-@@ -2068,6 +2071,19 @@ wxBoxSizer* MainFrame::create_side_tools()
+@@ -2068,6 +2078,11 @@ wxBoxSizer* MainFrame::create_side_tools()
      print_sizer->Add(m_print_btn, 0, wxLEFT | wxALIGN_CENTER_VERTICAL, FromDIP(1));
      print_panel->SetSizer(print_sizer);
  
-+    // "AI tối ưu": runs /opt/studio-ai/on-click when the container provides it, else says it's coming
++    // "AI tối ưu": describes the plate to /opt/studio-ai/on-click and offers the settings it returns
 +    m_ai_btn = new SideButton(this, wxString::FromUTF8("AI tối ưu"), "");
 +    m_ai_btn->SetToolTip(wxString::FromUTF8("AI phân tích mẫu và tối ưu setting"));
-+    m_ai_btn->Bind(wxEVT_BUTTON, [this](wxCommandEvent &) {
-+        const wxString hook = "/opt/studio-ai/on-click";
-+        if (wxFileName::IsFileExecutable(hook)) {
-+            wxExecute(hook, wxEXEC_ASYNC);
-+            return;
-+        }
-+        MessageDialog dlg(this, wxString::FromUTF8("Chức năng AI tối ưu sắp có."), wxString::FromUTF8("AI tối ưu"), wxOK | wxICON_INFORMATION);
-+        dlg.ShowModal();
-+    });
++    m_ai_btn->Bind(wxEVT_BUTTON, [this](wxCommandEvent &) { ai_optimize(); });
 +
      update_side_button_style();
      m_slice_option_btn->Enable();
      m_print_option_btn->Enable();
-@@ -2076,6 +2092,8 @@ wxBoxSizer* MainFrame::create_side_tools()
+@@ -2076,6 +2091,8 @@ wxBoxSizer* MainFrame::create_side_tools()
      sizer->Add(FromDIP(4), 0, 0, 0, 0);
      sizer->Add(split_line_icon, 0, wxALIGN_CENTER, 0);
      sizer->Add(FromDIP(6), 0, 0, 0, 0);
@@ -55,7 +61,7 @@ index d38b5d2..55c0a29 100644
      sizer->Add(slice_panel);
      sizer->Add(FromDIP(8), 0, 0, 0, 0);
      sizer->Add(print_panel);
-@@ -2651,6 +2669,17 @@ void MainFrame::update_side_button_style()
+@@ -2651,6 +2668,249 @@ void MainFrame::update_side_button_style()
      m_print_option_btn->SetExtraSize(wxSize(FromDIP(10), FromDIP(10)));
      m_print_option_btn->SetIconOffset(FromDIP(2));
      m_print_option_btn->SetMinSize(wxSize(FromDIP(24), FromDIP(24)));
@@ -70,19 +76,255 @@ index d38b5d2..55c0a29 100644
 +    m_ai_btn->SetCornerRadius(FromDIP(12));
 +    m_ai_btn->SetExtraSize(wxSize(FromDIP(38), FromDIP(10)));
 +    m_ai_btn->SetMinSize(wxSize(-1, FromDIP(24)));
++}
++
++// "AI tối ưu" (bambu-lab-h2d patch). Studio writes a description of the plate to request.json and runs
++// /opt/studio-ai/on-click <request.json> <response.json> (mounted from the host, so it changes without a
++// rebuild). The hook asks the gateway, which asks Claude; Studio then shows the proposed process settings
++// and loads the accepted ones into the edited process preset, like a manual edit (orange, resettable).
++namespace {
++const std::string AI_HOOK = "/opt/studio-ai/on-click";
++const std::string AI_DIR  = "/tmp/studio-ai";
++
++// Process settings whose current values go to the AI. The gateway decides which of them may change
++// (src/domain/studio/aiOptimize.ts); this list only needs to cover them.
++const std::vector<std::string> AI_SETTING_KEYS = {
++    "layer_height", "initial_layer_print_height", "wall_loops", "top_shell_layers", "bottom_shell_layers",
++    "sparse_infill_density", "sparse_infill_pattern", "top_surface_pattern", "wall_generator", "wall_sequence",
++    "seam_position", "ironing_type", "detect_overhang_wall", "enable_support", "support_type", "support_style",
++    "support_threshold_angle", "support_on_build_plate_only", "brim_type", "brim_width",
++};
++
++std::vector<double> ai_floats(const DynamicPrintConfig &config, const std::string &key)
++{
++    const ConfigOption *opt = config.option(key);
++    if (auto *nullable = dynamic_cast<const ConfigOptionFloatsNullable *>(opt))
++        return nullable->values;
++    if (auto *floats = dynamic_cast<const ConfigOptionFloats *>(opt))
++        return floats->values;
++    return {};
++}
++
++// Geometry of one placed instance: what the AI needs to judge supports, brim and strength
++nlohmann::json ai_describe_object(const ModelObject &object)
++{
++    TriangleMesh mesh = object.raw_mesh();
++    if (!object.instances.empty())
++        object.instances.front()->transform_mesh(&mesh);
++    const indexed_triangle_set &its = mesh.its;
++    const BoundingBoxf3 bbox = mesh.bounding_box();
++    const double cos45 = std::sqrt(0.5);
++
++    double surface = 0., base = 0., overhang = 0.;
++    for (const auto &face : its.indices) {
++        const Vec3d a = its.vertices[face[0]].cast<double>();
++        const Vec3d b = its.vertices[face[1]].cast<double>();
++        const Vec3d c = its.vertices[face[2]].cast<double>();
++        const Vec3d normal = (b - a).cross(c - a);
++        const double twice_area = normal.norm();
++        if (twice_area <= 0.)
++            continue;
++        surface += twice_area / 2.;
++        const double nz = normal.z() / twice_area;
++        // Facing down within 45° of horizontal: resting on the bed, or an overhang that needs support
++        if (nz < -cos45) {
++            const double projected = twice_area / 2. * -nz;
++            if (std::max({a.z(), b.z(), c.z()}) < bbox.min.z() + 0.05)
++                base += projected;
++            else
++                overhang += projected;
++        }
++    }
++
++    const Vec3d size = bbox.size();
++    return {
++        {"name", object.name},
++        {"instances", object.instances.size()},
++        {"size_mm", {std::round(size.x() * 10.) / 10., std::round(size.y() * 10.) / 10., std::round(size.z() * 10.) / 10.}},
++        {"volume_mm3", std::round(std::abs(its_volume(its)))},
++        {"surface_area_mm2", std::round(surface)},
++        {"base_area_mm2", std::round(base)},
++        {"overhang_area_mm2", std::round(overhang)},
++        {"triangles", its.indices.size()},
++    };
++}
++
++nlohmann::json ai_describe_plate()
++{
++    PresetBundle &bundle = *wxGetApp().preset_bundle;
++    const DynamicPrintConfig &print_config = bundle.prints.get_edited_preset().config;
++
++    nlohmann::json filaments = nlohmann::json::array();
++    for (const std::string &name : bundle.filament_presets) {
++        nlohmann::json filament = {{"preset", name}};
++        const Preset *preset = bundle.filaments.find_preset(name, false);
++        if (preset && preset->config.has("filament_type"))
++            filament["type"] = preset->config.opt_string("filament_type", 0u);
++        filaments.push_back(filament);
++    }
++
++    nlohmann::json settings = nlohmann::json::object();
++    for (const std::string &key : AI_SETTING_KEYS)
++        if (print_config.has(key))
++            settings[key] = print_config.opt_serialize(key);
++
++    nlohmann::json objects = nlohmann::json::array();
++    for (const ModelObject *object : wxGetApp().plater()->model().objects)
++        objects.push_back(ai_describe_object(*object));
++
++    return {
++        {"version", 1},
++        {"printer_preset", bundle.printers.get_edited_preset().name},
++        {"process_preset", bundle.prints.get_edited_preset().name},
++        {"nozzle_diameters", ai_floats(bundle.printers.get_edited_preset().config, "nozzle_diameter")},
++        {"filaments", filaments},
++        {"settings", settings},
++        {"objects", objects},
++    };
++}
++
++wxString ai_text(const nlohmann::json &value, const char *key)
++{
++    auto it = value.find(key);
++    return it != value.end() && it->is_string() ? wxString::FromUTF8(it->get<std::string>()) : wxString();
++}
++} // namespace
++
++void MainFrame::ai_optimize()
++{
++    if (m_ai_running)
++        return;
++    if (!wxFileName::IsFileExecutable(AI_HOOK)) {
++        MessageDialog dlg(this, wxString::FromUTF8("Chức năng AI tối ưu sắp có."), wxString::FromUTF8("AI tối ưu"), wxOK | wxICON_INFORMATION);
++        dlg.ShowModal();
++        return;
++    }
++    if (wxGetApp().plater()->model().objects.empty()) {
++        MessageDialog dlg(this, wxString::FromUTF8("Hãy thêm mẫu lên bàn in trước khi dùng AI tối ưu."), wxString::FromUTF8("AI tối ưu"), wxOK | wxICON_INFORMATION);
++        dlg.ShowModal();
++        return;
++    }
++
++    const std::string request_path  = AI_DIR + "/request.json";
++    const std::string response_path = AI_DIR + "/response.json";
++    try {
++        boost::filesystem::create_directories(AI_DIR);
++        boost::filesystem::remove(response_path);
++        std::ofstream out(request_path, std::ios::binary | std::ios::trunc);
++        out << ai_describe_plate().dump(1);
++        if (!out)
++            throw std::runtime_error("cannot write " + request_path);
++    } catch (const std::exception &e) {
++        BOOST_LOG_TRIVIAL(error) << "AI optimize: " << e.what();
++        MessageDialog dlg(this, wxString::FromUTF8("Không ghi được dữ liệu mẫu để gửi cho AI."), wxString::FromUTF8("AI tối ưu"), wxOK | wxICON_ERROR);
++        dlg.ShowModal();
++        return;
++    }
++
++    auto *process = new wxProcess();
++    process->Bind(wxEVT_END_PROCESS, [this, process, response_path](wxProcessEvent &) {
++        // Deleted once its own event is done with it
++        CallAfter([process]() { delete process; });
++        m_ai_running = false;
++        m_ai_btn->SetLabel(wxString::FromUTF8("AI tối ưu"));
++        m_ai_btn->Enable();
++        Layout();
++        ai_optimize_apply(response_path);
++    });
++    const wxString command = wxString::FromUTF8(AI_HOOK + " " + request_path + " " + response_path);
++    if (wxExecute(command, wxEXEC_ASYNC, process) <= 0) {
++        // The process object is left alone here: leaking it beats a double delete if wx frees it
++        MessageDialog dlg(this, wxString::FromUTF8("Không chạy được ") + wxString::FromUTF8(AI_HOOK), wxString::FromUTF8("AI tối ưu"), wxOK | wxICON_ERROR);
++        dlg.ShowModal();
++        return;
++    }
++    m_ai_running = true;
++    m_ai_btn->SetLabel(wxString::FromUTF8("AI đang phân tích..."));
++    m_ai_btn->Enable(false);
++    Layout();
++}
++
++void MainFrame::ai_optimize_apply(const std::string &response_path)
++{
++    const wxString title = wxString::FromUTF8("AI tối ưu");
++    nlohmann::json response;
++    try {
++        std::ifstream in(response_path, std::ios::binary);
++        response = nlohmann::json::parse(in);
++    } catch (const std::exception &e) {
++        BOOST_LOG_TRIVIAL(error) << "AI optimize: unreadable response: " << e.what();
++        MessageDialog dlg(this, wxString::FromUTF8("Không đọc được kết quả từ AI. Kiểm tra gateway và STUDIO_AI_URL."), title, wxOK | wxICON_ERROR);
++        dlg.ShowModal();
++        return;
++    }
++    if (!response.value("success", false)) {
++        wxString message = ai_text(response, "message");
++        MessageDialog dlg(this, message.empty() ? wxString::FromUTF8("AI không xử lý được yêu cầu.") : message, title, wxOK | wxICON_ERROR);
++        dlg.ShowModal();
++        return;
++    }
++
++    // The gateway already checked the keys and values; Studio still refuses anything that is not a
++    // non-text setting of the process preset, and anything its own parser rejects.
++    const DynamicPrintConfig &print_config = wxGetApp().preset_bundle->prints.get_edited_preset().config;
++    DynamicPrintConfig proposed;
++    wxString lines;
++    const nlohmann::json changes = response.value("changes", nlohmann::json::array());
++    for (const nlohmann::json &change : changes) {
++        const std::string key   = change.value("key", "");
++        const std::string value = change.value("value", "");
++        const ConfigOptionDef *def = print_config_def.get(key);
++        if (def == nullptr || def->type == coString || def->type == coStrings || !print_config.has(key))
++            continue;
++        try {
++            ConfigSubstitutionContext context(ForwardCompatibilitySubstitutionRule::Disable);
++            proposed.set_deserialize(key, value, context);
++        } catch (const std::exception &e) {
++            BOOST_LOG_TRIVIAL(warning) << "AI optimize: " << key << " = " << value << " rejected: " << e.what();
++            continue;
++        }
++        wxString label = ai_text(change, "label");
++        lines += wxString::Format("\n• %s: %s → %s\n   %s", label.empty() ? wxString::FromUTF8(key) : label,
++                                  wxString::FromUTF8(print_config.opt_serialize(key)), wxString::FromUTF8(value), ai_text(change, "reason"));
++    }
++
++    wxString message = ai_text(response, "summary");
++    if (proposed.empty()) {
++        message += wxString::FromUTF8("\n\nSetting hiện tại đã phù hợp, AI không đề xuất thay đổi nào.");
++        MessageDialog dlg(this, message, title, wxOK | wxICON_INFORMATION);
++        dlg.ShowModal();
++        return;
++    }
++    message += wxString::FromUTF8("\n") + lines + wxString::FromUTF8("\n\nÁp dụng các thay đổi này vào preset quá trình in?");
++    MessageDialog dlg(this, message, title, wxYES_NO | wxICON_QUESTION);
++    if (dlg.ShowModal() != wxID_YES)
++        return;
++
++    // Same follow-up as editing the density in the Process tab (Tab::on_value_change)
++    if (proposed.has("sparse_infill_density")) {
++        for (const char *linked : {"skeleton_infill_density", "skin_infill_density"})
++            if (print_config.has(linked))
++                proposed.set_key_value(linked, proposed.option("sparse_infill_density")->clone());
++    }
++    if (Tab *tab = wxGetApp().get_tab(Preset::TYPE_PRINT))
++        tab->load_config(proposed);
  }
  
  void MainFrame::update_slice_print_status(SlicePrintEventType event, bool can_slice, bool can_print)
 diff --git a/src/slic3r/GUI/MainFrame.hpp b/src/slic3r/GUI/MainFrame.hpp
-index 93422a8..c127aa0 100644
+index 93422a8..fe336f9 100644
 --- a/src/slic3r/GUI/MainFrame.hpp
 +++ b/src/slic3r/GUI/MainFrame.hpp
-@@ -420,6 +420,8 @@ public:
+@@ -420,6 +420,12 @@ public:
      SideButton* m_slice_option_btn{ nullptr };
      SideButton* m_print_btn{ nullptr };
      SideButton* m_print_option_btn{ nullptr };
 +    // "AI tối ưu" button left of the slice button (bambu-lab-h2d patch)
 +    SideButton* m_ai_btn{ nullptr };
++    bool m_ai_running{ false };
++    // Runs the AI hook on the open plate, then offers its process-setting changes
++    void ai_optimize();
++    void ai_optimize_apply(const std::string &response_path);
  
      wxWindowID expand_program_id = wxNewId();
      wxWindowID expand_helio_id = wxNewId();

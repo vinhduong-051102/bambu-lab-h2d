@@ -55,6 +55,8 @@ const envSchema = z.object({
   ),
   // Host folder mounted at /imports in the Studio container: the dashboard drops models there to open in Studio
   STUDIO_IMPORT_DIR: z.preprocess((val) => (typeof val === 'string' && val.trim() === '' ? undefined : val), z.string().optional()),
+  // Claude model behind Studio's "AI tối ưu" button (POST /api/studio/ai-optimize); the key is ANTHROPIC_API_KEY
+  STUDIO_AI_MODEL: z.preprocess((val) => (typeof val === 'string' && val.trim() === '' ? undefined : val), z.string().default('claude-opus-5-5')),
 });
 
 const _env = envSchema.safeParse(process.env);

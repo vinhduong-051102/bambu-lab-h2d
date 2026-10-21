@@ -24,6 +24,10 @@ services:
       - PASSWORD=${STUDIO_PASSWORD:-}
       # Files uploaded through the stream (drag & drop / Selkies side panel) land here instead of ~/Desktop
       - FILE_MANAGER_PATH=/imports
+      # "AI tối ưu": where studio/ai-button/on-click sends the plate (the gateway on the Docker host), and
+      # the gateway's API key when GATEWAY_API_KEY is set
+      - STUDIO_AI_URL=${STUDIO_AI_URL:-http://host.docker.internal:3000/api/studio/ai-optimize}
+      - STUDIO_AI_TOKEN=${GATEWAY_API_KEY:-}
       # Stream encoding stays on the CPU: NVENC can't work under WSL2, whose libcuda lacks the CUDA-EGL
       # interop Selkies needs (cuGraphicsEGLRegisterImage). 720p, H.264 across threads, capped at 30 fps.
       # H.264 only: JPEG costs several times the bandwidth, too much over a Tailscale relay, so clients

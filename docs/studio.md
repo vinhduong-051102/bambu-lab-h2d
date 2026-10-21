@@ -35,7 +35,18 @@ If you close Studio's window (✕), it starts again after a few seconds (`studio
 
 **AI tối ưu** sits left of **Slice plate** in Studio's top bar, on the Prepare and Preview tabs. It is part of Studio itself: `studio/bambustudio/ai-button.patch` adds it to Studio's source, and `studio/bambustudio/Dockerfile` builds the tagged Studio release (`BAMBUSTUDIO_TAG`) with it.
 
-A click runs `studio/ai-button/on-click` if that file exists and is executable (see `studio/ai-button/README.md`). Otherwise Studio says the feature is coming.
+Load a model, then click **AI tối ưu**. Studio sends the plate to the gateway, which asks Claude for process settings that suit the model's shape, the filament and the nozzles. Studio lists each proposed change with its reason. **Yes** applies them to the process preset like a manual edit: they show as modified in the Process tab and can be reset there. **No** leaves everything as it was. The AI never slices or prints.
+
+To turn it on, add the Claude API key to the gateway's `.env` and restart the gateway:
+
+```env
+ANTHROPIC_API_KEY=<key>
+STUDIO_AI_MODEL=claude-opus-5-5   # optional
+```
+
+Studio reaches the gateway at `http://host.docker.internal:3000`. If the gateway runs elsewhere, set `STUDIO_AI_URL` in `.env` and recreate the Studio container. When `GATEWAY_API_KEY` is set, Compose passes it to the container too.
+
+The AI may change layer heights, walls, top/bottom shells, infill density and pattern, top surface pattern, wall generator and order, seam, ironing, supports (automatic types only) and brim. The gateway rejects any other key, and any value outside its allowed range, before Studio sees it. The geometry the AI sees (size, volume, bed-contact and overhang areas) is estimated from the meshes of every object in the project, not from a slice. The step-by-step flow of a click is in `studio/ai-button/README.md`.
 
 The image also applies `studio/bambustudio/popup-fixes.patch`, which fixes popups that stay on screen and stop Studio from taking clicks on Linux: the parameter tooltip, and menus that open a dialog (such as **Bind with Access Code** in the printer picker). Don't hide a stuck popup from outside the app (for example with `xdotool windowunmap`): Studio still treats it as open and ignores all input until it restarts.
 
@@ -79,3 +90,4 @@ STUDIO_ALT_URLS=https://<machine>.<tailnet>.ts.net:8443/
 |---|---|---|
 | GET | `/api/studio` | `{ enabled, url, importsEnabled }` |
 | POST | `/api/studio/import` | `multipart/form-data` field `file`. Saves it to `STUDIO_IMPORT_DIR` and returns `{ success, name, studioPath }` |
+| POST | `/api/studio/ai-optimize` | Called by Studio's **AI tối ưu** button with the plate description Studio writes. Returns `{ success, summary, changes: [{ key, label, value, reason }], rejected }`. 501 without `ANTHROPIC_API_KEY` |
