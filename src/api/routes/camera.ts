@@ -1,6 +1,9 @@
 import type { BambuCameraService } from '../../bambu/BambuCameraService';
 import { handler, json, type HandlerArgs } from '../http';
 
+// Bytes an MJPEG client may have queued before new frames are dropped for it: a couple of frames
+const MJPEG_QUEUE_BYTES = 1024 * 1024;
+
 // Camera routes are only available when the gateway was started with a camera service
 const cameraHandler = (fn: (cameraService: BambuCameraService, args: HandlerArgs) => Response | Promise<Response>) =>
   handler((args) => {
@@ -43,6 +46,9 @@ export const getCameraMjpeg = cameraHandler((cameraService, { request }) => {
   const stream = new ReadableStream<Uint8Array>({
     start(controller) {
       const sendFrame = (frameBuf: Buffer) => {
+        // A client that reads slower than the camera (background tab, slow link, stalled socket) would
+        // otherwise queue every frame in memory without bound: skip frames until it has caught up
+        if (controller.desiredSize !== null && controller.desiredSize <= 0) return;
         try {
           controller.enqueue(
             encoder.encode(`--frame\r\nContent-Type: image/jpeg\r\nContent-Length: ${frameBuf.length}\r\n\r\n`)
@@ -71,7 +77,7 @@ export const getCameraMjpeg = cameraHandler((cameraService, { request }) => {
     cancel() {
       cleanup();
     },
-  });
+  }, new ByteLengthQueuingStrategy({ highWaterMark: MJPEG_QUEUE_BYTES }));
 
   return new Response(stream, {
     headers: {

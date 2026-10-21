@@ -107,3 +107,37 @@ describe('BambuCameraService reconnect', () => {
     expect(spawned.length).toBeGreaterThanOrEqual(2);
   });
 });
+
+describe('GET /api/camera/mjpeg', () => {
+  afterEach(async () => {
+    const { setRuntime } = await import('../src/runtime/runtime');
+    setRuntime(undefined);
+  });
+
+  it('drops frames for a client that stops reading instead of queueing them in memory', async () => {
+    const { setRuntime } = await import('../src/runtime/runtime');
+    const { getCameraMjpeg } = await import('../src/api/routes/camera');
+    const camera = Object.assign(new EventEmitter(), { getLatestFrame: () => null });
+    setRuntime({ printerService: { cameraService: camera } as never });
+
+    const response = await getCameraMjpeg(new Request('http://localhost/api/camera/mjpeg'));
+    const frame = Buffer.alloc(200 * 1024, 1);
+    // 10 minutes of a 15 fps camera that nobody reads
+    for (let i = 0; i < 15 * 600; i++) camera.emit('frame', frame);
+
+    const reader = response.body!.getReader();
+    let queued = 0;
+    for (;;) {
+      const { value } = await Promise.race([
+        reader.read(),
+        new Promise<{ value: undefined }>((resolve) => setTimeout(() => resolve({ value: undefined }), 50)),
+      ]);
+      if (!value) break;
+      queued += value.byteLength;
+    }
+    expect(queued).toBeGreaterThan(0);
+    expect(queued).toBeLessThan(2 * 1024 * 1024);
+    await reader.cancel();
+    expect(camera.listenerCount('frame')).toBe(0);
+  });
+});
