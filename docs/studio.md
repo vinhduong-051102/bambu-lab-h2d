@@ -6,10 +6,11 @@ Without this setup, the **Bambu Studio** card stays hidden.
 
 ## Setup
 
-1. Start the container (the image is about 1.5 GB):
+1. Build and start the container:
    ```bash
-   docker compose -f docker-compose.studio.yml up -d
+   docker compose -f docker-compose.studio.yml up -d --build
    ```
+   The image is linuxserver/bambustudio with Bambu Studio rebuilt from source, to add the **AI tối ưu** button (see [AI tối ưu button](#ai-tối-ưu-button)). The first build takes one to several hours and needs about 10 GB of RAM for Docker and 20 GB of disk. Later builds reuse the compiled dependencies.
    Studio is then served on port **3100** (HTTP) and **3101** (HTTPS, self-signed certificate). Its settings live in `data/studio/config`, and files sent to it go to `data/studio/imports`.
 2. Add the following to `.env`, then restart the gateway:
    ```env
@@ -29,6 +30,16 @@ Without this setup, the **Bambu Studio** card stays hidden.
 3. **Slice and print from Studio:** **Slice plate**, then **Print plate**.
 
 If you close Studio's window (✕), it starts again after a few seconds (`studio/labwc-autostart`). You can also right-click the empty desktop and pick **Bambu Studio**.
+
+### AI tối ưu button
+
+**AI tối ưu** sits left of **Slice plate** in Studio's top bar, on the Prepare and Preview tabs. It is part of Studio itself: `studio/bambustudio/ai-button.patch` adds it to Studio's source, and `studio/bambustudio/Dockerfile` builds the tagged Studio release (`BAMBUSTUDIO_TAG`) with it.
+
+A click runs `studio/ai-button/on-click` if that file exists and is executable (see `studio/ai-button/README.md`). Otherwise Studio says the feature is coming.
+
+The image also applies `studio/bambustudio/popup-fixes.patch`, which fixes popups that stay on screen and stop Studio from taking clicks on Linux: the parameter tooltip, and menus that open a dialog (such as **Bind with Access Code** in the printer picker). Don't hide a stuck popup from outside the app (for example with `xdotool windowunmap`): Studio still treats it as open and ignores all input until it restarts.
+
+To move to a new Studio release, change `BAMBUSTUDIO_TAG` in the Dockerfile, check that both patches still apply, and rebuild.
 
 ### Connecting Studio to the printer
 

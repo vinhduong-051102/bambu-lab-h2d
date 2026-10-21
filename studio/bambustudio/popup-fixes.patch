@@ -1,0 +1,88 @@
+diff --git a/src/slic3r/GUI/ParamTooltip.cpp b/src/slic3r/GUI/ParamTooltip.cpp
+index 682c377..b8b241c 100644
+--- a/src/slic3r/GUI/ParamTooltip.cpp
++++ b/src/slic3r/GUI/ParamTooltip.cpp
+@@ -955,7 +955,7 @@ void ParamTooltip::DoHide(bool now)
+ {
+     if (now) {
+         m_hide = true;
+-        wxPopupTransientWindow::Hide();
++        wxPopupWindow::Show(false);
+         update_shadow(false);
+         return;
+     }
+@@ -973,10 +973,13 @@ void ParamTooltip::OnTimer(wxTimerEvent &)
+             m_timer->StartOnce(HIDE_DELAY_MS);
+             return;
+         }
+-        wxPopupTransientWindow::Hide();
++        wxPopupWindow::Show(false);
+         update_shadow(false);
+     } else {
+-        Show();
++        // wxPopupWindow::Show, not the transient one: on GTK that one grabs the pointer
++        // (gtk_grab_add), so the settings panel under the card stops getting motion and leave
++        // events and never asks the card to hide again. A hover card needs no grab.
++        wxPopupWindow::Show(true);
+         update_shadow(true);
+     }
+ }
+diff --git a/src/slic3r/GUI/Widgets/PopupWindow.cpp b/src/slic3r/GUI/Widgets/PopupWindow.cpp
+index 69cded6..4efc338 100644
+--- a/src/slic3r/GUI/Widgets/PopupWindow.cpp
++++ b/src/slic3r/GUI/Widgets/PopupWindow.cpp
+@@ -1,5 +1,29 @@
+ #include "PopupWindow.hpp"
+ 
++#ifdef __WXGTK__
++#include <wx/modalhook.h>
++#include <set>
++
++// On GTK a popup only closes when its top window is deactivated, which doesn't happen when one of
++// its items opens a modal dialog (e.g. "Bind with Access Code" in the printer picker): the popup
++// stays on top of the dialog and keeps its pointer grab, so the dialog can't be used. Close every
++// open popup before any modal dialog runs, as deactivation does on Windows.
++static std::set<PopupWindow *> s_shown_popups;
++
++class DismissPopupsHook : public wxModalDialogHook
++{
++protected:
++    int Enter(wxDialog *) override
++    {
++        const auto shown = s_shown_popups; // Dismiss() erases from the set through wxEVT_SHOW
++        for (PopupWindow *popup : shown)
++            popup->Dismiss();
++        return wxID_NONE;
++    }
++    void Exit(wxDialog *) override {}
++};
++#endif
++
+ static wxWindow *GetTopParent(wxWindow *pWindow)
+ {
+     wxWindow *pWin = pWindow;
+@@ -17,6 +41,16 @@ bool PopupWindow::Create(wxWindow *parent, int style)
+         return false;
+ #ifdef __WXGTK__
+     GetTopParent(parent)->Bind(wxEVT_ACTIVATE, &PopupWindow::topWindowActivate, this);
++    static DismissPopupsHook dismiss_popups_hook;
++    static const bool hook_registered = (dismiss_popups_hook.Register(), true); // once, with the first popup
++    (void) hook_registered;
++    Bind(wxEVT_SHOW, [this](wxShowEvent &e) {
++        if (e.IsShown())
++            s_shown_popups.insert(this);
++        else
++            s_shown_popups.erase(this);
++        e.Skip();
++    });
+ #endif
+ #ifdef __WXOSX__
+     if (style & wxPU_CONTAINS_CONTROLS)
+@@ -30,6 +64,7 @@ PopupWindow::~PopupWindow()
+ {
+ #ifdef __WXGTK__
+     GetTopParent(this)->Unbind(wxEVT_ACTIVATE, &PopupWindow::topWindowActivate, this);
++    s_shown_popups.erase(this);
+ #endif
+ #ifdef __WXMSW__
+     GetTopParent(this)->Unbind(wxEVT_ACTIVATE, &PopupWindow::topWindowActivate, this);

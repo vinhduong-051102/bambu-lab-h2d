@@ -1,0 +1,88 @@
+diff --git a/src/slic3r/GUI/MainFrame.cpp b/src/slic3r/GUI/MainFrame.cpp
+index d38b5d2..55c0a29 100644
+--- a/src/slic3r/GUI/MainFrame.cpp
++++ b/src/slic3r/GUI/MainFrame.cpp
+@@ -12,6 +12,7 @@
+ #include <wx/tooltip.h>
+ //#include <wx/glcanvas.h>
+ #include <wx/filename.h>
++#include <wx/utils.h>
+ #include <wx/debug.h>
+ 
+ #include <boost/algorithm/string/predicate.hpp>
+@@ -1289,6 +1290,7 @@ void MainFrame::show_option(bool show)
+             m_print_btn->Hide();
+             m_slice_option_btn->Hide();
+             m_print_option_btn->Hide();
++            m_ai_btn->Hide();
+             split_line_icon->Hide();
+             expand_program_holder->Hide();
+             Layout();
+@@ -1299,6 +1301,7 @@ void MainFrame::show_option(bool show)
+             m_print_btn->Show();
+             m_slice_option_btn->Show();
+             m_print_option_btn->Show();
++            m_ai_btn->Show();
+             split_line_icon->Show();
+             expand_program_holder->Show();
+             Layout();
+@@ -2068,6 +2071,19 @@ wxBoxSizer* MainFrame::create_side_tools()
+     print_sizer->Add(m_print_btn, 0, wxLEFT | wxALIGN_CENTER_VERTICAL, FromDIP(1));
+     print_panel->SetSizer(print_sizer);
+ 
++    // "AI tối ưu": runs /opt/studio-ai/on-click when the container provides it, else says it's coming
++    m_ai_btn = new SideButton(this, wxString::FromUTF8("AI tối ưu"), "");
++    m_ai_btn->SetToolTip(wxString::FromUTF8("AI phân tích mẫu và tối ưu setting"));
++    m_ai_btn->Bind(wxEVT_BUTTON, [this](wxCommandEvent &) {
++        const wxString hook = "/opt/studio-ai/on-click";
++        if (wxFileName::IsFileExecutable(hook)) {
++            wxExecute(hook, wxEXEC_ASYNC);
++            return;
++        }
++        MessageDialog dlg(this, wxString::FromUTF8("Chức năng AI tối ưu sắp có."), wxString::FromUTF8("AI tối ưu"), wxOK | wxICON_INFORMATION);
++        dlg.ShowModal();
++    });
++
+     update_side_button_style();
+     m_slice_option_btn->Enable();
+     m_print_option_btn->Enable();
+@@ -2076,6 +2092,8 @@ wxBoxSizer* MainFrame::create_side_tools()
+     sizer->Add(FromDIP(4), 0, 0, 0, 0);
+     sizer->Add(split_line_icon, 0, wxALIGN_CENTER, 0);
+     sizer->Add(FromDIP(6), 0, 0, 0, 0);
++    sizer->Add(m_ai_btn, 0, wxALIGN_CENTER_VERTICAL, 0);
++    sizer->Add(FromDIP(8), 0, 0, 0, 0);
+     sizer->Add(slice_panel);
+     sizer->Add(FromDIP(8), 0, 0, 0, 0);
+     sizer->Add(print_panel);
+@@ -2651,6 +2669,17 @@ void MainFrame::update_side_button_style()
+     m_print_option_btn->SetExtraSize(wxSize(FromDIP(10), FromDIP(10)));
+     m_print_option_btn->SetIconOffset(FromDIP(2));
+     m_print_option_btn->SetMinSize(wxSize(FromDIP(24), FromDIP(24)));
++
++    // Purple, so it isn't mistaken for the green slice/print buttons
++    StateColor ai_bg(std::pair<wxColour, int>(wxColour(91, 33, 182), StateColor::Pressed),
++                     std::pair<wxColour, int>(wxColour(139, 92, 246), StateColor::Hovered),
++                     std::pair<wxColour, int>(wxColour(124, 58, 237), StateColor::Normal));
++    m_ai_btn->SetBackgroundColor(ai_bg);
++    m_ai_btn->SetBorderColor(ai_bg);
++    m_ai_btn->SetTextLayout(SideButton::EHorizontalOrientation::HO_Center, FromDIP(15));
++    m_ai_btn->SetCornerRadius(FromDIP(12));
++    m_ai_btn->SetExtraSize(wxSize(FromDIP(38), FromDIP(10)));
++    m_ai_btn->SetMinSize(wxSize(-1, FromDIP(24)));
+ }
+ 
+ void MainFrame::update_slice_print_status(SlicePrintEventType event, bool can_slice, bool can_print)
+diff --git a/src/slic3r/GUI/MainFrame.hpp b/src/slic3r/GUI/MainFrame.hpp
+index 93422a8..c127aa0 100644
+--- a/src/slic3r/GUI/MainFrame.hpp
++++ b/src/slic3r/GUI/MainFrame.hpp
+@@ -420,6 +420,8 @@ public:
+     SideButton* m_slice_option_btn{ nullptr };
+     SideButton* m_print_btn{ nullptr };
+     SideButton* m_print_option_btn{ nullptr };
++    // "AI tối ưu" button left of the slice button (bambu-lab-h2d patch)
++    SideButton* m_ai_btn{ nullptr };
+ 
+     wxWindowID expand_program_id = wxNewId();
+     wxWindowID expand_helio_id = wxNewId();

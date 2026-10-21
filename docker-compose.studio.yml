@@ -4,7 +4,10 @@
 # and STUDIO_IMPORT_DIR=./data/studio/imports
 services:
   bambustudio:
-    image: lscr.io/linuxserver/bambustudio:latest
+    # linuxserver/bambustudio with Studio rebuilt from source to add the "AI tối ưu" button
+    # (studio/bambustudio). The first build takes hours; see docs/studio.md.
+    build: ./studio/bambustudio
+    image: bambu-lab-h2d/bambustudio:ai
     container_name: bambu-studio
     restart: unless-stopped
     environment:
@@ -12,11 +15,29 @@ services:
       - PGID=1000
       - TZ=Asia/Ho_Chi_Minh
       - TITLE=Bambu Studio
+      # Studio follows the system locale until a language is picked in Preferences
+      # Desktop locale only: Studio's AppRun forces LC_ALL=C and takes its language from Preferences
+      - LANG=vi_VN.UTF-8
+      - LANGUAGE=vi_VN:vi
       # Basic auth on the stream; strongly recommended when anyone else is on the network
       - CUSTOM_USER=${STUDIO_USER:-}
       - PASSWORD=${STUDIO_PASSWORD:-}
       # Files uploaded through the stream (drag & drop / Selkies side panel) land here instead of ~/Desktop
       - FILE_MANAGER_PATH=/imports
+      # Stream encoding stays on the CPU: NVENC can't work under WSL2, whose libcuda lacks the CUDA-EGL
+      # interop Selkies needs (cuGraphicsEGLRegisterImage). 720p, H.264 across threads, capped at 30 fps.
+      # H.264 only: JPEG costs several times the bandwidth, too much over a Tailscale relay, so clients
+      # can't switch to it (a browser that can't decode H.264 gets no picture instead).
+      # Full-frame h264enc only: h264enc-striped sends horizontal stripes on their own, so a moving
+      # 3D view shows tearing where stripes from different frames meet. Not offered at all, since
+      # browsers remember a previously picked encoder; it is the same codec, so no client loses out.
+      - SELKIES_MANUAL_WIDTH=1280
+      - SELKIES_MANUAL_HEIGHT=720
+      - SELKIES_FRAMERATE=30,8-30
+      - SELKIES_ENCODER=h264enc
+      # Studio's OpenGL on the GPU under WSL2: Mesa's d3d12 driver over /dev/dxg
+      - GALLIUM_DRIVER=d3d12
+      - MESA_D3D12_DEFAULT_ADAPTER_NAME=NVIDIA
     volumes:
       # Shared with the gateway (STUDIO_IMPORT_DIR): models sent from the dashboard, opened in Studio via File → Import
       - ./data/studio/imports:/imports
@@ -24,6 +45,17 @@ services:
       - ./data/studio/config:/config
       # Restart Studio when its window is closed (the stock autostart only launches it once)
       - ./studio/labwc-autostart:/config/.config/labwc/autostart:ro
+      # Optional on-click script for Studio's "AI tối ưu" button (see studio/ai-button/README.md)
+      - ./studio/ai-button:/opt/studio-ai:ro
+      # Reworked Vietnamese translation (source: studio/i18n/vi/BambuStudio_vi.po)
+      - ./studio/i18n/vi/BambuStudio.mo:/opt/bambustudio/resources/i18n/vi/BambuStudio.mo:ro
+      # WSL2 D3D12 libraries (libd3d12, libdxcore) from the Docker Desktop VM, for Mesa's d3d12 driver
+      - /usr/lib/wsl:/usr/lib/wsl:ro
+      # Registers /usr/lib/wsl/lib with the dynamic loader at container start (see the script)
+      - ./studio/custom-cont-init.d:/custom-cont-init.d:ro
+    # The GPU, exposed by WSL2 as a D3D12 device
+    devices:
+      - /dev/dxg
     ports:
       # HTTP: fine on the Docker host itself (localhost counts as a secure context)
       - "3100:3000"
