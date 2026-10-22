@@ -324,3 +324,111 @@ describe('AI sessions: re-ask, applied changes and print reports', () => {
     }
   });
 });
+
+describe('AI sessions: past prints in the prompt', () => {
+  let sessionDir: string;
+  let store: AiSessionStore;
+
+  beforeEach(() => {
+    sessionDir = mkdtempSync(path.join(os.tmpdir(), 'ai-sessions-'));
+    store = new AiSessionStore(sessionDir);
+  });
+
+  afterEach(() => {
+    rmSync(sessionDir, { recursive: true, force: true });
+  });
+
+  const supportResult = {
+    summary: 'Cần support.',
+    changes: [{ key: 'enable_support' as const, label: 'Bật support', value: '1', reason: 'Phần nhô lớn' }],
+    rejected: [],
+  };
+
+  /** A session for `request`, applied and reported unless told otherwise; `second` keeps ids in time order */
+  const printed = async (
+    request: StudioRequest,
+    second: number,
+    report: { applied?: boolean; feedback?: Parameters<AiSessionStore['saveFeedback']>[1] | null } = {}
+  ) => {
+    const session = await store.create(request, supportResult, null, new Date(2026, 9, 1, 10, 0, second));
+    if (report.applied !== false) await store.markApplied(session.id, [{ key: 'enable_support', value: '1' }]);
+    const feedback = report.feedback === undefined ? { outcome: 'usable' as const, issues: ['support_removal' as const], note: 'Support dính chặt' } : report.feedback;
+    if (feedback) await store.saveFeedback(session.id, feedback);
+    return session;
+  };
+
+  const petg: StudioRequest = { ...studioRequest, filaments: [{ preset: 'Bambu PETG HF @BBL H2D', type: 'PETG' }] };
+
+  it('keeps only applied and reported prints of the same material and nozzle', async () => {
+    const kept = await printed(studioRequest, 1);
+    await printed(studioRequest, 2, { applied: false });
+    await printed(studioRequest, 3, { feedback: null });
+    await printed(petg, 4);
+    await printed({ ...studioRequest, nozzle_diameters: [0.6, 0.6] }, 5);
+
+    const past = await store.pastPrints(studioRequest);
+    expect(past).toEqual([
+      {
+        created_at: kept.created_at,
+        goal: 'balanced',
+        process_preset: '0.20mm Standard @BBL H2D',
+        filaments: ['Bambu PLA Basic @BBL H2D (PLA)'],
+        objects: ['Bracket.stl 40×20×120 mm'],
+        changes: [{ key: 'enable_support', before: '0', after: '1' }],
+        outcome: 'Có lỗi nhưng dùng được',
+        issues: ['Support khó gỡ'],
+        note: 'Support dính chặt',
+      },
+    ]);
+  });
+
+  it('puts the most similar plate first, then the newest', async () => {
+    const other = await printed({ ...studioRequest, goal: 'speed', process_preset: '0.28mm Extra Draft @BBL H2D' }, 1);
+    const older = await printed(studioRequest, 2);
+    const newer = await printed(studioRequest, 3);
+    const tiny = await printed(
+      { ...studioRequest, objects: [{ ...studioRequest.objects[0], name: 'Coin.stl', size_mm: [20, 20, 2], overhang_area_mm2: 0 }] },
+      4
+    );
+
+    const past = await store.pastPrints(studioRequest);
+    expect(past.map((p) => p.created_at)).toEqual([newer.created_at, older.created_at, tiny.created_at, other.created_at]);
+    expect(await store.pastPrints(studioRequest, 2)).toHaveLength(2);
+  });
+
+  it('describes past prints in the prompt, and leaves the section out without any', async () => {
+    await printed(studioRequest, 1, { feedback: { outcome: 'failed', issues: ['warping'], note: 'Bong góc "trái"' } });
+    const prompt = buildUserPrompt(studioRequest, null, null, await store.pastPrints(studioRequest));
+    expect(prompt).toContain('Kết quả in thực tế của các plate tương tự trên máy này');
+    expect(prompt).toContain('Đã đổi: enable_support (Bật support) 0 → 1');
+    expect(prompt).toContain('Kết quả: Hỏng, phải in lại; lỗi: Cong vênh, bong khỏi bàn');
+    expect(prompt).toContain('Ghi chú của người dùng: "Bong góc \\"trái\\""');
+    expect(buildUserPrompt(studioRequest, null)).not.toContain('Kết quả in thực tế');
+  });
+
+  it('sends past prints to the AI through the API', async () => {
+    const session = await printed(studioRequest, 1);
+    setAiSessionStore(store);
+    const stateStore = new PrinterStateStore('TEST_SERIAL_AI_PAST');
+    const capabilityRegistry = new CapabilityRegistry();
+    const mqtt = { publishRequest: async () => true };
+    const commandService = new PrinterCommandService(capabilityRegistry, stateStore, mqtt as any);
+    const app = createTestApp(new PrinterService({ serial: 'TEST_SERIAL_AI_PAST', stateStore, capabilityRegistry, commandService, mqttClient: mqtt as any }));
+    const prompts: string[] = [];
+    setAiProposalSource(async (_system, user) => {
+      prompts.push(user);
+      return { summary: 'Giữ nguyên.', changes: [] };
+    });
+    try {
+      expect((await app.inject({ method: 'POST', url: '/api/studio/ai-optimize', payload: studioRequest })).statusCode).toBe(200);
+      expect(prompts[0]).toContain(`1. ${session.created_at.slice(0, 10)}, mục tiêu balanced`);
+      const res = await app.inject({ method: 'POST', url: '/api/studio/ai-optimize/prompt', payload: studioRequest });
+      expect(res.json().user).toContain('Kết quả: Có lỗi nhưng dùng được; lỗi: Support khó gỡ');
+    } finally {
+      setAiProposalSource(null);
+      setAiSessionStore(null);
+      stateStore.destroy();
+      app.close();
+    }
+  });
+});

@@ -183,7 +183,13 @@ export const aiOptimize = handler(async ({ request, printerService }) => {
   const source = proposalSourceOverride ?? claudeProposalSource(env.STUDIO_AI_MODEL);
   let result: AiOptimizeResult;
   try {
-    result = await optimizeSettings(parsed, printerService.stateStore.getState(), source, await loadFollowUp(parsed));
+    result = await optimizeSettings(
+      parsed,
+      printerService.stateStore.getState(),
+      source,
+      await loadFollowUp(parsed),
+      await sessionStore().pastPrints(parsed)
+    );
   } catch (err) {
     if (err instanceof AiOptimizeError) {
       return json({ success: false, error: err.code, message: err.message }, 502);
@@ -207,7 +213,12 @@ export const aiOptimize = handler(async ({ request, printerService }) => {
 export const aiOptimizePrompt = handler(async ({ request, printerService }) => {
   const parsed = parseStudioRequest(await readJsonBody(request));
   if (parsed instanceof Response) return parsed;
-  const prompts = buildPrompts(parsed, printerService.stateStore.getState(), await loadFollowUp(parsed));
+  const prompts = buildPrompts(
+    parsed,
+    printerService.stateStore.getState(),
+    await loadFollowUp(parsed),
+    await sessionStore().pastPrints(parsed)
+  );
   return json({ success: true, ...prompts, schema: PROPOSAL_JSON_SCHEMA });
 });
 

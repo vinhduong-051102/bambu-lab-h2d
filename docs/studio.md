@@ -39,6 +39,8 @@ Load a model, then click **AI tối ưu**. Studio sends the plate to the gateway
 
 Every proposal, the changes applied from it and re-ask comments are kept as JSON files in `STUDIO_AI_DATA_DIR` (default `./data/studio/ai`), one per proposal.
 
+The AI also learns from how earlier prints came out. Each request includes up to five earlier proposals that were applied and then reported on in **Báo cáo in**, picked from the 300 newest. Only plates with a filament type in common and the same nozzle diameters count. They are ranked by same process preset, same goal, similar height and similar share of overhanging surface, newest first on a tie. The prompt shows what was changed (value before → after), the outcome, the ticked problems and the note. The AI is told to keep changes that printed well, not to repeat ones that came with a problem, and to treat a single failure with caution.
+
 ### Print history
 
 The gateway records every print, so a later print can be compared with earlier ones:
@@ -123,7 +125,7 @@ STUDIO_ALT_URLS=https://<machine>.<tailnet>.ts.net:8443/
 |---|---|---|
 | GET | `/api/studio` | `{ enabled, url, importsEnabled }` |
 | POST | `/api/studio/import` | `multipart/form-data` field `file`. Saves it to `STUDIO_IMPORT_DIR` and returns `{ success, name, studioPath }` |
-| POST | `/api/studio/ai-optimize` | Called by Studio's **AI tối ưu** button with the plate description Studio writes. Returns `{ success, session_id, summary, changes: [{ key, label, value, reason }], rejected }` and keeps it as a session. With `follow_up: { session_id, comment }` in the request, the earlier proposal and the comment go into the prompt. 501 without `ANTHROPIC_API_KEY` |
+| POST | `/api/studio/ai-optimize` | Called by Studio's **AI tối ưu** button with the plate description Studio writes. Returns `{ success, session_id, summary, changes: [{ key, label, value, reason }], rejected }` and keeps it as a session. With `follow_up: { session_id, comment }` in the request, the earlier proposal and the comment go into the prompt. Reported prints of similar plates go into the prompt too. 501 without `ANTHROPIC_API_KEY` |
 | POST | `/api/studio/ai-optimize/prompt` | The same plate description in; `{ success, system, user, schema }` out, for `claude -p` in Studio's container. Needs no `ANTHROPIC_API_KEY` |
 | POST | `/api/studio/ai-optimize/check` | `{ request, proposal }`: the plate description and the proposal from `claude -p`. Same checks and answer as `/api/studio/ai-optimize` |
 | GET | `/api/studio/ai-sessions?limit=30` | Recent AI proposals, newest first, plus the `outcomes` and `issues` Studio's print report offers |

@@ -109,6 +109,20 @@ export interface FollowUp {
   comment: string;
 }
 
+/** An earlier plate like this one, printed with the changes the user applied, and how it came out */
+export interface PastPrint {
+  created_at: string;
+  goal: StudioRequest['goal'];
+  process_preset: string;
+  filaments: string[];
+  objects: string[];
+  /** Applied changes, with the value each replaced (null when it was not kept) */
+  changes: { key: string; before: string | null; after: string }[];
+  outcome: string;
+  issues: string[];
+  note: string;
+}
+
 export interface AiChange {
   key: AiSettingKey;
   label: string;
@@ -314,6 +328,7 @@ Bạn nhận mô tả plate đang mở: preset máy, preset quá trình in, fila
 - Tốc độ: giá trị hiện tại và giá trị đề xuất là của đầu phun đầu tiên; các biến thể khác (như High Flow) đổi theo cùng tỉ lệ. Chỉ đổi khi mục tiêu là tốc độ hoặc bề mặt đẹp, và giữ trong mức vật liệu chịu được (TPU, vật liệu mềm phải in chậm).
 - Khe hở Z support lớn hơn thì dễ gỡ nhưng mặt dưới xấu hơn. Bù kích thước XY chỉ dùng cho chi tiết lắp ghép, giá trị nhỏ (vài phần trăm mm).
 - Thông tin hình học là ước lượng từ lưới tam giác, không phải kết quả slice.
+- Nếu có kết quả in thực tế của các plate tương tự trên chính máy này, coi đó là bằng chứng mạnh hơn quy tắc chung: giữ những thay đổi đã cho bản in tốt, không lặp lại thay đổi đi kèm lỗi, và sửa đúng lỗi người dùng đã báo. Một lần in có thể hỏng vì lý do ngoài setting (bàn bẩn, filament ẩm), nên chỉ kết luận chắc khi lỗi lặp lại. Khi một thay đổi dựa vào lịch sử in, nói rõ trong lý do.
 - Mỗi lý do viết bằng tiếng Việt, một câu ngắn, nêu dựa vào đâu. Phần summary bằng tiếng Việt, tối đa ba câu.`;
 
 function describeSettings(request: StudioRequest): string {
@@ -367,7 +382,30 @@ function describeFollowUp(followUp: FollowUp): string[] {
   ];
 }
 
-export function buildUserPrompt(request: StudioRequest, printerState: PrinterState | null, followUp: FollowUp | null = null): string {
+/** Earlier prints of similar plates on this printer, and what the user reported */
+function describePastPrints(pastPrints: PastPrint[]): string[] {
+  const label = (key: string) => (AI_SETTINGS as Record<string, SettingSpec>)[key]?.label;
+  return [
+    '',
+    'Kết quả in thực tế của các plate tương tự trên máy này (đã áp dụng đề xuất rồi in), mới nhất trước khi giống nhau như nhau:',
+    ...pastPrints.flatMap((p, i) => [
+      `${i + 1}. ${p.created_at.slice(0, 10)}, mục tiêu ${p.goal}, preset ${p.process_preset}, filament ${p.filaments.join('; ') || 'không rõ'}`,
+      `   Vật thể: ${p.objects.join('; ')}`,
+      p.changes.length
+        ? `   Đã đổi: ${p.changes.map((c) => `${c.key}${label(c.key) ? ` (${label(c.key)})` : ''} ${c.before ?? '?'} → ${c.after}`).join('; ')}`
+        : '   Đã đổi: không, in với preset như cũ',
+      `   Kết quả: ${p.outcome}${p.issues.length ? `; lỗi: ${p.issues.join(', ')}` : ''}`,
+      ...(p.note ? [`   Ghi chú của người dùng: ${JSON.stringify(p.note)}`] : []),
+    ]),
+  ];
+}
+
+export function buildUserPrompt(
+  request: StudioRequest,
+  printerState: PrinterState | null,
+  followUp: FollowUp | null = null,
+  pastPrints: PastPrint[] = []
+): string {
   return [
     `Mục tiêu: ${GOALS[request.goal]}`,
     '',
@@ -384,6 +422,7 @@ export function buildUserPrompt(request: StudioRequest, printerState: PrinterSta
     '',
     'Vật thể trên plate:',
     JSON.stringify(request.objects, null, 1),
+    ...(pastPrints.length ? describePastPrints(pastPrints) : []),
     ...(followUp ? describeFollowUp(followUp) : []),
   ].join('\n');
 }
@@ -423,18 +462,20 @@ export function claudeProposalSource(model: string, client = new Anthropic()): P
 export function buildPrompts(
   request: StudioRequest,
   printerState: PrinterState | null,
-  followUp: FollowUp | null = null
+  followUp: FollowUp | null = null,
+  pastPrints: PastPrint[] = []
 ): { system: string; user: string } {
-  return { system: SYSTEM_PROMPT, user: buildUserPrompt(request, printerState, followUp) };
+  return { system: SYSTEM_PROMPT, user: buildUserPrompt(request, printerState, followUp, pastPrints) };
 }
 
 export async function optimizeSettings(
   request: StudioRequest,
   printerState: PrinterState | null,
   source: ProposalSource,
-  followUp: FollowUp | null = null
+  followUp: FollowUp | null = null,
+  pastPrints: PastPrint[] = []
 ): Promise<AiOptimizeResult> {
-  const { system, user } = buildPrompts(request, printerState, followUp);
+  const { system, user } = buildPrompts(request, printerState, followUp, pastPrints);
   const proposal = await source(system, user);
   return checkProposal(proposal, request);
 }
