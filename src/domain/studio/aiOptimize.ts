@@ -191,6 +191,31 @@ function normalizeVector(
   return { value: current.split(',').map((v) => (v.trim() === 'nil' ? 'nil' : parsed)).join(',') };
 }
 
+/** First non-nil value of a per-variant setting: the one the model sees and answers for */
+function firstVariant(current: string): number | null {
+  const first = current.split(',').find((v) => v.trim() !== 'nil');
+  const n = first === undefined ? NaN : Number(first);
+  return Number.isFinite(n) && n > 0 ? n : null;
+}
+
+/**
+ * A per-variant speed ("200,500,500,200"): the model gives the new value of the first variant, and every
+ * variant is scaled by the same ratio, so High Flow variants stay as much faster as their preset made them.
+ * "nil" stays nil.
+ */
+function scaleVector(raw: string, current: string | undefined, spec: { min: number; max: number }): { value: string } | { error: string } {
+  if (current === undefined) return { error: 'Studio không gửi giá trị hiện tại của tham số này' };
+  const reference = firstVariant(current);
+  if (reference === null) return { error: `Không có giá trị hiện tại để làm mốc (${current})` };
+  const values = [...new Set(raw.split(',').map((v) => v.trim().toLowerCase()).filter(Boolean))];
+  if (values.length !== 1) return { error: `"${raw}" phải là một giá trị cho đầu phun đầu tiên` };
+  const n = Number(values[0].replace(/mm\/s$/, '').trim());
+  if (!Number.isFinite(n)) return { error: `"${raw}" không phải số` };
+  if (n < spec.min || n > spec.max) return { error: `${n} nằm ngoài khoảng ${spec.min}–${spec.max}` };
+  const ratio = n / reference;
+  return { value: current.split(',').map((v) => (v.trim() === 'nil' ? 'nil' : String(round(Number(v) * ratio, 1)))).join(',') };
+}
+
 /**
  * The model's value for `key` in Studio's serialized form, or an error message.
  * Out-of-range numbers are rejected rather than clamped: a clamped value is one nobody reasoned about.
@@ -212,12 +237,7 @@ export function normalizeValue(
     case 'bools':
       return normalizeVector(raw, current, (v) => parseBool(v) ?? { error: `"${raw}" không phải giá trị bật/tắt` });
     case 'floats':
-      return normalizeVector(raw, current, (v) => {
-        const n = Number(v.replace(/mm\/s$/, '').trim());
-        if (!Number.isFinite(n)) return { error: `"${raw}" không phải số` };
-        if (n < spec.min || n > spec.max) return { error: `${n} nằm ngoài khoảng ${spec.min}–${spec.max}` };
-        return String(round(n, 3));
-      });
+      return scaleVector(raw, current, spec);
     case 'enum':
       return spec.values.includes(text) ? { value: text } : { error: `"${raw}" không nằm trong ${spec.values.join(', ')}` };
     default: {
@@ -291,7 +311,7 @@ Bạn nhận mô tả plate đang mở: preset máy, preset quá trình in, fila
 - Chỉ đề xuất khi có lý do cụ thể từ hình học, vật liệu hoặc mục tiêu. Không đổi tham số đã hợp lý. Nếu mọi thứ đã ổn, trả về danh sách rỗng.
 - Cân nhắc: phần nhô lớn thì cần support (tree(auto) cho mẫu hữu cơ/phức tạp); vật cao, đáy nhỏ hoặc vật liệu dễ cong vênh (ABS, ASA, PA, PC) thì cần brim, chỉ dùng raft khi đáy quá nhỏ hoặc cong vênh nặng; chi tiết chịu lực thì thêm vòng tường và infill; mẫu trang trí thì giảm infill.
 - Số lớp vỏ trên/dưới thực tế là giá trị lớn hơn giữa số lớp và độ dày vỏ chia chiều cao lớp: muốn giảm vỏ thì giảm cả hai, muốn tăng thì tăng một trong hai là đủ.
-- Tốc độ áp cho mọi đầu phun; chỉ đổi khi mục tiêu là tốc độ hoặc bề mặt đẹp, và giữ trong mức vật liệu chịu được (TPU, vật liệu mềm phải in chậm).
+- Tốc độ: giá trị hiện tại và giá trị đề xuất là của đầu phun đầu tiên; các biến thể khác (như High Flow) đổi theo cùng tỉ lệ. Chỉ đổi khi mục tiêu là tốc độ hoặc bề mặt đẹp, và giữ trong mức vật liệu chịu được (TPU, vật liệu mềm phải in chậm).
 - Khe hở Z support lớn hơn thì dễ gỡ nhưng mặt dưới xấu hơn. Bù kích thước XY chỉ dùng cho chi tiết lắp ghép, giá trị nhỏ (vài phần trăm mm).
 - Thông tin hình học là ước lượng từ lưới tam giác, không phải kết quả slice.
 - Mỗi lý do viết bằng tiếng Việt, một câu ngắn, nêu dựa vào đâu. Phần summary bằng tiếng Việt, tối đa ba câu.`;
@@ -307,9 +327,12 @@ function describeSettings(request: StudioRequest): string {
           : spec.kind === 'bools'
             ? '"1" hoặc "0", một giá trị cho mọi đầu phun'
             : spec.kind === 'floats'
-              ? `một số ${spec.min}–${spec.max} mm/s cho mọi đầu phun`
+              ? `một số ${spec.min}–${spec.max} mm/s cho đầu phun đầu tiên, các biến thể khác đổi cùng tỉ lệ`
               : `${spec.kind} ${spec.min}–${spec.max}${spec.kind === 'percent' ? '%' : ''}`;
-    return `- ${key} (${spec.label}): hiện tại ${request.settings[key] ?? 'không rõ'}; cho phép ${allowed}`;
+    const value = request.settings[key];
+    const reference = spec.kind === 'floats' && value !== undefined ? firstVariant(value) : null;
+    const shown = reference !== null ? `${reference} (tất cả biến thể: ${value})` : (value ?? 'không rõ');
+    return `- ${key} (${spec.label}): hiện tại ${shown}; cho phép ${allowed}`;
   }).join('\n');
 }
 

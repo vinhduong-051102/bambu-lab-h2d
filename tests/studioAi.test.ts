@@ -54,13 +54,27 @@ describe('AI tối ưu: checking proposals', () => {
     expect(normalizeValue('support_type', 'tree(manual)', [0.4])).toHaveProperty('error');
   });
 
-  it('sets per-variant settings to one value for every variant Studio has', () => {
-    expect(normalizeValue('outer_wall_speed', '150', [0.4], '200,200,nil,200')).toEqual({ value: '150,150,nil,150' });
+  it('scales per-variant speeds by the ratio given for the first variant', () => {
+    // H2D: standard nozzle variants at 200, High Flow at 500 (as Studio v02.08.04.57 sends them)
+    expect(normalizeValue('outer_wall_speed', '150', [0.4], '200,500,500,200,500,500,500')).toEqual({
+      value: '150,375,375,150,375,375,375',
+    });
+    expect(normalizeValue('outer_wall_speed', '150', [0.4], 'nil,200,nil,500')).toEqual({ value: 'nil,150,nil,375' });
     expect(normalizeValue('outer_wall_speed', '150, 150', [0.4], '200,200')).toEqual({ value: '150,150' });
-    expect(normalizeValue('enable_overhang_speed', 'false', [0.4], '1,1')).toEqual({ value: '0,0' });
+    expect(normalizeValue('inner_wall_speed', '100', [0.4], '300,600')).toEqual({ value: '100,200' });
     expect(normalizeValue('outer_wall_speed', '150,200', [0.4], '200,200')).toHaveProperty('error');
     expect(normalizeValue('outer_wall_speed', '900', [0.4], '200,200')).toHaveProperty('error');
     expect(normalizeValue('outer_wall_speed', '150', [0.4])).toHaveProperty('error');
+    expect(normalizeValue('outer_wall_speed', '150', [0.4], 'nil,nil')).toHaveProperty('error');
+  });
+
+  it('sets per-variant switches to one value for every variant', () => {
+    expect(normalizeValue('enable_overhang_speed', 'false', [0.4], '1,1,nil')).toEqual({ value: '0,0,nil' });
+  });
+
+  it('shows the first variant of a speed in the prompt', () => {
+    const request = { ...studioRequest, settings: { ...studioRequest.settings, outer_wall_speed: '200,500,500,200' } };
+    expect(buildUserPrompt(request, null)).toContain('- outer_wall_speed (Tốc độ tường ngoài): hiện tại 200 (tất cả biến thể: 200,500,500,200)');
   });
 
   it('drops a per-variant change that keeps every value', () => {
