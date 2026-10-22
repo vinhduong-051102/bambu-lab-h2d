@@ -1,8 +1,8 @@
 diff --git a/src/slic3r/GUI/MainFrame.cpp b/src/slic3r/GUI/MainFrame.cpp
-index d38b5d2..f672d76 100644
+index d38b5d2..191ed58 100644
 --- a/src/slic3r/GUI/MainFrame.cpp
 +++ b/src/slic3r/GUI/MainFrame.cpp
-@@ -12,6 +12,12 @@
+@@ -12,6 +12,15 @@
  #include <wx/tooltip.h>
  //#include <wx/glcanvas.h>
  #include <wx/filename.h>
@@ -12,10 +12,13 @@ index d38b5d2..f672d76 100644
 +#include <wx/choice.h>
 +#include <wx/radiobox.h>
 +#include <wx/statbmp.h>
++#include <wx/gauge.h>
++#include <wx/timer.h>
++#include <wx/time.h>
  #include <wx/debug.h>
  
  #include <boost/algorithm/string/predicate.hpp>
-@@ -49,6 +55,14 @@
+@@ -49,6 +58,14 @@
  #include "../Utils/MacDarkMode.hpp"
  
  #include <fstream>
@@ -30,7 +33,7 @@ index d38b5d2..f672d76 100644
  #include <string_view>
  
  #include "GUI_App.hpp"
-@@ -1289,6 +1303,8 @@ void MainFrame::show_option(bool show)
+@@ -1289,6 +1306,8 @@ void MainFrame::show_option(bool show)
              m_print_btn->Hide();
              m_slice_option_btn->Hide();
              m_print_option_btn->Hide();
@@ -39,7 +42,7 @@ index d38b5d2..f672d76 100644
              split_line_icon->Hide();
              expand_program_holder->Hide();
              Layout();
-@@ -1299,6 +1315,8 @@ void MainFrame::show_option(bool show)
+@@ -1299,6 +1318,8 @@ void MainFrame::show_option(bool show)
              m_print_btn->Show();
              m_slice_option_btn->Show();
              m_print_option_btn->Show();
@@ -48,7 +51,7 @@ index d38b5d2..f672d76 100644
              split_line_icon->Show();
              expand_program_holder->Show();
              Layout();
-@@ -2068,6 +2086,15 @@ wxBoxSizer* MainFrame::create_side_tools()
+@@ -2068,6 +2089,15 @@ wxBoxSizer* MainFrame::create_side_tools()
      print_sizer->Add(m_print_btn, 0, wxLEFT | wxALIGN_CENTER_VERTICAL, FromDIP(1));
      print_panel->SetSizer(print_sizer);
  
@@ -64,7 +67,7 @@ index d38b5d2..f672d76 100644
      update_side_button_style();
      m_slice_option_btn->Enable();
      m_print_option_btn->Enable();
-@@ -2076,6 +2103,10 @@ wxBoxSizer* MainFrame::create_side_tools()
+@@ -2076,6 +2106,10 @@ wxBoxSizer* MainFrame::create_side_tools()
      sizer->Add(FromDIP(4), 0, 0, 0, 0);
      sizer->Add(split_line_icon, 0, wxALIGN_CENTER, 0);
      sizer->Add(FromDIP(6), 0, 0, 0, 0);
@@ -75,7 +78,7 @@ index d38b5d2..f672d76 100644
      sizer->Add(slice_panel);
      sizer->Add(FromDIP(8), 0, 0, 0, 0);
      sizer->Add(print_panel);
-@@ -2651,6 +2682,763 @@ void MainFrame::update_side_button_style()
+@@ -2651,6 +2685,971 @@ void MainFrame::update_side_button_style()
      m_print_option_btn->SetExtraSize(wxSize(FromDIP(10), FromDIP(10)));
      m_print_option_btn->SetIconOffset(FromDIP(2));
      m_print_option_btn->SetMinSize(wxSize(FromDIP(24), FromDIP(24)));
@@ -375,9 +378,9 @@ index d38b5d2..f672d76 100644
 +           std::all_of(name.begin(), name.end(), [](char c) { return std::isalnum((unsigned char) c) || c == '-' || c == '.'; });
 +}
 +
-+// Runs an /opt/studio-ai command without blocking; done runs on the UI thread once it exits. False when it
-+// could not be started.
-+bool ai_run_async(const std::string &command, std::function<void()> done)
++// Runs an /opt/studio-ai command without blocking; done runs on the UI thread once it exits. Returns its
++// pid, or 0 when it could not be started. `flags` adds wxExecute flags (wxEXEC_MAKE_GROUP_LEADER).
++long ai_run_async(const std::string &command, std::function<void()> done, int flags = 0)
 +{
 +    auto *process = new wxProcess();
 +    process->Bind(wxEVT_END_PROCESS, [process, done](wxProcessEvent &) {
@@ -386,7 +389,120 @@ index d38b5d2..f672d76 100644
 +        done();
 +    });
 +    // On failure the process object is left alone: leaking it beats a double delete if wx frees it
-+    return wxExecute(wxString::FromUTF8(command), wxEXEC_ASYNC, process) > 0;
++    const long pid = wxExecute(wxString::FromUTF8(command), wxEXEC_ASYNC | flags, process);
++    return pid > 0 ? pid : 0;
++}
++
++// The steps of a click, in order, by the names on-click writes to response.json.progress
++struct AiStep
++{
++    const char *id;
++    const char *label;
++};
++const AiStep AI_STEPS[] = {
++    {"read", "Đọc mẫu và setting trong Studio"},
++    {"prompt", "Gửi cho gateway, dựng yêu cầu cho AI"},
++    {"thinking", "Claude phân tích hình dạng mẫu, vật liệu và setting"},
++    {"writing", "Claude viết đề xuất"},
++    {"check", "Gateway kiểm tra đề xuất"},
++};
++const int AI_STEP_COUNT = int(sizeof(AI_STEPS) / sizeof(AI_STEPS[0]));
++
++// What the AI is doing while the user waits: the steps done and to come, the time so far, and how many
++// changes Claude has written. A plain modeless dialog (not a wxPopupTransientWindow, which grabs input on
++// GTK): the user keeps working in Studio, hides it, or cancels the click.
++class AiProgressDialog : public wxDialog
++{
++public:
++    AiProgressDialog(wxWindow *parent, const wxString &plate, std::function<void()> on_cancel)
++        : wxDialog(parent, wxID_ANY, wxString::FromUTF8("AI tối ưu: đang phân tích"), wxDefaultPosition, wxDefaultSize, wxCAPTION | wxSYSTEM_MENU | wxCLOSE_BOX)
++    {
++        const int gap = FromDIP(12);
++        auto *sizer = new wxBoxSizer(wxVERTICAL);
++        for (int i = 0; i < AI_STEP_COUNT; ++i) {
++            m_steps[i] = new wxStaticText(this, wxID_ANY, wxEmptyString);
++            sizer->Add(m_steps[i], 0, wxLEFT | wxRIGHT | wxTOP, gap);
++        }
++        m_plate = plate;
++        // Claude's analysis lines as it writes them (on-click asks for them before the answer)
++        m_notes = new wxTextCtrl(this, wxID_ANY, wxString::FromUTF8("Claude đang suy nghĩ, phân tích sẽ hiện ở đây..."), wxDefaultPosition,
++                                 wxSize(FromDIP(480), FromDIP(170)), wxTE_MULTILINE | wxTE_READONLY | wxTE_WORDWRAP);
++        sizer->Add(m_notes, 1, wxLEFT | wxRIGHT | wxTOP | wxEXPAND, gap);
++        m_gauge = new wxGauge(this, wxID_ANY, 100, wxDefaultPosition, wxSize(FromDIP(420), FromDIP(8)));
++        sizer->Add(m_gauge, 0, wxALL | wxEXPAND, gap);
++        m_detail = new wxStaticText(this, wxID_ANY, wxEmptyString);
++        sizer->Add(m_detail, 0, wxLEFT | wxRIGHT | wxEXPAND, gap);
++
++        auto *buttons = new wxBoxSizer(wxHORIZONTAL);
++        m_cancel = new wxButton(this, wxID_ANY, wxString::FromUTF8("Hủy"));
++        auto *hide = new wxButton(this, wxID_ANY, wxString::FromUTF8("Ẩn"));
++        buttons->AddStretchSpacer();
++        buttons->Add(m_cancel, 0, wxRIGHT, FromDIP(8));
++        buttons->Add(hide);
++        sizer->Add(buttons, 0, wxALL | wxEXPAND, gap);
++
++        m_cancel->Bind(wxEVT_BUTTON, [this, on_cancel](wxCommandEvent &) {
++            m_cancel->Enable(false);
++            m_detail->SetLabel(wxString::FromUTF8("Đang hủy..."));
++            on_cancel();
++        });
++        hide->Bind(wxEVT_BUTTON, [this](wxCommandEvent &) { Hide(); });
++        // The title bar's close button hides too: the click goes on, and the AI button shows this again
++        Bind(wxEVT_CLOSE_WINDOW, [this](wxCloseEvent &event) {
++            if (event.CanVeto()) {
++                event.Veto();
++                Hide();
++            } else
++                event.Skip();
++        });
++
++        show_step(0, wxEmptyString, wxEmptyString);
++        SetSizerAndFit(sizer);
++        CentreOnParent();
++    }
++
++    // Marks the steps before `current` done; `detail` goes under the progress bar, `notes` (one per line)
++    // in the analysis box, which keeps its placeholder until Claude writes the first one
++    void show_step(int current, const wxString &detail, const wxString &notes)
++    {
++        if (!notes.empty() && m_notes->GetValue() != notes) {
++            m_notes->ChangeValue(notes);
++            m_notes->ShowPosition(m_notes->GetLastPosition());
++        }
++        for (int i = 0; i < AI_STEP_COUNT; ++i) {
++            wxString label = wxString::FromUTF8(i < current ? "✓  " : i == current ? "●  " : "○  ") + wxString::FromUTF8(AI_STEPS[i].label);
++            if (i == 0)
++                label += m_plate;
++            if (m_steps[i]->GetLabel() != label)
++                m_steps[i]->SetLabel(label);
++            m_steps[i]->Enable(i <= current);
++        }
++        if (m_cancel->IsEnabled() && m_detail->GetLabel() != detail) {
++            m_detail->SetLabel(detail);
++            Layout();
++        }
++        m_gauge->Pulse();
++    }
++
++private:
++    wxString      m_plate;
++    wxStaticText *m_steps[AI_STEP_COUNT];
++    wxStaticText *m_detail;
++    wxTextCtrl   *m_notes;
++    wxGauge      *m_gauge;
++    wxButton     *m_cancel;
++};
++
++// The progress on-click last wrote, or nullopt while there is none; quiet, as it is read twice a second
++std::optional<nlohmann::json> ai_read_progress(const std::string &path)
++{
++    std::ifstream in(path, std::ios::binary);
++    if (!in)
++        return std::nullopt;
++    nlohmann::json progress = nlohmann::json::parse(in, nullptr, false);
++    if (progress.is_discarded() || !progress.is_object())
++        return std::nullopt;
++    return progress;
 +}
 +
 +// The print report: which recorded print it is about (with the camera's photo of it), how it came out,
@@ -571,8 +687,14 @@ index d38b5d2..f672d76 100644
 +
 +void MainFrame::ai_optimize(const std::string &follow_up_session, const wxString &comment)
 +{
-+    if (m_ai_running)
++    // While the AI works, the button brings back its progress window
++    if (m_ai_running) {
++        if (m_ai_progress != nullptr) {
++            m_ai_progress->Show();
++            m_ai_progress->Raise();
++        }
 +        return;
++    }
 +    if (!wxFileName::IsFileExecutable(AI_HOOK)) {
 +        MessageDialog dlg(this, wxString::FromUTF8("Chức năng AI tối ưu sắp có."), wxString::FromUTF8("AI tối ưu"), wxOK | wxICON_INFORMATION);
 +        dlg.ShowModal();
@@ -586,12 +708,19 @@ index d38b5d2..f672d76 100644
 +
 +    const std::string request_path  = AI_DIR + "/request.json";
 +    const std::string response_path = AI_DIR + "/response.json";
++    wxString plate;
 +    try {
 +        nlohmann::json request = ai_describe_plate();
 +        // "Hỏi lại AI": the gateway puts the earlier proposal and this comment in the prompt
 +        if (!follow_up_session.empty())
 +            request["follow_up"] = {{"session_id", follow_up_session}, {"comment", comment.ToUTF8().data()}};
++        size_t settings = request["settings"].size();
++        for (const nlohmann::json &filament : request["filaments"])
++            if (filament.value("used", false) && filament.contains("settings"))
++                settings += filament["settings"].size();
++        plate = wxString::Format(wxString::FromUTF8(": %d vật thể, %d setting"), int(request["objects"].size()), int(settings));
 +        boost::filesystem::remove(response_path);
++        boost::filesystem::remove(response_path + ".progress");
 +        ai_write_json(request_path, request);
 +    } catch (const std::exception &e) {
 +        BOOST_LOG_TRIVIAL(error) << "AI optimize: " << e.what();
@@ -600,18 +729,100 @@ index d38b5d2..f672d76 100644
 +        return;
 +    }
 +
-+    const bool started = ai_run(AI_HOOK + " " + request_path + " " + response_path, [this, response_path]() {
-+        m_ai_running = false;
-+        m_ai_btn->SetLabel(wxString::FromUTF8("AI tối ưu"));
-+        m_ai_btn->Enable();
-+        Layout();
-+        ai_optimize_apply(response_path);
-+    });
-+    if (!started)
++    // Its own process group, so cancelling stops the hook and everything it started
++    const std::string command = AI_HOOK + " " + request_path + " " + response_path;
++    m_ai_cancelled = false;
++    m_ai_pid = ai_run_async(command, [this, response_path]() {
++        const bool cancelled = m_ai_cancelled;
++        ai_progress_stop();
++        if (!cancelled)
++            ai_optimize_apply(response_path);
++    }, wxEXEC_MAKE_GROUP_LEADER);
++    if (m_ai_pid == 0) {
++        MessageDialog dlg(this, wxString::FromUTF8("Không chạy được ") + wxString::FromUTF8(command), wxString::FromUTF8("AI tối ưu"), wxOK | wxICON_ERROR);
++        dlg.ShowModal();
 +        return;
++    }
 +    m_ai_running = true;
 +    m_ai_btn->SetLabel(wxString::FromUTF8("AI đang phân tích..."));
-+    m_ai_btn->Enable(false);
++    m_ai_btn->SetToolTip(wxString::FromUTF8("Xem tiến trình AI"));
++    Layout();
++    ai_progress_start(plate, response_path + ".progress");
++}
++
++void MainFrame::ai_progress_start(const wxString &plate, const std::string &progress_path)
++{
++    m_ai_started_ms = wxGetLocalTimeMillis().GetValue();
++    auto *dialog = new AiProgressDialog(this, plate, [this]() {
++        // The hook's whole process group; on-click passes it on to claude
++        m_ai_cancelled = true;
++        if (m_ai_pid != 0)
++            wxProcess::Kill(int(m_ai_pid), wxSIGTERM, wxKILL_CHILDREN);
++    });
++    m_ai_progress      = dialog;
++    m_ai_progress_path = progress_path;
++    dialog->Show();
++    if (m_ai_timer == nullptr) {
++        m_ai_timer = new wxTimer(this);
++        Bind(wxEVT_TIMER, [this](wxTimerEvent &) { ai_progress_tick(); }, m_ai_timer->GetId());
++    }
++    m_ai_timer->Start(500);
++    ai_progress_tick();
++}
++
++void MainFrame::ai_progress_tick()
++{
++    auto *dialog = static_cast<AiProgressDialog *>(m_ai_progress);
++    if (dialog == nullptr)
++        return;
++    const long long seconds = (wxGetLocalTimeMillis().GetValue() - m_ai_started_ms) / 1000;
++    const wxString elapsed = wxString::Format(wxString::FromUTF8("Đã chạy %lld:%02lld"), seconds / 60, seconds % 60);
++
++    // Studio has read the plate by now; on-click says where it got
++    int current = 1;
++    wxString detail = elapsed;
++    wxString notes;
++    if (std::optional<nlohmann::json> progress = ai_read_progress(m_ai_progress_path)) {
++        const std::string step    = progress->value("step", "");
++        const int         changes = progress->value("changes", 0);
++        int               lines   = 0;
++        for (const nlohmann::json &note : progress->value("notes", nlohmann::json::array()))
++            if (note.is_string()) {
++                notes += (lines++ > 0 ? wxString("\n") : wxString()) + wxString::FromUTF8(note.get<std::string>());
++            }
++        if (step == "gateway") {
++            // The gateway asks Claude with its API key in one go: nothing finer to show
++            current = 2;
++            detail += wxString::FromUTF8(" · Gateway đang hỏi Claude bằng API key, không xem được chi tiết từng bước");
++        } else {
++            for (int i = 0; i < AI_STEP_COUNT; ++i)
++                if (step == AI_STEPS[i].id)
++                    current = i;
++            if (step == "thinking" && lines > 0)
++                detail += wxString::Format(wxString::FromUTF8(" · Claude đã phân tích %d ý, chưa viết đề xuất"), lines);
++            else if (step == "thinking")
++                detail += wxString::FromUTF8(" · Claude đang suy nghĩ, chưa viết đề xuất");
++            else if (step == "writing")
++                detail += wxString::Format(wxString::FromUTF8(" · Đã viết %d thay đổi"), changes);
++            else if (step == "check")
++                detail += wxString::Format(wxString::FromUTF8(" · Kiểm tra %d thay đổi"), changes);
++        }
++    }
++    dialog->show_step(current, detail, notes);
++}
++
++void MainFrame::ai_progress_stop()
++{
++    if (m_ai_timer != nullptr)
++        m_ai_timer->Stop();
++    if (m_ai_progress != nullptr) {
++        m_ai_progress->Destroy();
++        m_ai_progress = nullptr;
++    }
++    m_ai_pid     = 0;
++    m_ai_running = false;
++    m_ai_btn->SetLabel(wxString::FromUTF8("AI tối ưu"));
++    m_ai_btn->SetToolTip(wxString::FromUTF8("AI phân tích mẫu và tối ưu setting"));
 +    Layout();
 +}
 +
@@ -840,7 +1051,7 @@ index d38b5d2..f672d76 100644
  
  void MainFrame::update_slice_print_status(SlicePrintEventType event, bool can_slice, bool can_print)
 diff --git a/src/slic3r/GUI/MainFrame.hpp b/src/slic3r/GUI/MainFrame.hpp
-index 93422a8..9348918 100644
+index 93422a8..1fe9d06 100644
 --- a/src/slic3r/GUI/MainFrame.hpp
 +++ b/src/slic3r/GUI/MainFrame.hpp
 @@ -1,6 +1,7 @@
@@ -851,7 +1062,7 @@ index 93422a8..9348918 100644
  #include "libslic3r/PrintConfig.hpp"
  
  #include <boost/property_tree/ptree_fwd.hpp>
-@@ -420,6 +421,23 @@ public:
+@@ -420,6 +421,34 @@ public:
      SideButton* m_slice_option_btn{ nullptr };
      SideButton* m_print_btn{ nullptr };
      SideButton* m_print_option_btn{ nullptr };
@@ -867,6 +1078,17 @@ index 93422a8..9348918 100644
 +    // Runs the AI hook on the open plate (again, with the user's comment on an earlier session), then offers its changes
 +    void ai_optimize(const std::string &follow_up_session = "", const wxString &comment = wxString());
 +    void ai_optimize_apply(const std::string &response_path);
++    // The progress window of a running hook (an AiProgressDialog), fed from the file the hook writes
++    wxDialog *m_ai_progress{ nullptr };
++    wxTimer *m_ai_timer{ nullptr };
++    std::string m_ai_progress_path;
++    long m_ai_pid{ 0 };
++    long long m_ai_started_ms{ 0 };
++    bool m_ai_cancelled{ false };
++    void ai_progress_start(const wxString &plate, const std::string &progress_path);
++    void ai_progress_tick();
++    // Closes the progress window and puts the button back, once the hook has exited
++    void ai_progress_stop();
 +    // "Báo cáo in": lists the AI sessions, then sends the user's report on one of them
 +    void ai_report();
 +    void ai_report_show(const std::string &list_path);

@@ -2,6 +2,9 @@
 # Run by Studio's "AI tối ưu" button: on-click <request.json> <response.json>
 # Writes the checked setting changes for Studio's plate to <response.json>, which Studio reads once this
 # script exits. Any failure is written as {"success": false, "message": ...} so Studio can show it.
+# Meanwhile <response.json>.progress says how far it got, for Studio's progress window:
+# {"step": "prompt" | "thinking" | "writing" | "check" | "gateway", "changes": <changes written so far>,
+#  "notes": [the "• " analysis lines Claude writes before its answer, the last one possibly unfinished]}
 #
 # With CLAUDE_CODE_OAUTH_TOKEN (from `claude setup-token`), Claude is asked here with `claude -p`, on that
 # Claude subscription: the gateway builds the prompt (POST $STUDIO_AI_URL/prompt) and checks the answer
@@ -33,6 +36,17 @@ fail() {
   exit 0
 }
 
+# progress <step> [changes] [notes as a JSON array]: replaced whole, so Studio never reads half a file. Without
+# notes it needs no jq (the gateway path runs without it).
+progress() {
+  if [ -n "$3" ]; then
+    jq -cn --arg step "$1" --argjson changes "${2:-0}" --argjson notes "$3" \
+      '{step: $step, changes: $changes, notes: $notes}' > "$response.progress.part"
+  else
+    printf '{"step": "%s", "changes": %s}\n' "$1" "${2:-0}" > "$response.progress.part"
+  fi && mv -f "$response.progress.part" "$response.progress"
+}
+
 # post <body file> <url> <output file>: fails the click unless the gateway answered with JSON
 post() {
   status=$(curl -sS -o "$3" -w '%{http_code}' --max-time 300 \
@@ -55,6 +69,7 @@ rm -rf "$work"
 mkdir -p "$work" || fail "Không tạo được thư mục tạm cho AI."
 
 if [ -z "$CLAUDE_CODE_OAUTH_TOKEN" ]; then
+  progress gateway
   post "$request" "$url" "$work/answer.json"
   # The gateway answers every other case, errors included, with JSON that carries its own message
   mv "$work/answer.json" "$response"
@@ -65,6 +80,7 @@ fi
 command -v claude >/dev/null 2>&1 || fail "Image Studio chưa có Claude Code: build lại image (docs/studio.md)."
 command -v jq >/dev/null 2>&1 || fail "Image Studio chưa có jq: build lại image (docs/studio.md)."
 
+progress prompt
 post "$request" "$url/prompt" "$work/prompt.json"
 if [ "$(jq -r '.success' "$work/prompt.json" 2>/dev/null)" != "true" ]; then
   mv "$work/prompt.json" "$response" 2>/dev/null
@@ -73,19 +89,45 @@ if [ "$(jq -r '.success' "$work/prompt.json" 2>/dev/null)" != "true" ]; then
 fi
 jq -r '.user' "$work/prompt.json" > "$work/user.txt"
 
-# No tools and no settings files: Claude only reads the plate and answers in the schema's JSON
-timeout 300 claude -p \
+# No tools and no settings files: Claude only reads the plate and answers in the schema's JSON. Room for a
+# long answer: asked to change every setting, it lists several hundred. Streamed, so the progress shows
+# when Claude starts writing its answer and how many changes it has written.
+progress thinking
+CLAUDE_CODE_MAX_OUTPUT_TOKENS=64000 timeout 600 claude -p \
   --model "${STUDIO_AI_MODEL:-claude-opus-5-5}" \
   --tools "" \
   --setting-sources "" \
   --no-session-persistence \
   --system-prompt "$(jq -r '.system' "$work/prompt.json")" \
   --json-schema "$(jq -c '.schema' "$work/prompt.json")" \
-  --output-format json \
-  < "$work/user.txt" > "$work/claude.json" 2> "$work/claude.err"
+  --output-format stream-json --verbose --include-partial-messages \
+  < "$work/user.txt" > "$work/claude.jsonl" 2> "$work/claude.err" &
+pid=$!
+# Cancelled from Studio (SIGTERM to this script's process group): timeout runs in a group of its own, so it
+# is stopped here, and passes the signal on to claude
+trap 'kill "$pid" 2>/dev/null; rm -rf "$work"; exit 143' TERM INT
+# The system prompt asks for "• " analysis lines first (text_delta pieces); the answer is then the
+# StructuredOutput tool's input, streamed as input_json_delta pieces. Pieces are joined before reading
+# them, so a line or a "key" split across two pieces still counts.
+notes='[]'
+while kill -0 "$pid" 2>/dev/null; do
+  sleep 1
+  notes=$(jq -Rrj 'fromjson? | select(.type == "stream_event" and .event.delta.type? == "text_delta") | .event.delta.text' \
+    "$work/claude.jsonl" 2>/dev/null | jq -Rsc '[split("\n")[] | ltrimstr(" ") | select(startswith("•"))]' 2>/dev/null)
+  [ -n "$notes" ] || notes='[]'
+  if grep -q '"input_json_delta"' "$work/claude.jsonl" 2>/dev/null; then
+    written=$(jq -Rrj 'fromjson? | select(.type == "stream_event" and .event.delta.type? == "input_json_delta") | .event.delta.partial_json' \
+      "$work/claude.jsonl" 2>/dev/null | grep -o '"key"' | wc -l)
+    progress writing "$written" "$notes"
+  else
+    progress thinking 0 "$notes"
+  fi
+done
+wait "$pid"
 code=$?
+jq -Rc 'fromjson? | select(.type == "result")' "$work/claude.jsonl" > "$work/claude.json" 2>/dev/null
 
-[ "$code" = "124" ] && fail "Claude không trả lời trong 5 phút."
+[ "$code" = "124" ] && fail "Claude không trả lời trong 10 phút."
 if ! jq -e '.structured_output' "$work/claude.json" >/dev/null 2>&1; then
   detail=$(jq -r '.result // empty' "$work/claude.json" 2>/dev/null)
   [ -n "$detail" ] || detail=$(tail -n 3 "$work/claude.err" 2>/dev/null)
@@ -99,6 +141,7 @@ fi
 jq -n --slurpfile request "$request" --slurpfile claude "$work/claude.json" \
   '{request: $request[0], proposal: $claude[0].structured_output}' > "$work/check.json" \
   || fail "Không đọc được dữ liệu từ Studio."
+progress check "$(jq '.proposal.changes | length' "$work/check.json")" "$notes"
 post "$work/check.json" "$url/check" "$work/answer.json"
 mv "$work/answer.json" "$response"
 rm -rf "$work"

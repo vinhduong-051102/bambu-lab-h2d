@@ -243,7 +243,8 @@ export const aiProposalSchema = z.object({
         reason: z.string(),
       })
     )
-    .max(200),
+    // Room for every setting of the process and a filament preset, when the user asks to change them all
+    .max(800),
 });
 
 const round = (n: number, digits: number) => Number(n.toFixed(digits));
@@ -281,17 +282,38 @@ function firstVariant(current: string): number | null {
 /**
  * A per-variant speed ("200,500,500,200"): the model gives the new value of the first variant, and every
  * variant is scaled by the same ratio, so High Flow variants stay as much faster as their preset made them.
- * "nil" stays nil.
+ * It may also give one value per variant. "nil" stays nil.
  */
 function scaleVector(raw: string, current: string | undefined, spec: { min: number; max: number }): { value: string } | { error: string } {
   if (current === undefined) return { error: 'Studio không gửi giá trị hiện tại của tham số này' };
   const reference = firstVariant(current);
   if (reference === null) return { error: `Không có giá trị hiện tại để làm mốc (${current})` };
-  const values = [...new Set(raw.split(',').map((v) => v.trim().toLowerCase()).filter(Boolean))];
-  if (values.length !== 1) return { error: `"${raw}" phải là một giá trị cho đầu phun đầu tiên` };
-  const n = Number(values[0].replace(/mm\/s$/, '').trim());
-  if (!Number.isFinite(n)) return { error: `"${raw}" không phải số` };
-  if (n < spec.min || n > spec.max) return { error: `${n} nằm ngoài khoảng ${spec.min}–${spec.max}` };
+  const speed = (text: string): number | { error: string } => {
+    const n = Number(text.replace(/mm\/s$/, '').trim());
+    if (!Number.isFinite(n)) return { error: `"${raw}" không phải số` };
+    if (n < spec.min || n > spec.max) return { error: `${n} nằm ngoài khoảng ${spec.min}–${spec.max}` };
+    return n;
+  };
+  const parts = raw.split(',').map((v) => v.trim().toLowerCase()).filter(Boolean);
+  const now = current.split(',').map((v) => v.trim());
+  // One value per variant, in order: taken as given, nil variants staying nil
+  if (parts.length === now.length && new Set(parts).size > 1) {
+    const values: string[] = [];
+    for (const [i, part] of parts.entries()) {
+      if (now[i] === 'nil') {
+        values.push('nil');
+        continue;
+      }
+      const n = speed(part);
+      if (typeof n !== 'number') return n;
+      values.push(String(round(n, 1)));
+    }
+    return { value: values.join(',') };
+  }
+  const values = [...new Set(parts)];
+  if (values.length !== 1) return { error: `"${raw}" phải là một giá trị cho đầu phun đầu tiên, hoặc ${now.length} giá trị theo thứ tự biến thể` };
+  const n = speed(values[0]);
+  if (typeof n !== 'number') return n;
   const ratio = n / reference;
   return { value: current.split(',').map((v) => (v.trim() === 'nil' ? 'nil' : String(round(Number(v) * ratio, 1)))).join(',') };
 }
@@ -357,6 +379,8 @@ const AI_DENIED = new Set([
   'temperature_vitrification', 'volumetric_speed_coefficients',
   'nozzle_temperature_range_low', 'nozzle_temperature_range_high',
   'wipe_tower_x', 'wipe_tower_y',
+  // Which extruder each variant of the per-variant settings belongs to: Studio's bookkeeping, not a choice
+  'print_extruder_id',
 ]);
 
 /** Studio's definition of `key`, when the AI may change it in a preset holding `settings` */
@@ -485,6 +509,9 @@ function checkFilamentRules(key: string, value: string, settings: Record<string,
   return outside === undefined ? null : `${outside}°C nằm ngoài khoảng nhiệt độ của filament ${low}–${high}°C`;
 }
 
+// Studio's labels repeat across settings ("Bed temperature" for each plate type): the key tells them apart
+const optionLabel = (key: string, option: StudioOption) => (option.label ? `${option.label} (${key})` : key);
+
 type ProposedChange = AiProposal['changes'][number];
 
 /** Keeps the proposals that are allowed, valid and actually change something; explains the rest */
@@ -514,7 +541,7 @@ export function checkProposal(proposal: AiProposal, request: StudioRequest): AiO
       const normalized = normalizeOptionValue(option, value, current);
       if ('error' in normalized) return normalized;
       if (sameOptionValue(current, normalized.value)) return null;
-      return { change: { key, label: option.label || key, value: normalized.value, reason } };
+      return { change: { key, label: optionLabel(key, option), value: normalized.value, reason } };
     }
 
     const filament = change.filament ?? 0;
@@ -535,7 +562,7 @@ export function checkProposal(proposal: AiProposal, request: StudioRequest): AiO
     if (broken) return { error: broken };
     if (sameOptionValue(current, normalized.value)) return null;
     filamentPreset = slot.preset;
-    return { change: { target: 'filament', filament, preset: slot.preset, key, label: option.label || key, value: normalized.value, reason } };
+    return { change: { target: 'filament', filament, preset: slot.preset, key, label: optionLabel(key, option), value: normalized.value, reason } };
   };
 
   for (const change of proposal.changes) {
@@ -568,6 +595,7 @@ Bạn nhận mô tả plate đang mở: preset máy, preset quá trình in, fila
 - Tham số có nhiều giá trị (một giá trị cho mỗi biến thể đầu phun, như "220,230"): ghi một giá trị cho biến thể đầu tiên, các biến thể khác đổi theo cùng tỉ lệ; hoặc ghi đủ từng giá trị theo thứ tự biến thể. "nil" là biến thể không dùng giá trị này, cứ ghi một số bất kỳ ở vị trí đó.
 - Chỉ đề xuất khi có lý do cụ thể từ hình học, vật liệu hoặc mục tiêu. Không đổi tham số đã hợp lý. Nếu mọi thứ đã ổn, trả về danh sách rỗng.
 - Phần lớn tham số đã được Bambu tinh chỉnh cho máy và vật liệu này: ưu tiên các tham số chính, chỉ đụng đến tham số khác khi có lý do rõ. Không bật chế độ đặc biệt (spiral vase, fuzzy skin, in tuần tự từng vật...) nếu người dùng không yêu cầu. Nhiệt độ đầu phun giữ trong khoảng khuyến nghị của filament.
+- Yêu cầu rõ của người dùng (trong ý kiến của họ) được ưu tiên hơn các nguyên tắc thận trọng ở trên: nếu họ muốn đổi một nhóm tham số hay tất cả tham số (ví dụ để thử xem Studio áp dụng đúng không), đổi đúng phạm vi đó, mỗi tham số một giá trị khác giá trị hiện tại và vẫn trong khoảng cho phép, lý do thật ngắn (vài chữ). "Tất cả" nghĩa là mọi key được liệt kê trong cả ba phần: tham số chính, các tham số khác của preset quá trình in, và tham số filament (của một preset filament), không chỉ tham số chính. Danh sách dài là bình thường. Chỉ giới hạn giá trị là không bỏ qua được.
 - Cân nhắc: phần nhô lớn thì cần support (tree(auto) cho mẫu hữu cơ/phức tạp); vật cao, đáy nhỏ hoặc vật liệu dễ cong vênh (ABS, ASA, PA, PC) thì cần brim, chỉ dùng raft khi đáy quá nhỏ hoặc cong vênh nặng; chi tiết chịu lực thì thêm vòng tường và infill; mẫu trang trí thì giảm infill.
 - Số lớp vỏ trên/dưới thực tế là giá trị lớn hơn giữa số lớp và độ dày vỏ chia chiều cao lớp: muốn giảm vỏ thì giảm cả hai, muốn tăng thì tăng một trong hai là đủ.
 - Tốc độ: giá trị hiện tại và giá trị đề xuất là của đầu phun đầu tiên; các biến thể khác (như High Flow) đổi theo cùng tỉ lệ. Chỉ đổi khi mục tiêu là tốc độ hoặc bề mặt đẹp, và giữ trong mức vật liệu chịu được (TPU, vật liệu mềm phải in chậm).
@@ -587,7 +615,7 @@ function describeSettings(request: StudioRequest): string {
           : spec.kind === 'bools'
             ? '"1" hoặc "0", một giá trị cho mọi đầu phun'
             : spec.kind === 'floats'
-              ? `một số ${spec.min}–${spec.max} mm/s cho đầu phun đầu tiên, các biến thể khác đổi cùng tỉ lệ`
+              ? `một số ${spec.min}–${spec.max} mm/s cho đầu phun đầu tiên (các biến thể khác đổi cùng tỉ lệ), hoặc đủ từng giá trị theo biến thể`
               : `${spec.kind} ${spec.min}–${spec.max}${spec.kind === 'percent' ? '%' : ''}`;
     const value = request.settings[key];
     const reference = spec.kind === 'floats' && value !== undefined ? firstVariant(value) : null;
@@ -762,6 +790,14 @@ export function claudeProposalSource(model: string, client = new Anthropic()): P
     return response.parsed_output;
   };
 }
+
+/**
+ * For `claude -p` in Studio's container, which streams Claude's text before the answer: Studio's progress
+ * window shows these lines while Claude works (its thinking itself never reaches `claude -p`'s output).
+ */
+export const PROGRESS_NOTES_PROMPT = `
+
+Trước khi trả lời theo schema, viết phần phân tích ngắn để người dùng theo dõi trong lúc chờ: tiếng Việt, mỗi ý một dòng bắt đầu bằng "• ", mỗi dòng dưới 15 chữ, tối đa 12 dòng, theo thứ tự: hình dạng và phần nhô của vật thể, vật liệu và đầu phun, kết quả in trước (nếu có), rồi từng nhóm setting sẽ đổi và vì sao. Không viết gì khác ngoài các dòng đó.`;
 
 /** The system and user prompts for a plate, for callers that ask Claude themselves */
 export function buildPrompts(

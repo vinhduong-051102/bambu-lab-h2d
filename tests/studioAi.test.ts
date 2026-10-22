@@ -69,7 +69,10 @@ describe('AI tối ưu: checking proposals', () => {
     expect(normalizeValue('outer_wall_speed', '150', [0.4], 'nil,200,nil,500')).toEqual({ value: 'nil,150,nil,375' });
     expect(normalizeValue('outer_wall_speed', '150, 150', [0.4], '200,200')).toEqual({ value: '150,150' });
     expect(normalizeValue('inner_wall_speed', '100', [0.4], '300,600')).toEqual({ value: '100,200' });
-    expect(normalizeValue('outer_wall_speed', '150,200', [0.4], '200,200')).toHaveProperty('error');
+    expect(normalizeValue('outer_wall_speed', '150,200', [0.4], '200,200')).toEqual({ value: '150,200' });
+    expect(normalizeValue('outer_wall_speed', '100,250,nil', [0.4], '200,500,nil')).toEqual({ value: '100,250,nil' });
+    expect(normalizeValue('outer_wall_speed', '150,200', [0.4], '200,200,200')).toHaveProperty('error');
+    expect(normalizeValue('outer_wall_speed', '150,900', [0.4], '200,200')).toHaveProperty('error');
     expect(normalizeValue('outer_wall_speed', '900', [0.4], '200,200')).toHaveProperty('error');
     expect(normalizeValue('outer_wall_speed', '150', [0.4])).toHaveProperty('error');
     expect(normalizeValue('outer_wall_speed', '150', [0.4], 'nil,nil')).toHaveProperty('error');
@@ -176,8 +179,8 @@ describe('AI tối ưu: every setting Studio describes', () => {
       { key: 'gap_infill_speed', value: '2000', reason: 'trùng' },
     ]);
     expect(result.changes).toEqual([
-      { key: 'gap_infill_speed', label: 'Gap infill', value: '150,150', reason: 'Bề mặt đẹp hơn' },
-      { key: 'spiral_mode', label: 'Spiral vase', value: '1', reason: 'Bình hoa' },
+      { key: 'gap_infill_speed', label: 'Gap infill (gap_infill_speed)', value: '150,150', reason: 'Bề mặt đẹp hơn' },
+      { key: 'spiral_mode', label: 'Spiral vase (spiral_mode)', value: '1', reason: 'Bình hoa' },
     ]);
     expect(result.rejected.map((r) => r.key)).toEqual(['top_one_wall_type', 'wipe_tower_x', 'gap_infill_speed']);
     expect(checkProposal({ summary: '', changes: [{ key: 'gap_infill_speed', value: '2000', reason: 'x' }] }, fullRequest).rejected[0].reason).toContain('1000');
@@ -250,7 +253,7 @@ describe('AI tối ưu: every setting Studio describes', () => {
       await store.markApplied(session.id, [{ target: 'filament', filament: 1, key: 'fan_max_speed', value: '80,80' }]);
       await store.saveFeedback(session.id, { outcome: 'success', issues: [], note: '' });
       const [past] = await store.pastPrints(fullRequest);
-      expect(past.changes).toEqual([{ key: 'filament#1:fan_max_speed', label: 'Fan max speed', before: '100,100', after: '80,80' }]);
+      expect(past.changes).toEqual([{ key: 'filament#1:fan_max_speed', label: 'Fan max speed (fan_max_speed)', before: '100,100', after: '80,80' }]);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -328,6 +331,7 @@ describe('POST /api/studio/ai-optimize', () => {
     expect(res.statusCode).toBe(200);
     const body = res.json();
     expect(body.system).toContain('Bambu Lab H2D');
+    expect(body.system).toContain('mỗi ý một dòng bắt đầu bằng "• "');
     expect(body.user).toContain('Máy in thực tế:');
     expect(body.schema.properties.changes.items.properties.target.enum).toEqual(['process', 'filament']);
   });

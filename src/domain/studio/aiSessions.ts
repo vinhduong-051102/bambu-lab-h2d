@@ -58,7 +58,7 @@ export const appliedSchema = z.object({
         filament: z.number().int().optional(),
       })
     )
-    .max(400),
+    .max(800),
 });
 type AppliedChange = z.infer<typeof appliedSchema>['changes'][number];
 

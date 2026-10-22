@@ -10,6 +10,7 @@ import {
   checkProposal,
   claudeProposalSource,
   optimizeSettings,
+  PROGRESS_NOTES_PROMPT,
   PROPOSAL_JSON_SCHEMA,
   studioRequestSchema,
   type AiOptimizeResult,
@@ -209,7 +210,8 @@ export const aiOptimize = handler(async ({ request, printerService }) => {
 });
 
 // POST /api/studio/ai-optimize/prompt - The prompts and output schema for a plate, for `claude -p` in Studio's
-// container (signed in with a Claude subscription instead of the gateway's ANTHROPIC_API_KEY)
+// container (signed in with a Claude subscription instead of the gateway's ANTHROPIC_API_KEY). The system
+// prompt also asks for short analysis notes before the answer, for Studio's progress window.
 export const aiOptimizePrompt = handler(async ({ request, printerService }) => {
   const parsed = parseStudioRequest(await readJsonBody(request));
   if (parsed instanceof Response) return parsed;
@@ -219,7 +221,7 @@ export const aiOptimizePrompt = handler(async ({ request, printerService }) => {
     await loadFollowUp(parsed),
     await sessionStore().pastPrints(parsed)
   );
-  return json({ success: true, ...prompts, schema: PROPOSAL_JSON_SCHEMA });
+  return json({ success: true, system: prompts.system + PROGRESS_NOTES_PROMPT, user: prompts.user, schema: PROPOSAL_JSON_SCHEMA });
 });
 
 // POST /api/studio/ai-optimize/check - {request, proposal}: the same checks as ai-optimize, on a proposal made elsewhere
