@@ -57,6 +57,10 @@ const envSchema = z.object({
   STUDIO_IMPORT_DIR: z.preprocess((val) => (typeof val === 'string' && val.trim() === '' ? undefined : val), z.string().optional()),
   // Claude model behind Studio's "AI tối ưu" button (POST /api/studio/ai-optimize); the key is ANTHROPIC_API_KEY
   STUDIO_AI_MODEL: z.preprocess((val) => (typeof val === 'string' && val.trim() === '' ? undefined : val), z.string().default('claude-opus-5-5')),
+  // Where each "AI tối ưu" answer, the changes applied from it and the user's print report are kept
+  STUDIO_AI_DATA_DIR: z.preprocess((val) => (typeof val === 'string' && val.trim() === '' ? undefined : val), z.string().default('./data/studio/ai')),
+  // Print history: each print's camera photo when it ended, uploaded photos, the settings Studio sent and the report
+  PRINT_HISTORY_DIR: z.preprocess((val) => (typeof val === 'string' && val.trim() === '' ? undefined : val), z.string().default('./data/prints')),
 });
 
 const _env = envSchema.safeParse(process.env);

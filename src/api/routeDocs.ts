@@ -71,6 +71,19 @@ export const GATEWAY_ROUTES: RouteDoc[] = [
   { method: 'POST', path: '/api/studio/ai-optimize', category: 'Bambu Studio', description: 'Nút "AI tối ưu" trong Studio: Claude đề xuất setting quá trình in cho plate đang mở', body: '{"version": 1, "printer_preset": "...", "settings": {...}, "objects": [...]}' },
   { method: 'POST', path: '/api/studio/ai-optimize/prompt', category: 'Bambu Studio', description: 'Prompt và JSON schema cho plate, để `claude -p` trong container Studio tự gọi Claude (đăng nhập bằng gói Claude, không cần ANTHROPIC_API_KEY)', body: '{"version": 1, "printer_preset": "...", "settings": {...}, "objects": [...]}' },
   { method: 'POST', path: '/api/studio/ai-optimize/check', category: 'Bambu Studio', description: 'Kiểm tra đề xuất từ `claude -p` như ai-optimize: chỉ giữ key được phép, giá trị hợp lệ và thực sự thay đổi', body: '{"request": {...}, "proposal": {"summary": "...", "changes": [{"key", "value", "reason"}]}}' },
+  { method: 'GET', path: '/api/studio/ai-sessions', category: 'Bambu Studio', description: 'Các lần AI tối ưu gần đây (mới nhất trước), kèm lựa chọn kết quả và lỗi cho báo cáo in', exampleUrl: '/api/studio/ai-sessions?limit=30' },
+  { method: 'GET', path: '/api/studio/ai-sessions/:id', category: 'Bambu Studio', description: 'Chi tiết một lần AI tối ưu: đề xuất, thay đổi đã áp dụng, báo cáo kết quả in' },
+  { method: 'POST', path: '/api/studio/ai-sessions/:id/applied', category: 'Bambu Studio', description: 'Studio ghi lại các thay đổi người dùng đã áp dụng từ đề xuất AI', body: '{"changes": [{"key": "enable_support", "value": "1"}]}' },
+  { method: 'POST', path: '/api/studio/ai-sessions/:id/feedback', category: 'Bambu Studio', description: 'Báo cáo kết quả in với setting AI đề xuất', body: '{"outcome": "usable", "issues": ["support_removal"], "note": "..."}' },
+
+  // Print history
+  { method: 'GET', path: '/api/prints', category: 'Lịch sử in', description: 'Các bản in đã ghi lại (mới nhất trước): ảnh, kết quả, lựa chọn báo cáo', exampleUrl: '/api/prints?limit=50' },
+  { method: 'GET', path: '/api/prints/:id', category: 'Lịch sử in', description: 'Chi tiết một bản in: setting Studio đã dùng, ảnh, báo cáo' },
+  { method: 'POST', path: '/api/prints/setup', category: 'Lịch sử in', description: 'Studio gửi preset và setting khi gửi lệnh in; gateway gắn vào bản in cùng tên job', body: '{"version": 1, "job_name": "...", "settings": {...}, "objects": [...], "ai_session_id": null}' },
+  { method: 'POST', path: '/api/prints/:id/feedback', category: 'Lịch sử in', description: 'Báo cáo kết quả bản in (chép sang lần AI đề xuất nếu có)', body: '{"outcome": "success", "issues": [], "note": "..."}' },
+  { method: 'POST', path: '/api/prints/:id/photos', category: 'Lịch sử in', description: 'Tải thêm ảnh bản in (JPEG, PNG, WebP, tối đa 20 MB)', body: 'multipart/form-data: file=@photo.jpg' },
+  { method: 'GET', path: '/api/prints/:id/photos/:name', category: 'Lịch sử in', description: 'Ảnh của bản in' },
+  { method: 'DELETE', path: '/api/prints/:id/photos/:name', category: 'Lịch sử in', description: 'Xóa một ảnh của bản in' },
 
   // 10. Real-time WebSocket Stream
   { method: 'GET (WS)', path: '/ws', category: 'Real-time WebSocket', description: 'Kết nối WebSocket đẩy dữ liệu telemetry & lệnh thời gian thực', exampleUrl: 'ws://localhost:3000/ws' },

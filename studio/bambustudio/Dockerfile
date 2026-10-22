@@ -2,7 +2,8 @@
 # left of "Slice plate" (ai-button.patch). Built by docker-compose.studio.yml; see docs/studio.md.
 #
 # The first build takes a long time (one to several hours: Studio's dependencies, then Studio) and
-# needs ~10 GB of RAM for Docker and ~20 GB of disk. Changing only the patch reuses the dependency layer.
+# needs ~10 GB of RAM for Docker and ~20 GB of disk. Changing only a patch reuses the dependency
+# layer and the ccache of Studio's sources, so it only recompiles what the patch touches.
 
 # Studio release to build; keep it at the version the base image ships so its runtime libraries match
 ARG BAMBUSTUDIO_TAG=v02.08.04.57
@@ -28,6 +29,17 @@ WORKDIR /BambuStudio
 RUN ./BuildLinux.sh -u && rm -rf /var/lib/apt/lists/*
 RUN ./BuildLinux.sh -dr
 
+# ccache for Studio's own sources (after -dr, so adding it kept the dependency layer), kept in a
+# BuildKit cache mount: a patch change only recompiles the files it touches. Through ccache's
+# compiler wrappers on PATH rather than CMAKE_*_COMPILER_LAUNCHER: Studio builds its precompiled
+# header with a custom command that calls the compiler directly, and that .gch must come from the
+# cache too (a fresh one has different bytes, and every file including it would miss). The sources
+# need the precompiled header (some headers rely on it for their includes), so it stays on.
+RUN apt-get update && apt-get install -y --no-install-recommends ccache && rm -rf /var/lib/apt/lists/*
+ENV PATH=/usr/lib/ccache:$PATH \
+    CCACHE_DIR=/ccache CCACHE_MAXSIZE=10G \
+    CCACHE_SLOPPINESS=pch_defines,time_macros,include_file_mtime,include_file_ctime
+
 COPY ai-button.patch /tmp/ai-button.patch
 RUN git apply /tmp/ai-button.patch
 # Popups that stay on screen and swallow input on GTK: the parameter tooltip and popups that open a dialog
@@ -37,7 +49,8 @@ RUN git apply /tmp/popup-fixes.patch
 # Studio itself, then the same layout as the release AppImage that linuxserver extracts to /opt/bambustudio
 # BuildLinux.sh only lays out build/package with -i, which also builds an AppImage; call the
 # layout script directly instead, in its own layer so packaging changes don't recompile Studio
-RUN ./BuildLinux.sh -sr
+RUN --mount=type=cache,target=/ccache,id=bambustudio-ccache \
+    ccache -z && ./BuildLinux.sh -sr && ccache -s
 RUN cd build \
  && ./src/BuildLinuxImage.sh \
  && cd package \
@@ -52,5 +65,11 @@ COPY --from=builder /BambuStudio/build/package /opt/bambustudio
 # Claude Code for "AI tối ưu" (studio/ai-button/on-click runs `claude -p`, signed in with the
 # CLAUDE_CODE_OAUTH_TOKEN from `claude setup-token`); jq for the script's JSON. Installed for every
 # user: Studio runs as abc, and updates come from rebuilding the image (DISABLE_AUTOUPDATER in Compose).
+# The installer runs with a throwaway HOME: the base image sets HOME=/config, Studio's mounted settings.
 ARG CLAUDE_CODE_VERSION=stable
-RUN apt-get update && apt-get install -y --no-install-recommends jq && rm -rf /var/lib/apt/lists/*  && curl -fsSL https://claude.ai/install.sh | bash -s "${CLAUDE_CODE_VERSION}"  && install -m 755 "$(readlink -f /root/.local/bin/claude)" /usr/local/bin/claude  && rm -rf /root/.local/bin/claude /root/.local/share/claude /root/.claude /root/.claude.json  && claude --version
+RUN apt-get update && apt-get install -y --no-install-recommends jq && rm -rf /var/lib/apt/lists/* \
+ && export HOME=/tmp/claude-install \
+ && curl -fsSL https://claude.ai/install.sh | bash -s "${CLAUDE_CODE_VERSION}" \
+ && install -m 755 "$(readlink -f "$HOME/.local/bin/claude")" /usr/local/bin/claude \
+ && rm -rf "$HOME" \
+ && claude --version

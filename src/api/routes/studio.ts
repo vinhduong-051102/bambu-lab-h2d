@@ -12,9 +12,12 @@ import {
   optimizeSettings,
   PROPOSAL_JSON_SCHEMA,
   studioRequestSchema,
+  type AiOptimizeResult,
+  type FollowUp,
   type ProposalSource,
   type StudioRequest,
 } from '../../domain/studio/aiOptimize';
+import { AiSessionStore, appliedSchema, feedbackSchema, PRINT_ISSUE_LABELS, PRINT_OUTCOME_LABELS } from '../../domain/studio/aiSessions';
 import { handler, json, readJsonBody } from '../http';
 
 const MAX_IMPORT_BYTES = 1024 * 1024 * 1024;
@@ -125,11 +128,19 @@ export const importToStudio = handler(async ({ request }) => {
 });
 
 let proposalSourceOverride: ProposalSource | null = null;
+let sessionStoreOverride: AiSessionStore | null = null;
 
 /** Tests replace the Claude call with a canned proposal; null restores it */
 export function setAiProposalSource(source: ProposalSource | null): void {
   proposalSourceOverride = source;
 }
+
+/** Tests keep sessions in a temporary folder; null restores STUDIO_AI_DATA_DIR */
+export function setAiSessionStore(store: AiSessionStore | null): void {
+  sessionStoreOverride = store;
+}
+
+const sessionStore = () => sessionStoreOverride ?? new AiSessionStore(path.resolve(env.STUDIO_AI_DATA_DIR));
 
 /** The plate description Studio wrote, or the 400 response explaining what is wrong with it */
 function parseStudioRequest(body: unknown): StudioRequest | Response {
@@ -140,6 +151,23 @@ function parseStudioRequest(body: unknown): StudioRequest | Response {
     { success: false, error: 'INVALID_PAYLOAD', message: `Dữ liệu từ Studio không hợp lệ: ${issue.path.join('.') || '(gốc)'} ${issue.message}` },
     400
   );
+}
+
+/** For "Hỏi lại AI": the proposal being answered (null once its session is gone) and the user's comment */
+async function loadFollowUp(request: StudioRequest): Promise<FollowUp | null> {
+  if (!request.follow_up) return null;
+  const previous = await sessionStore().get(request.follow_up.session_id);
+  return {
+    previous: previous && { summary: previous.result.summary, changes: previous.result.changes },
+    comment: request.follow_up.comment,
+  };
+}
+
+/** Keeps the checked answer as a session; the response carries its id for Studio */
+async function answerWithSession(request: StudioRequest, result: AiOptimizeResult): Promise<Response> {
+  const followUp = request.follow_up ? { previousId: request.follow_up.session_id, comment: request.follow_up.comment } : null;
+  const session = await sessionStore().create(request, result, followUp);
+  return json({ success: true, session_id: session.id, ...result });
 }
 
 const hasClaudeCredentials = () => !!(process.env.ANTHROPIC_API_KEY?.trim() || process.env.ANTHROPIC_AUTH_TOKEN?.trim());
@@ -153,9 +181,9 @@ export const aiOptimize = handler(async ({ request, printerService }) => {
   if (parsed instanceof Response) return parsed;
 
   const source = proposalSourceOverride ?? claudeProposalSource(env.STUDIO_AI_MODEL);
+  let result: AiOptimizeResult;
   try {
-    const result = await optimizeSettings(parsed, printerService.stateStore.getState(), source);
-    return json({ success: true, ...result });
+    result = await optimizeSettings(parsed, printerService.stateStore.getState(), source, await loadFollowUp(parsed));
   } catch (err) {
     if (err instanceof AiOptimizeError) {
       return json({ success: false, error: err.code, message: err.message }, 502);
@@ -171,6 +199,7 @@ export const aiOptimize = handler(async ({ request, printerService }) => {
     }
     throw err;
   }
+  return answerWithSession(parsed, result);
 });
 
 // POST /api/studio/ai-optimize/prompt - The prompts and output schema for a plate, for `claude -p` in Studio's
@@ -178,7 +207,8 @@ export const aiOptimize = handler(async ({ request, printerService }) => {
 export const aiOptimizePrompt = handler(async ({ request, printerService }) => {
   const parsed = parseStudioRequest(await readJsonBody(request));
   if (parsed instanceof Response) return parsed;
-  return json({ success: true, ...buildPrompts(parsed, printerService.stateStore.getState()), schema: PROPOSAL_JSON_SCHEMA });
+  const prompts = buildPrompts(parsed, printerService.stateStore.getState(), await loadFollowUp(parsed));
+  return json({ success: true, ...prompts, schema: PROPOSAL_JSON_SCHEMA });
 });
 
 // POST /api/studio/ai-optimize/check - {request, proposal}: the same checks as ai-optimize, on a proposal made elsewhere
@@ -190,5 +220,49 @@ export const aiOptimizeCheck = handler(async ({ request }) => {
   if (!proposal.success) {
     return json({ success: false, error: 'AI_NO_OUTPUT', message: 'AI không trả về kết quả hợp lệ.' }, 400);
   }
-  return json({ success: true, ...checkProposal(proposal.data, parsed) });
+  return answerWithSession(parsed, checkProposal(proposal.data, parsed));
+});
+
+const MAX_SESSION_LIST = 100;
+
+// GET /api/studio/ai-sessions?limit=30 - Recent AI answers, newest first, with the choices of Studio's print report
+export const listAiSessions = handler(async ({ request }) => {
+  const limit = Number(new URL(request.url).searchParams.get('limit') ?? 30);
+  const sessions = await sessionStore().list(Number.isInteger(limit) && limit > 0 ? Math.min(limit, MAX_SESSION_LIST) : 30);
+  return json({
+    success: true,
+    sessions,
+    outcomes: Object.entries(PRINT_OUTCOME_LABELS).map(([id, label]) => ({ id, label })),
+    issues: Object.entries(PRINT_ISSUE_LABELS).map(([id, label]) => ({ id, label })),
+  });
+});
+
+const sessionNotFound = () => json({ success: false, error: 'SESSION_NOT_FOUND', message: 'Không tìm thấy lần đề xuất AI này.' }, 404);
+
+/** A zod failure as the 400 response the session routes give */
+const invalidPayload = (error: { issues: { path: (string | number)[]; message: string }[] }) => {
+  const issue = error.issues[0];
+  return json({ success: false, error: 'INVALID_PAYLOAD', message: `${issue.path.join('.') || '(gốc)'}: ${issue.message}` }, 400);
+};
+
+// GET /api/studio/ai-sessions/:id - One AI answer in full, with what was applied and the print report
+export const getAiSession = handler<{ id: string }>(async ({ params }) => {
+  const session = await sessionStore().get(params.id);
+  return session ? json({ success: true, session }) : sessionNotFound();
+});
+
+// POST /api/studio/ai-sessions/:id/applied - {changes: [{key, value}]}: what Studio loaded into the process preset
+export const markAiSessionApplied = handler<{ id: string }>(async ({ request, params }) => {
+  const body = appliedSchema.safeParse(await readJsonBody(request));
+  if (!body.success) return invalidPayload(body.error);
+  const session = await sessionStore().markApplied(params.id, body.data.changes);
+  return session ? json({ success: true, applied_at: session.applied?.at }) : sessionNotFound();
+});
+
+// POST /api/studio/ai-sessions/:id/feedback - {outcome, issues, note}: how the print with these settings came out
+export const saveAiSessionFeedback = handler<{ id: string }>(async ({ request, params }) => {
+  const body = feedbackSchema.safeParse(await readJsonBody(request));
+  if (!body.success) return invalidPayload(body.error);
+  const session = await sessionStore().saveFeedback(params.id, body.data);
+  return session ? json({ success: true, feedback_at: session.feedback?.at }) : sessionNotFound();
 });

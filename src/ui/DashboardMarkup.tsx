@@ -614,6 +614,30 @@ export function DashboardMarkup() {
             </div>
           </section>
 
+          {/* Print history Card (src/ui/prints.js) */}
+          <section className="card prints-card" id="printsCard">
+            <div className="card-header">
+              <div className="header-title">
+                <svg className="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                  <path d="M3 3v5h5" />
+                  <path d="M3.05 13A9 9 0 1 0 6 5.3L3 8" />
+                  <path d="M12 7v5l4 2" />
+                </svg>
+                <h2>Lịch sử in</h2>
+              </div>
+              <div className="studio-toolbar">
+                <button type="button" className="btn-ams-action btn-ams-primary" id="btnPrintsCompare" disabled>
+                  ⇄ So sánh 2 bản in
+                </button>
+                <button type="button" className="btn-ams-action" id="btnPrintsRefresh">↻ Làm mới</button>
+              </div>
+            </div>
+            <div className="studio-note" id="printsSelectionNote">Tích 2 bản in để so sánh.</div>
+            <div className="prints-list" id="printsList">
+              <div className="prints-empty">⏳ Đang tải lịch sử in...</div>
+            </div>
+          </section>
+
           {/* AMS System Card */}
           <section className="card ams-card">
             <div className="card-header">
