@@ -18,18 +18,23 @@ A click (when this folder, mounted read-only at `/opt/studio-ai`, has an executa
    - without it: it posts the request to `$STUDIO_AI_URL`, and the gateway asks Claude with its `ANTHROPIC_API_KEY`.
 4. Studio lists the proposed changes with their reasons, with a box for the user's opinion:
    - **Áp dụng** loads them into the edited process preset, as if they had been typed in the Process tab: they
-     show as modified and can be reset there. Studio then runs `gateway POST ai-sessions/<id>/applied` so the
-     gateway knows which proposal was used.
+     show as modified and can be reset there. Studio then runs `gateway POST studio/ai-sessions/<id>/applied`
+     so the gateway knows which proposal was used, and links it to the next print it sends.
    - **Hỏi lại AI** (once the box has text) runs step 1 again with `follow_up: {session_id, comment}` in the
      request: the gateway puts the earlier proposal and the comment in the prompt.
 
-**Báo cáo in**, left of **AI tối ưu**, reports how a print with the AI's settings came out. Studio runs
-`gateway GET ai-sessions?limit=30` and shows the recent proposals (the newest applied one without a report is
-preselected), the outcomes and problems the gateway lists, and a note box. **Gửi báo cáo** runs
-`gateway POST ai-sessions/<id>/feedback`.
+Print history: when Studio sends a print (**Print plate** → **Send**), it runs `gateway POST prints/setup` with
+the job name, the plate description of step 1 and the AI proposal applied last. The gateway keeps it until the
+printer starts a job with that name, then records the print, and keeps a camera photo when it ends.
 
-`gateway <GET|POST> <path under /api/studio> <body.json|-> <response.json>` is the small script both buttons use
-for those routes. It finds the gateway from `STUDIO_AI_URL`, like `on-click`.
+**Báo cáo in**, left of **AI tối ưu**, reports how a print came out. Studio runs `gateway GET prints?limit=30`
+and shows the recorded prints with the camera photo of the selected one (fetched with
+`gateway GET prints/<id>/photos/<name>`), the outcomes and problems the gateway lists, and a note box. The newest
+ended print without a report is preselected. **Gửi báo cáo** runs `gateway POST prints/<id>/feedback`; the
+gateway copies the report to the print's AI proposal.
+
+`gateway <GET|POST> <path under /api> <body.json|-> <response.json>` is the small script Studio uses for those
+routes. It finds the gateway from `STUDIO_AI_URL`, like `on-click`.
 
 `on-click` and `gateway` change without a rebuild. Without `on-click`, Studio shows a "coming soon" message.
 

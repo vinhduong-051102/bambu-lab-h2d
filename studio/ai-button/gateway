@@ -1,7 +1,7 @@
 #!/bin/sh
-# Run by Studio for the AI session routes: gateway <GET|POST> <path> <body.json|-> <response.json>
-# <path> is under the gateway's /api/studio (e.g. ai-sessions, ai-sessions/<id>/feedback). Writes the
-# gateway's JSON answer to <response.json>; any failure is written as {"success": false, "message": ...}.
+# Run by Studio for the gateway routes it uses (AI sessions, print history): gateway <GET|POST> <path> <body.json|-> <response.json>
+# <path> is under the gateway's /api (e.g. prints, studio/ai-sessions/<id>/applied). Writes the
+# gateway answer (JSON, or a photo) to <response.json>; any failure is written as {"success": false, "message": ...}.
 
 method="$1"
 route="$2"
@@ -16,7 +16,7 @@ for var in STUDIO_AI_URL STUDIO_AI_TOKEN; do
   fi
 done
 url="${STUDIO_AI_URL:-http://host.docker.internal:3000/api/studio/ai-optimize}"
-base="${url%/ai-optimize}"
+base="${url%/studio/ai-optimize}"
 
 fail() {
   if command -v jq >/dev/null 2>&1; then
@@ -48,8 +48,13 @@ case "$status" in
   ""|000) fail "Không kết nối được gateway tại $base." ;;
   401) fail "Gateway từ chối: STUDIO_AI_TOKEN phải bằng GATEWAY_API_KEY." ;;
 esac
-if ! grep -q '"success"' "$response.part" 2>/dev/null; then
-  fail "Gateway chưa có $base/$route (HTTP $status): cập nhật gateway rồi thử lại."
-fi
-# The gateway answers every other case, errors included, with JSON that carries its own message
+# A 2xx answer is kept as it is (JSON, or a photo); errors from the gateway are JSON with their own message
+case "$status" in
+  2??) ;;
+  *)
+    if ! grep -q '"success"' "$response.part" 2>/dev/null; then
+      fail "Gateway chưa có $base/$route (HTTP $status): cập nhật gateway rồi thử lại."
+    fi
+    ;;
+esac
 mv "$response.part" "$response"

@@ -1,8 +1,8 @@
 diff --git a/src/slic3r/GUI/MainFrame.cpp b/src/slic3r/GUI/MainFrame.cpp
-index d38b5d2..f1db810 100644
+index d38b5d2..f7e91b3 100644
 --- a/src/slic3r/GUI/MainFrame.cpp
 +++ b/src/slic3r/GUI/MainFrame.cpp
-@@ -12,6 +12,11 @@
+@@ -12,6 +12,12 @@
  #include <wx/tooltip.h>
  //#include <wx/glcanvas.h>
  #include <wx/filename.h>
@@ -11,10 +11,11 @@ index d38b5d2..f1db810 100644
 +#include <wx/checklst.h>
 +#include <wx/choice.h>
 +#include <wx/radiobox.h>
++#include <wx/statbmp.h>
  #include <wx/debug.h>
  
  #include <boost/algorithm/string/predicate.hpp>
-@@ -49,6 +54,14 @@
+@@ -49,6 +55,14 @@
  #include "../Utils/MacDarkMode.hpp"
  
  #include <fstream>
@@ -29,7 +30,7 @@ index d38b5d2..f1db810 100644
  #include <string_view>
  
  #include "GUI_App.hpp"
-@@ -1289,6 +1302,8 @@ void MainFrame::show_option(bool show)
+@@ -1289,6 +1303,8 @@ void MainFrame::show_option(bool show)
              m_print_btn->Hide();
              m_slice_option_btn->Hide();
              m_print_option_btn->Hide();
@@ -38,7 +39,7 @@ index d38b5d2..f1db810 100644
              split_line_icon->Hide();
              expand_program_holder->Hide();
              Layout();
-@@ -1299,6 +1314,8 @@ void MainFrame::show_option(bool show)
+@@ -1299,6 +1315,8 @@ void MainFrame::show_option(bool show)
              m_print_btn->Show();
              m_slice_option_btn->Show();
              m_print_option_btn->Show();
@@ -47,7 +48,7 @@ index d38b5d2..f1db810 100644
              split_line_icon->Show();
              expand_program_holder->Show();
              Layout();
-@@ -2068,6 +2085,15 @@ wxBoxSizer* MainFrame::create_side_tools()
+@@ -2068,6 +2086,15 @@ wxBoxSizer* MainFrame::create_side_tools()
      print_sizer->Add(m_print_btn, 0, wxLEFT | wxALIGN_CENTER_VERTICAL, FromDIP(1));
      print_panel->SetSizer(print_sizer);
  
@@ -63,7 +64,7 @@ index d38b5d2..f1db810 100644
      update_side_button_style();
      m_slice_option_btn->Enable();
      m_print_option_btn->Enable();
-@@ -2076,6 +2102,10 @@ wxBoxSizer* MainFrame::create_side_tools()
+@@ -2076,6 +2103,10 @@ wxBoxSizer* MainFrame::create_side_tools()
      sizer->Add(FromDIP(4), 0, 0, 0, 0);
      sizer->Add(split_line_icon, 0, wxALIGN_CENTER, 0);
      sizer->Add(FromDIP(6), 0, 0, 0, 0);
@@ -74,7 +75,7 @@ index d38b5d2..f1db810 100644
      sizer->Add(slice_panel);
      sizer->Add(FromDIP(8), 0, 0, 0, 0);
      sizer->Add(print_panel);
-@@ -2651,6 +2681,557 @@ void MainFrame::update_side_button_style()
+@@ -2651,6 +2682,649 @@ void MainFrame::update_side_button_style()
      m_print_option_btn->SetExtraSize(wxSize(FromDIP(10), FromDIP(10)));
      m_print_option_btn->SetIconOffset(FromDIP(2));
      m_print_option_btn->SetMinSize(wxSize(FromDIP(24), FromDIP(24)));
@@ -210,7 +211,7 @@ index d38b5d2..f1db810 100644
 +    auto it = value.find(key);
 +    return it != value.end() && it->is_string() ? wxString::FromUTF8(it->get<std::string>()) : wxString();
 +}
-+// Runs a gateway route for Studio: gateway <GET|POST> <path under /api/studio> <body.json|-> <response.json>
++// Runs a gateway route for Studio: gateway <GET|POST> <path under /api> <body.json|-> <response.json>
 +const std::string AI_GATEWAY = "/opt/studio-ai/gateway";
 +
 +void ai_write_json(const std::string &path, const nlohmann::json &value)
@@ -301,46 +302,78 @@ index d38b5d2..f1db810 100644
 +    wxTextCtrl *m_comment;
 +};
 +
-+// The print report: which AI proposal it is about, how the print came out, what went wrong, and notes.
-+// Sessions, outcomes and problems all come from the gateway (GET ai-sessions).
++// Session ids go on a command line: only the gateway's own shape (digits, a-f and dashes) is used
++bool ai_safe_id(const std::string &id)
++{
++    return !id.empty() && id.size() <= 64 && std::all_of(id.begin(), id.end(), [](char c) { return std::isdigit((unsigned char) c) || (c >= 'a' && c <= 'f') || c == '-'; });
++}
++
++
++// Photo names go on a command line too: only the gateway's own shape (letters, digits, dashes, one extension)
++bool ai_safe_photo(const std::string &name)
++{
++    return !name.empty() && name.size() <= 64 && name.find("..") == std::string::npos &&
++           std::all_of(name.begin(), name.end(), [](char c) { return std::isalnum((unsigned char) c) || c == '-' || c == '.'; });
++}
++
++// Runs an /opt/studio-ai command without blocking; done runs on the UI thread once it exits. False when it
++// could not be started.
++bool ai_run_async(const std::string &command, std::function<void()> done)
++{
++    auto *process = new wxProcess();
++    process->Bind(wxEVT_END_PROCESS, [process, done](wxProcessEvent &) {
++        // Deleted once its own event is done with it
++        wxTheApp->CallAfter([process]() { delete process; });
++        done();
++    });
++    // On failure the process object is left alone: leaking it beats a double delete if wx frees it
++    return wxExecute(wxString::FromUTF8(command), wxEXEC_ASYNC, process) > 0;
++}
++
++// The print report: which recorded print it is about (with the camera's photo of it), how it came out,
++// what went wrong, and notes. Prints, outcomes and problems all come from the gateway (GET prints).
 +class AiReportDialog : public wxDialog
 +{
 +public:
 +    explicit AiReportDialog(wxWindow *parent, const nlohmann::json &list)
 +        : wxDialog(parent, wxID_ANY, wxString::FromUTF8("Báo cáo kết quả in"), wxDefaultPosition, wxDefaultSize, wxDEFAULT_DIALOG_STYLE | wxRESIZE_BORDER)
-+        , m_sessions(list.value("sessions", nlohmann::json::array()))
++        , m_prints(list.value("prints", nlohmann::json::array()))
 +        , m_outcomes(list.value("outcomes", nlohmann::json::array()))
 +        , m_issues(list.value("issues", nlohmann::json::array()))
 +    {
 +        const int gap = FromDIP(12);
 +        auto *sizer = new wxBoxSizer(wxVERTICAL);
 +
-+        sizer->Add(new wxStaticText(this, wxID_ANY, wxString::FromUTF8("Lần AI tối ưu đã dùng cho bản in:")), 0, wxLEFT | wxRIGHT | wxTOP, gap);
++        sizer->Add(new wxStaticText(this, wxID_ANY, wxString::FromUTF8("Bản in:")), 0, wxLEFT | wxRIGHT | wxTOP, gap);
 +        wxArrayString labels;
 +        int selected = -1;
-+        for (size_t i = 0; i < m_sessions.size(); ++i) {
-+            const nlohmann::json &s = m_sessions[i];
-+            const bool applied  = s.contains("applied_at") && s["applied_at"].is_string();
-+            const bool reported = s.contains("feedback_outcome") && s["feedback_outcome"].is_string();
-+            // Preselect the newest proposal that was applied and has no report yet
-+            if (selected < 0 && applied && !reported)
++        for (size_t i = 0; i < m_prints.size(); ++i) {
++            const nlohmann::json &p = m_prints[i];
++            const std::string status = p.value("status", "");
++            const bool reported = p.contains("feedback_outcome") && p["feedback_outcome"].is_string();
++            // Preselect the newest print that has ended and has no report yet
++            if (selected < 0 && status != "printing" && !reported)
 +                selected = int(i);
-+            wxString objects;
-+            for (const nlohmann::json &name : s.value("objects", nlohmann::json::array()))
-+                objects += (objects.empty() ? "" : ", ") + wxString::FromUTF8(name.get<std::string>());
-+            if (objects.length() > 40)
-+                objects = objects.Left(39) + wxString::FromUTF8("…");
++            wxString name = wxString::FromUTF8(p.value("job_name", ""));
++            if (name.length() > 40)
++                name = name.Left(39) + wxString::FromUTF8("…");
++            const char *status_text = status == "finished" ? "hoàn thành" : status == "failed" ? "lỗi" : "đang in";
++            const bool with_ai = p.contains("ai_session_id") && p["ai_session_id"].is_string();
 +            // Studio runs with LC_ALL=C, so text with accents or symbols always goes through FromUTF8
-+            labels.Add(wxString::Format(wxString::FromUTF8("%s · %s · %d thay đổi · %s%s"), ai_session_time(s.value("id", "")), objects,
-+                                        s.value("change_count", 0), wxString::FromUTF8(applied ? "đã áp dụng" : "chưa áp dụng"),
++            labels.Add(wxString::Format(wxString::FromUTF8("%s · %s · %s%s%s"), ai_session_time(p.value("id", "")), name,
++                                        wxString::FromUTF8(status_text), wxString::FromUTF8(with_ai ? " · AI" : ""),
 +                                        wxString::FromUTF8(reported ? " · đã báo cáo" : "")));
 +        }
 +        m_choice = new wxChoice(this, wxID_ANY, wxDefaultPosition, wxDefaultSize, labels);
 +        m_choice->SetSelection(selected >= 0 ? selected : 0);
 +        sizer->Add(m_choice, 0, wxALL | wxEXPAND, gap);
 +
++        auto *detail_row = new wxBoxSizer(wxHORIZONTAL);
++        m_photo = new wxStaticBitmap(this, wxID_ANY, wxNullBitmap, wxDefaultPosition, wxSize(FromDIP(PHOTO_WIDTH), FromDIP(PHOTO_HEIGHT)));
++        detail_row->Add(m_photo, 0, wxRIGHT, gap);
 +        m_detail = new wxStaticText(this, wxID_ANY, wxEmptyString);
-+        sizer->Add(m_detail, 0, wxLEFT | wxRIGHT | wxEXPAND, gap);
++        detail_row->Add(m_detail, 1, wxEXPAND);
++        sizer->Add(detail_row, 0, wxLEFT | wxRIGHT | wxEXPAND, gap);
 +
 +        wxArrayString outcome_labels;
 +        for (const nlohmann::json &o : m_outcomes)
@@ -357,8 +390,11 @@ index d38b5d2..f1db810 100644
 +        sizer->Add(m_issue_list, 0, wxALL | wxEXPAND, gap);
 +
 +        sizer->Add(new wxStaticText(this, wxID_ANY, wxString::FromUTF8("Ghi chú (vị trí lỗi, bạn đã chỉnh gì thêm...):")), 0, wxLEFT | wxRIGHT, gap);
-+        m_note = new wxTextCtrl(this, wxID_ANY, wxEmptyString, wxDefaultPosition, wxSize(FromDIP(560), FromDIP(80)), wxTE_MULTILINE | wxTE_WORDWRAP);
++        m_note = new wxTextCtrl(this, wxID_ANY, wxEmptyString, wxDefaultPosition, wxSize(FromDIP(600), FromDIP(80)), wxTE_MULTILINE | wxTE_WORDWRAP);
 +        sizer->Add(m_note, 0, wxALL | wxEXPAND, gap);
++
++        sizer->Add(new wxStaticText(this, wxID_ANY, wxString::FromUTF8("Thêm ảnh chụp và so sánh các bản in trên dashboard, thẻ Lịch sử in.")),
++                   0, wxLEFT | wxRIGHT, gap);
 +
 +        auto *buttons = new wxBoxSizer(wxHORIZONTAL);
 +        auto *send    = new wxButton(this, wxID_OK, wxString::FromUTF8("Gửi báo cáo"));
@@ -366,7 +402,7 @@ index d38b5d2..f1db810 100644
 +        buttons->AddStretchSpacer();
 +        buttons->Add(send, 0, wxRIGHT, FromDIP(8));
 +        buttons->Add(new wxButton(this, wxID_CANCEL, wxString::FromUTF8("Hủy")));
-+        sizer->Add(buttons, 0, wxLEFT | wxRIGHT | wxBOTTOM | wxEXPAND, gap);
++        sizer->Add(buttons, 0, wxALL | wxEXPAND, gap);
 +
 +        m_choice->Bind(wxEVT_CHOICE, [this](wxCommandEvent &) { show_detail(); });
 +        show_detail();
@@ -374,7 +410,9 @@ index d38b5d2..f1db810 100644
 +        CentreOnParent();
 +    }
 +
-+    std::string session_id() const { return m_sessions.at(size_t(m_choice->GetSelection())).value("id", ""); }
++    ~AiReportDialog() override { *m_alive = false; }
++
++    std::string print_id() const { return m_prints.at(size_t(m_choice->GetSelection())).value("id", ""); }
 +
 +    nlohmann::json feedback() const
 +    {
@@ -390,52 +428,86 @@ index d38b5d2..f1db810 100644
 +    }
 +
 +private:
++    static constexpr int PHOTO_WIDTH  = 240;
++    static constexpr int PHOTO_HEIGHT = 180;
++
 +    void show_detail()
 +    {
-+        const nlohmann::json &s = m_sessions.at(size_t(m_choice->GetSelection()));
-+        wxString text = wxString::FromUTF8(s.value("summary", ""));
-+        if (s.contains("comment") && s["comment"].is_string())
-+            text += wxString::FromUTF8("\nÝ kiến khi hỏi lại: ") + wxString::FromUTF8(s["comment"].get<std::string>());
-+        if (s.contains("feedback_outcome") && s["feedback_outcome"].is_string())
-+            text += wxString::FromUTF8("\nĐã có báo cáo cho lần này: gửi lại sẽ thay báo cáo cũ.");
++        const nlohmann::json &p = m_prints.at(size_t(m_choice->GetSelection()));
++        wxString text = wxString::FromUTF8(p.value("job_name", ""));
++        if (p.contains("process_preset") && p["process_preset"].is_string())
++            text += wxString::FromUTF8("\nPreset: ") + wxString::FromUTF8(p["process_preset"].get<std::string>());
++        else
++            text += wxString::FromUTF8("\nKhông có setting: bản in này không gửi từ Studio.");
++        if (p.contains("ai_session_id") && p["ai_session_id"].is_string())
++            text += wxString::FromUTF8("\nDùng setting AI tối ưu đề xuất.");
++        if (p.contains("feedback_outcome") && p["feedback_outcome"].is_string())
++            text += wxString::FromUTF8("\nĐã có báo cáo: gửi lại sẽ thay báo cáo cũ.");
 +        m_detail->SetLabel(text);
-+        m_detail->Wrap(FromDIP(560));
++        m_detail->Wrap(FromDIP(340));
++        show_photo(p);
 +        Layout();
 +    }
 +
-+    nlohmann::json    m_sessions;
-+    nlohmann::json    m_outcomes;
-+    nlohmann::json    m_issues;
-+    wxChoice         *m_choice;
-+    wxStaticText     *m_detail;
-+    wxRadioBox       *m_outcome;
-+    wxCheckListBox   *m_issue_list;
-+    wxTextCtrl       *m_note;
++    // The newest camera photo (else the newest photo), fetched through the gateway script into AI_DIR
++    void show_photo(const nlohmann::json &print)
++    {
++        m_photo->SetBitmap(wxNullBitmap);
++        const nlohmann::json photos = print.value("photos", nlohmann::json::array());
++        std::string name;
++        for (const nlohmann::json &photo : photos)
++            if (name.empty() || photo.value("source", "") == "camera")
++                name = photo.value("name", "");
++        const std::string id = print.value("id", "");
++        if (name.empty() || !ai_safe_id(id) || !ai_safe_photo(name) || !wxFileName::IsFileExecutable(AI_GATEWAY))
++            return;
++
++        const std::string file = AI_DIR + "/photo-" + name;
++        auto alive = m_alive;
++        const int request = ++m_photo_request;
++        const auto show = [this, alive, request, file]() {
++            // The dialog may be gone, or another print picked, by the time the photo arrives
++            if (!*alive || request != m_photo_request)
++                return;
++            wxImage image;
++            if (!image.LoadFile(wxString::FromUTF8(file)) || !image.IsOk()) {
++                // An error answer, not a photo: fetch it again next time
++                boost::system::error_code ignored;
++                boost::filesystem::remove(file, ignored);
++                return;
++            }
++            const double scale = std::min(double(FromDIP(PHOTO_WIDTH)) / image.GetWidth(), double(FromDIP(PHOTO_HEIGHT)) / image.GetHeight());
++            image.Rescale(std::max(1, int(image.GetWidth() * scale)), std::max(1, int(image.GetHeight() * scale)), wxIMAGE_QUALITY_HIGH);
++            m_photo->SetBitmap(wxBitmap(image));
++            Layout();
++        };
++        if (boost::filesystem::exists(file))
++            show();
++        else
++            ai_run_async(AI_GATEWAY + " GET prints/" + id + "/photos/" + name + " - " + file, show);
++    }
++
++    nlohmann::json        m_prints;
++    nlohmann::json        m_outcomes;
++    nlohmann::json        m_issues;
++    std::shared_ptr<bool> m_alive = std::make_shared<bool>(true);
++    int                   m_photo_request = 0;
++    wxChoice             *m_choice;
++    wxStaticBitmap       *m_photo;
++    wxStaticText         *m_detail;
++    wxRadioBox           *m_outcome;
++    wxCheckListBox       *m_issue_list;
++    wxTextCtrl           *m_note;
 +};
-+
-+// Session ids go on a command line: only the gateway's own shape (digits, a-f and dashes) is used
-+bool ai_safe_id(const std::string &id)
-+{
-+    return !id.empty() && id.size() <= 64 && std::all_of(id.begin(), id.end(), [](char c) { return std::isdigit((unsigned char) c) || (c >= 'a' && c <= 'f') || c == '-'; });
-+}
-+
 +} // namespace
 +
 +bool MainFrame::ai_run(const std::string &command, std::function<void()> done)
 +{
-+    auto *process = new wxProcess();
-+    process->Bind(wxEVT_END_PROCESS, [this, process, done](wxProcessEvent &) {
-+        // Deleted once its own event is done with it
-+        CallAfter([process]() { delete process; });
-+        done();
-+    });
-+    if (wxExecute(wxString::FromUTF8(command), wxEXEC_ASYNC, process) <= 0) {
-+        // The process object is left alone here: leaking it beats a double delete if wx frees it
-+        MessageDialog dlg(this, wxString::FromUTF8("Không chạy được ") + wxString::FromUTF8(command), wxString::FromUTF8("AI tối ưu"), wxOK | wxICON_ERROR);
-+        dlg.ShowModal();
-+        return false;
-+    }
-+    return true;
++    if (ai_run_async(command, std::move(done)))
++        return true;
++    MessageDialog dlg(this, wxString::FromUTF8("Không chạy được ") + wxString::FromUTF8(command), wxString::FromUTF8("AI tối ưu"), wxOK | wxICON_ERROR);
++    dlg.ShowModal();
++    return false;
 +}
 +
 +void MainFrame::ai_optimize(const std::string &follow_up_session, const wxString &comment)
@@ -550,13 +622,15 @@ index d38b5d2..f1db810 100644
 +    }
 +    if (Tab *tab = wxGetApp().get_tab(Preset::TYPE_PRINT))
 +        tab->load_config(proposed);
++    // The next print sent from Studio is linked to this proposal in the print history
++    m_ai_last_applied_session = session_id;
 +
 +    // Lets the print report know which proposal was used; nothing for the user to wait on or see
 +    if (!session_id.empty() && wxFileName::IsFileExecutable(AI_GATEWAY)) {
 +        try {
 +            const std::string body = AI_DIR + "/applied.json";
 +            ai_write_json(body, {{"changes", applied}});
-+            ai_run(AI_GATEWAY + " POST ai-sessions/" + session_id + "/applied " + body + " " + AI_DIR + "/applied-response.json", []() {});
++            ai_run(AI_GATEWAY + " POST studio/ai-sessions/" + session_id + "/applied " + body + " " + AI_DIR + "/applied-response.json", []() {});
 +        } catch (const std::exception &e) {
 +            BOOST_LOG_TRIVIAL(warning) << "AI optimize: applied changes not recorded: " << e.what();
 +        }
@@ -573,7 +647,7 @@ index d38b5d2..f1db810 100644
 +        dlg.ShowModal();
 +        return;
 +    }
-+    const std::string list_path = AI_DIR + "/sessions.json";
++    const std::string list_path = AI_DIR + "/prints.json";
 +    try {
 +        boost::filesystem::create_directories(AI_DIR);
 +        boost::filesystem::remove(list_path);
@@ -581,7 +655,7 @@ index d38b5d2..f1db810 100644
 +        BOOST_LOG_TRIVIAL(error) << "AI report: " << e.what();
 +    }
 +
-+    const bool started = ai_run(AI_GATEWAY + " GET ai-sessions?limit=30 - " + list_path, [this, list_path]() {
++    const bool started = ai_run(AI_GATEWAY + " GET prints?limit=30 - " + list_path, [this, list_path]() {
 +        m_ai_reporting = false;
 +        m_ai_report_btn->Enable();
 +        ai_report_show(list_path);
@@ -598,18 +672,19 @@ index d38b5d2..f1db810 100644
 +    const std::optional<nlohmann::json> list = ai_read_json(list_path);
 +    if (!list || !list->value("success", false)) {
 +        wxString message = list ? ai_text(*list, "message") : wxString();
-+        MessageDialog dlg(this, message.empty() ? wxString::FromUTF8("Không lấy được danh sách các lần AI tối ưu từ gateway.") : message, title, wxOK | wxICON_ERROR);
++        MessageDialog dlg(this, message.empty() ? wxString::FromUTF8("Không lấy được lịch sử in từ gateway.") : message, title, wxOK | wxICON_ERROR);
 +        dlg.ShowModal();
 +        return;
 +    }
-+    if (list->value("sessions", nlohmann::json::array()).empty()) {
-+        MessageDialog dlg(this, wxString::FromUTF8("Chưa có lần AI tối ưu nào để báo cáo. Hãy dùng nút AI tối ưu trước."), title, wxOK | wxICON_INFORMATION);
++    if (list->value("prints", nlohmann::json::array()).empty()) {
++        MessageDialog dlg(this, wxString::FromUTF8("Chưa có bản in nào được ghi lại. Gateway ghi lại mỗi bản in gửi từ Studio, kèm ảnh camera khi in xong."),
++                          title, wxOK | wxICON_INFORMATION);
 +        dlg.ShowModal();
 +        return;
 +    }
 +
 +    AiReportDialog dlg(this, *list);
-+    if (dlg.ShowModal() != wxID_OK || !ai_safe_id(dlg.session_id()))
++    if (dlg.ShowModal() != wxID_OK || !ai_safe_id(dlg.print_id()))
 +        return;
 +    const std::string body          = AI_DIR + "/feedback.json";
 +    const std::string response_path = AI_DIR + "/feedback-response.json";
@@ -622,18 +697,36 @@ index d38b5d2..f1db810 100644
 +        error.ShowModal();
 +        return;
 +    }
-+    ai_run(AI_GATEWAY + " POST ai-sessions/" + dlg.session_id() + "/feedback " + body + " " + response_path, [this, response_path, title]() {
++    ai_run(AI_GATEWAY + " POST prints/" + dlg.print_id() + "/feedback " + body + " " + response_path, [this, response_path, title]() {
 +        const std::optional<nlohmann::json> response = ai_read_json(response_path);
 +        const bool ok = response && response->value("success", false);
 +        wxString message = ok ? wxString::FromUTF8("Đã gửi báo cáo. Cảm ơn bạn!") : (response ? ai_text(*response, "message") : wxString());
 +        MessageDialog dlg(this, message.empty() ? wxString::FromUTF8("Không gửi được báo cáo.") : message, title, wxOK | (ok ? wxICON_INFORMATION : wxICON_ERROR));
 +        dlg.ShowModal();
 +    });
++}
++
++void MainFrame::ai_record_print_setup(const std::string &job_name)
++{
++    // Print history: the gateway pairs these settings with the print the printer reports under this job
++    // name. Nothing for the user to wait on or see; a failure only costs the settings in the history.
++    if (job_name.empty() || !wxFileName::IsFileExecutable(AI_GATEWAY))
++        return;
++    try {
++        nlohmann::json setup = ai_describe_plate();
++        setup["job_name"] = job_name;
++        setup["ai_session_id"] = m_ai_last_applied_session.empty() ? nlohmann::json(nullptr) : nlohmann::json(m_ai_last_applied_session);
++        const std::string body = AI_DIR + "/print-setup.json";
++        ai_write_json(body, setup);
++        ai_run_async(AI_GATEWAY + " POST prints/setup " + body + " " + AI_DIR + "/print-setup-response.json", []() {});
++    } catch (const std::exception &e) {
++        BOOST_LOG_TRIVIAL(warning) << "Print history: settings not sent: " << e.what();
++    }
  }
  
  void MainFrame::update_slice_print_status(SlicePrintEventType event, bool can_slice, bool can_print)
 diff --git a/src/slic3r/GUI/MainFrame.hpp b/src/slic3r/GUI/MainFrame.hpp
-index 93422a8..c401eaa 100644
+index 93422a8..9348918 100644
 --- a/src/slic3r/GUI/MainFrame.hpp
 +++ b/src/slic3r/GUI/MainFrame.hpp
 @@ -1,6 +1,7 @@
@@ -644,7 +737,7 @@ index 93422a8..c401eaa 100644
  #include "libslic3r/PrintConfig.hpp"
  
  #include <boost/property_tree/ptree_fwd.hpp>
-@@ -420,6 +421,19 @@ public:
+@@ -420,6 +421,23 @@ public:
      SideButton* m_slice_option_btn{ nullptr };
      SideButton* m_print_btn{ nullptr };
      SideButton* m_print_option_btn{ nullptr };
@@ -653,6 +746,8 @@ index 93422a8..c401eaa 100644
 +    SideButton* m_ai_report_btn{ nullptr };
 +    bool m_ai_running{ false };
 +    bool m_ai_reporting{ false };
++    // The AI proposal applied last, linked to the next print in the print history
++    std::string m_ai_last_applied_session;
 +    // Runs an /opt/studio-ai command without blocking; done runs on the UI thread once it exits
 +    bool ai_run(const std::string &command, std::function<void()> done);
 +    // Runs the AI hook on the open plate (again, with the user's comment on an earlier session), then offers its changes
@@ -661,6 +756,21 @@ index 93422a8..c401eaa 100644
 +    // "Báo cáo in": lists the AI sessions, then sends the user's report on one of them
 +    void ai_report();
 +    void ai_report_show(const std::string &list_path);
++    // Print history: sends the settings of the print being sent (SelectMachineDialog) to the gateway
++    void ai_record_print_setup(const std::string &job_name);
  
      wxWindowID expand_program_id = wxNewId();
      wxWindowID expand_helio_id = wxNewId();
+diff --git a/src/slic3r/GUI/SelectMachine.cpp b/src/slic3r/GUI/SelectMachine.cpp
+index bb0c4e3..e5d00a3 100644
+--- a/src/slic3r/GUI/SelectMachine.cpp
++++ b/src/slic3r/GUI/SelectMachine.cpp
+@@ -3317,6 +3317,8 @@ void SelectMachineDialog::on_send_print()
+         std::string project_name = m_current_project_name.utf8_string();
+         if (is_imported_3mf && boost::algorithm::iends_with(project_name, ".gcode"))
+             project_name.erase(project_name.size() - std::string(".gcode").size());
++        // bambu-lab-h2d patch: the print history keeps these settings with the print the printer reports
++        wxGetApp().mainframe->ai_record_print_setup(project_name);
+         m_print_job->set_project_name(std::move(project_name));
+     }
+     else if(m_print_type == PrintFromType::FROM_SDCARD_VIEW){

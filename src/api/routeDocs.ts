@@ -76,6 +76,15 @@ export const GATEWAY_ROUTES: RouteDoc[] = [
   { method: 'POST', path: '/api/studio/ai-sessions/:id/applied', category: 'Bambu Studio', description: 'Studio ghi lại các thay đổi người dùng đã áp dụng từ đề xuất AI', body: '{"changes": [{"key": "enable_support", "value": "1"}]}' },
   { method: 'POST', path: '/api/studio/ai-sessions/:id/feedback', category: 'Bambu Studio', description: 'Báo cáo kết quả in với setting AI đề xuất', body: '{"outcome": "usable", "issues": ["support_removal"], "note": "..."}' },
 
+  // Print history
+  { method: 'GET', path: '/api/prints', category: 'Lịch sử in', description: 'Các bản in đã ghi lại (mới nhất trước): ảnh, kết quả, lựa chọn báo cáo', exampleUrl: '/api/prints?limit=50' },
+  { method: 'GET', path: '/api/prints/:id', category: 'Lịch sử in', description: 'Chi tiết một bản in: setting Studio đã dùng, ảnh, báo cáo' },
+  { method: 'POST', path: '/api/prints/setup', category: 'Lịch sử in', description: 'Studio gửi preset và setting khi gửi lệnh in; gateway gắn vào bản in cùng tên job', body: '{"version": 1, "job_name": "...", "settings": {...}, "objects": [...], "ai_session_id": null}' },
+  { method: 'POST', path: '/api/prints/:id/feedback', category: 'Lịch sử in', description: 'Báo cáo kết quả bản in (chép sang lần AI đề xuất nếu có)', body: '{"outcome": "success", "issues": [], "note": "..."}' },
+  { method: 'POST', path: '/api/prints/:id/photos', category: 'Lịch sử in', description: 'Tải thêm ảnh bản in (JPEG, PNG, WebP, tối đa 20 MB)', body: 'multipart/form-data: file=@photo.jpg' },
+  { method: 'GET', path: '/api/prints/:id/photos/:name', category: 'Lịch sử in', description: 'Ảnh của bản in' },
+  { method: 'DELETE', path: '/api/prints/:id/photos/:name', category: 'Lịch sử in', description: 'Xóa một ảnh của bản in' },
+
   // 10. Real-time WebSocket Stream
   { method: 'GET (WS)', path: '/ws', category: 'Real-time WebSocket', description: 'Kết nối WebSocket đẩy dữ liệu telemetry & lệnh thời gian thực', exampleUrl: 'ws://localhost:3000/ws' },
 ];

@@ -37,7 +37,19 @@ If you close Studio's window (✕), it starts again after a few seconds (`studio
 
 Load a model, then click **AI tối ưu**. Studio sends the plate to the gateway, which asks Claude for process settings that suit the model's shape, the filament and the nozzles. Studio lists each proposed change with its reason. **Áp dụng** applies them to the process preset like a manual edit: they show as modified in the Process tab and can be reset there. **Đóng** leaves everything as it was. To get a different proposal, write what you want in the box below the list (for example "không muốn support, gỡ khó" or "cần in nhanh") and click **Hỏi lại AI**: the AI proposes again with your comment and its earlier proposal in mind. The AI never slices or prints.
 
-After printing with the AI's settings, click **Báo cáo in** (left of **AI tối ưu**). Pick the proposal you printed with (the newest applied one without a report is preselected), choose how the print came out, tick the problems you saw and add a note. Every proposal, the changes applied from it, re-ask comments and reports are kept as JSON files in `STUDIO_AI_DATA_DIR` (default `./data/studio/ai`), one per proposal.
+Every proposal, the changes applied from it and re-ask comments are kept as JSON files in `STUDIO_AI_DATA_DIR` (default `./data/studio/ai`), one per proposal.
+
+### Print history
+
+The gateway records every print, so a later print can be compared with earlier ones:
+
+- **Settings:** when you send a print from Studio (**Print plate** → **Send**), Studio sends the gateway the presets, every process setting, the filaments and the objects, plus the AI proposal you applied last, if any. The gateway pairs them with the job the printer starts under the same name. A print that wasn't sent from this Studio (from the printer screen or Bambu Handy, for example) is recorded without settings. The printer's storage doesn't keep LAN print files, so the settings can't be read back from the printer.
+- **Photo:** when the print finishes or fails, the gateway keeps a shot from the printer camera, taken a few seconds after the end. Add your own photos (sharper, other angles) on the dashboard.
+- **Report:** **Báo cáo in** in Studio (left of **AI tối ưu**) lists the recorded prints with the camera photo of the selected one. Choose how it came out, tick the problems you saw and add a note. The newest ended print without a report is preselected. The report is also saved on the AI proposal the print used.
+
+The dashboard's **Lịch sử in** card lists the prints with their photos, settings and reports, takes extra photos and reports, and compares two prints side by side, highlighting the settings that differ.
+
+Each print is a folder in `PRINT_HISTORY_DIR` (default `./data/prints`) with `record.json` and its photos. The gateway only records prints while it is running. A print it first sees already running is recorded without a start time.
 
 To turn it on, either sign in with a Claude subscription (Pro/Max) or give the gateway an API key.
 
@@ -118,3 +130,9 @@ STUDIO_ALT_URLS=https://<machine>.<tailnet>.ts.net:8443/
 | GET | `/api/studio/ai-sessions/:id` | One proposal in full: plate, settings before, changes, re-ask comment, applied changes, print report |
 | POST | `/api/studio/ai-sessions/:id/applied` | `{ changes: [{ key, value }] }`: what Studio loaded into the process preset |
 | POST | `/api/studio/ai-sessions/:id/feedback` | `{ outcome, issues, note }`: the print report. A new report replaces the old one |
+| GET | `/api/prints?limit=50` | Print history, newest first, plus the report `outcomes`, `issues` and the `setting_labels` of the settings the AI tunes |
+| GET | `/api/prints/:id` | One print: `setup` (what Studio sent: presets, all process settings, filaments, objects, `ai_session_id`), `photos`, `feedback` |
+| POST | `/api/prints/setup` | Called by Studio when it sends a print: the plate description plus `job_name` and `ai_session_id` |
+| POST | `/api/prints/:id/feedback` | `{ outcome, issues, note }`: the report on the print, also saved on its AI proposal |
+| POST | `/api/prints/:id/photos` | `multipart/form-data` field `file`: a JPEG, PNG or WebP photo up to 20 MB |
+| GET / DELETE | `/api/prints/:id/photos/:name` | The photo, or remove it |

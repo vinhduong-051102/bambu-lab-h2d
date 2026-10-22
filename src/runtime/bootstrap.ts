@@ -12,7 +12,10 @@ import { BambuMessageParser } from '../bambu/BambuMessageParser';
 import { BambuCommandBuilder } from '../bambu/commands/BambuCommandBuilder';
 import { BambuTopics } from '../bambu/BambuTopics';
 import { AmsCommandTracker } from '../domain/commands/AmsCommandTracker';
+import { PrintJournal } from '../domain/prints/PrintJournal';
+import { PrintRecorder } from '../domain/prints/PrintRecorder';
 import { setRuntime, type GatewayRuntime } from './runtime';
+import path from 'path';
 
 export interface StartedGateway extends GatewayRuntime {
   printerService: PrinterService;
@@ -54,6 +57,10 @@ export async function startGateway(): Promise<StartedGateway> {
   printerManager.registerPrinter(env.BAMBU_SERIAL, printerService);
 
   setRuntime({ printerService, printerManager });
+
+  // Print history: a record per print, with the camera's photo when it ends
+  const printRecorder = new PrintRecorder(new PrintJournal(path.resolve(env.PRINT_HISTORY_DIR)), stateStore, cameraService);
+  printRecorder.start();
 
   // Handle incoming MQTT messages
   mqttClient.onMessage((topic, message) => {
@@ -103,6 +110,7 @@ Subscribed:
     printerService,
     printerManager,
     async stop() {
+      printRecorder.stop();
       cameraService.stop();
       stateStore.destroy();
       await mqttClient.disconnect();
