@@ -1,5 +1,5 @@
 diff --git a/src/slic3r/GUI/MainFrame.cpp b/src/slic3r/GUI/MainFrame.cpp
-index d38b5d2..f7e91b3 100644
+index d38b5d2..f672d76 100644
 --- a/src/slic3r/GUI/MainFrame.cpp
 +++ b/src/slic3r/GUI/MainFrame.cpp
 @@ -12,6 +12,12 @@
@@ -75,7 +75,7 @@ index d38b5d2..f7e91b3 100644
      sizer->Add(slice_panel);
      sizer->Add(FromDIP(8), 0, 0, 0, 0);
      sizer->Add(print_panel);
-@@ -2651,6 +2682,649 @@ void MainFrame::update_side_button_style()
+@@ -2651,6 +2682,763 @@ void MainFrame::update_side_button_style()
      m_print_option_btn->SetExtraSize(wxSize(FromDIP(10), FromDIP(10)));
      m_print_option_btn->SetIconOffset(FromDIP(2));
      m_print_option_btn->SetMinSize(wxSize(FromDIP(24), FromDIP(24)));
@@ -167,28 +167,85 @@ index d38b5d2..f7e91b3 100644
 +    };
 +}
 +
++// The value type the gateway checks a setting against, or nullptr for types the AI never writes
++// (text, points, groups)
++const char *ai_option_type(ConfigOptionType type)
++{
++    switch (ConfigOptionType(type & ~coVectorType)) {
++    case coFloat: return "float";
++    case coInt: return "int";
++    case coPercent: return "percent";
++    case coFloatOrPercent: return "float_or_percent";
++    case coBool: return "bool";
++    case coEnum: return "enum";
++    default: return nullptr;
++    }
++}
++
++// Every setting of a preset the AI could write, serialized as Studio saves it, and its definition
++// (once per key) in `options`: the gateway decides which ones the AI may change
++// (src/domain/studio/aiOptimize.ts), so changing that needs no rebuild. Text settings (names, notes,
++// scripts) are left out: none is for the AI, and they may hold anything.
++nlohmann::json ai_describe_settings(const DynamicPrintConfig &config, nlohmann::json &options)
++{
++    nlohmann::json settings = nlohmann::json::object();
++    for (const std::string &key : config.keys()) {
++        const ConfigOptionDef *def = print_config_def.get(key);
++        const char *type = def != nullptr ? ai_option_type(def->type) : nullptr;
++        if (type == nullptr)
++            continue;
++        settings[key] = config.opt_serialize(key);
++        if (options.contains(key))
++            continue;
++        // Labels in Studio's language, as the user sees them in the settings tabs
++        nlohmann::json option = {
++            {"type", type},
++            {"vector", (def->type & coVectorType) != 0},
++            {"label", _u8L(def->full_label.empty() ? def->label : def->full_label)},
++            {"category", def->category.empty() ? std::string() : _u8L(def->category)},
++            {"unit", def->sidetext.empty() ? std::string() : _u8L(def->sidetext)},
++            {"mode", def->mode == comSimple ? "simple" : def->mode == comAdvanced ? "advanced" : "develop"},
++        };
++        if (def->min != ConfigOptionDef::min_default)
++            option["min"] = def->min;
++        if (def->max != ConfigOptionDef::max_default)
++            option["max"] = def->max;
++        if (std::string(type) == "enum")
++            option["values"] = def->enum_values;
++        options[key] = option;
++    }
++    return settings;
++}
++
++std::vector<std::string> ai_strings(const DynamicPrintConfig &config, const std::string &key)
++{
++    if (auto *strings = dynamic_cast<const ConfigOptionStrings *>(config.option(key)))
++        return strings->values;
++    return {};
++}
++
 +nlohmann::json ai_describe_plate()
 +{
 +    PresetBundle &bundle = *wxGetApp().preset_bundle;
 +    const DynamicPrintConfig &print_config = bundle.prints.get_edited_preset().config;
++    nlohmann::json options = nlohmann::json::object();
++    nlohmann::json settings = ai_describe_settings(print_config, options);
 +
++    // Filaments that print something on the current plate (1-based, as Studio numbers them)
++    std::vector<int> used = wxGetApp().plater()->get_partplate_list().get_curr_plate()->get_extruders();
 +    nlohmann::json filaments = nlohmann::json::array();
-+    for (const std::string &name : bundle.filament_presets) {
-+        nlohmann::json filament = {{"preset", name}};
++    for (size_t i = 0; i < bundle.filament_presets.size(); ++i) {
++        const std::string &name = bundle.filament_presets[i];
++        nlohmann::json filament = {{"preset", name}, {"used", std::find(used.begin(), used.end(), int(i) + 1) != used.end()}};
++        // The edited copy when this preset is the one open in the Filament tab
 +        const Preset *preset = bundle.filaments.find_preset(name, false);
-+        if (preset && preset->config.has("filament_type"))
-+            filament["type"] = preset->config.opt_string("filament_type", 0u);
++        if (preset) {
++            if (preset->config.has("filament_type"))
++                filament["type"] = preset->config.opt_string("filament_type", 0u);
++            filament["variants"] = ai_strings(preset->config, "filament_extruder_variant");
++            filament["settings"] = ai_describe_settings(preset->config, options);
++        }
 +        filaments.push_back(filament);
-+    }
-+
-+    // The whole process preset: the gateway picks the settings the AI may change
-+    // (src/domain/studio/aiOptimize.ts), so changing that list needs no rebuild. Text settings
-+    // (names, notes, scripts) are left out: none is for the AI, and they may hold anything.
-+    nlohmann::json settings = nlohmann::json::object();
-+    for (const std::string &key : print_config.keys()) {
-+        const ConfigOptionDef *def = print_config_def.get(key);
-+        if (def != nullptr && def->type != coString && def->type != coStrings)
-+            settings[key] = print_config.opt_serialize(key);
 +    }
 +
 +    nlohmann::json objects = nlohmann::json::array();
@@ -196,12 +253,14 @@ index d38b5d2..f7e91b3 100644
 +        objects.push_back(ai_describe_object(*object));
 +
 +    return {
-+        {"version", 1},
++        {"version", 2},
 +        {"printer_preset", bundle.printers.get_edited_preset().name},
 +        {"process_preset", bundle.prints.get_edited_preset().name},
 +        {"nozzle_diameters", ai_floats(bundle.printers.get_edited_preset().config, "nozzle_diameter")},
 +        {"filaments", filaments},
 +        {"settings", settings},
++        {"process_variants", ai_strings(print_config, "print_extruder_variant")},
++        {"options", options},
 +        {"objects", objects},
 +    };
 +}
@@ -576,34 +635,68 @@ index d38b5d2..f7e91b3 100644
 +        session_id.clear();
 +
 +    // The gateway already checked the keys and values; Studio still refuses anything that is not a
-+    // non-text setting of the process preset, and anything its own parser rejects.
-+    const DynamicPrintConfig &print_config = wxGetApp().preset_bundle->prints.get_edited_preset().config;
-+    DynamicPrintConfig proposed;
-+    nlohmann::json applied = nlohmann::json::array();
++    // non-text setting of the preset it is for, and anything its own parser rejects. Filament changes
++    // go to a single filament preset (the gateway keeps them to one): Studio edits one at a time.
++    PresetBundle &bundle = *wxGetApp().preset_bundle;
++    const DynamicPrintConfig &print_config = bundle.prints.get_edited_preset().config;
++    DynamicPrintConfig proposed, proposed_filament;
++    std::string filament_preset;
++    int filament_index = -1;
++    nlohmann::json applied = nlohmann::json::array(), applied_filament = nlohmann::json::array();
 +    wxString lines;
 +    const nlohmann::json changes = response->value("changes", nlohmann::json::array());
 +    for (const nlohmann::json &change : changes) {
 +        const std::string key   = change.value("key", "");
 +        const std::string value = change.value("value", "");
++        const bool for_filament = change.value("target", "") == "filament";
++        const DynamicPrintConfig *config = &print_config;
++        int index = -1;
++        if (for_filament) {
++            index = change.value("filament", 0) - 1;
++            if (index < 0 || index >= int(bundle.filament_presets.size()))
++                continue;
++            const std::string name = bundle.filament_presets[index];
++            if (!filament_preset.empty() && name != filament_preset)
++                continue;
++            // The edited copy when this preset is the one open in the Filament tab
++            const Preset *preset = bundle.filaments.find_preset(name, false);
++            if (preset == nullptr)
++                continue;
++            config = &preset->config;
++            if (filament_preset.empty()) {
++                filament_preset = name;
++                filament_index  = index;
++            }
++        }
 +        const ConfigOptionDef *def = print_config_def.get(key);
-+        if (def == nullptr || def->type == coString || def->type == coStrings || !print_config.has(key))
++        if (def == nullptr || def->type == coString || def->type == coStrings || !config->has(key))
 +            continue;
 +        try {
 +            ConfigSubstitutionContext context(ForwardCompatibilitySubstitutionRule::Disable);
-+            proposed.set_deserialize(key, value, context);
++            (for_filament ? proposed_filament : proposed).set_deserialize(key, value, context);
 +        } catch (const std::exception &e) {
 +            BOOST_LOG_TRIVIAL(warning) << "AI optimize: " << key << " = " << value << " rejected: " << e.what();
 +            continue;
 +        }
-+        applied.push_back({{"key", key}, {"value", value}});
++        if (for_filament)
++            applied_filament.push_back({{"key", key}, {"value", value}, {"target", "filament"}, {"filament", index + 1}});
++        else
++            applied.push_back({{"key", key}, {"value", value}});
 +        wxString label = ai_text(change, "label");
-+        lines += wxString::Format(wxString::FromUTF8("• %s: %s → %s\n   %s\n\n"), label.empty() ? wxString::FromUTF8(key) : label,
-+                                  wxString::FromUTF8(print_config.opt_serialize(key)), wxString::FromUTF8(value), ai_text(change, "reason"));
++        if (label.empty())
++            label = wxString::FromUTF8(key);
++        if (for_filament)
++            label = wxString::Format("Filament #%d: ", index + 1) + label;
++        lines += wxString::Format(wxString::FromUTF8("• %s: %s → %s\n   %s\n\n"), label, wxString::FromUTF8(config->opt_serialize(key)),
++                                  wxString::FromUTF8(value), ai_text(change, "reason"));
 +    }
-+    if (proposed.empty())
++    if (proposed.empty() && proposed_filament.empty())
 +        lines = wxString::FromUTF8("Setting hiện tại đã phù hợp, AI không đề xuất thay đổi nào.");
++    else if (!proposed_filament.empty())
++        lines += wxString::FromUTF8("Thay đổi filament được nạp vào preset ") + wxString::FromUTF8(filament_preset) +
++                 wxString::FromUTF8(" (tab Filament), như khi tự sửa: lưu preset nếu muốn giữ cho lần sau.");
 +
-+    AiResultDialog dlg(this, ai_text(*response, "summary"), lines, !proposed.empty());
++    AiResultDialog dlg(this, ai_text(*response, "summary"), lines, !proposed.empty() || !proposed_filament.empty());
 +    const int answer = dlg.ShowModal();
 +    if (answer == ID_AI_ASK_AGAIN) {
 +        // Back to the button's busy state; the new answer opens this dialog again
@@ -614,14 +707,35 @@ index d38b5d2..f7e91b3 100644
 +    if (answer != wxID_APPLY)
 +        return;
 +
++    // Filament first: opening another preset in the Filament tab may ask what to do with unsaved edits
++    // of the one open now (Studio's own dialog), and the user may cancel that
++    if (!proposed_filament.empty()) {
++        Tab *tab = wxGetApp().get_tab(Preset::TYPE_FILAMENT);
++        const bool open = tab != nullptr && (bundle.filaments.get_edited_preset().name == filament_preset || tab->select_preset(filament_preset));
++        if (open) {
++            // As the sidebar's edit button does: the tab now edits this filament
++            tab->get_combo_box()->set_filament_idx(filament_index);
++            tab->load_config(proposed_filament);
++            for (const nlohmann::json &change : applied_filament)
++                applied.push_back(change);
++        } else {
++            MessageDialog info(this, wxString::FromUTF8("Chưa đổi preset filament ") + wxString::FromUTF8(filament_preset) +
++                                         wxString::FromUTF8(": chỉ áp dụng thay đổi của quá trình in."),
++                               wxString::FromUTF8("AI tối ưu"), wxOK | wxICON_INFORMATION);
++            info.ShowModal();
++        }
++    }
++
 +    // Same follow-up as editing the density in the Process tab (Tab::on_value_change)
 +    if (proposed.has("sparse_infill_density")) {
 +        for (const char *linked : {"skeleton_infill_density", "skin_infill_density"})
 +            if (print_config.has(linked))
 +                proposed.set_key_value(linked, proposed.option("sparse_infill_density")->clone());
 +    }
-+    if (Tab *tab = wxGetApp().get_tab(Preset::TYPE_PRINT))
++    if (Tab *tab = wxGetApp().get_tab(Preset::TYPE_PRINT); tab != nullptr && !proposed.empty())
 +        tab->load_config(proposed);
++    if (applied.empty())
++        return;
 +    // The next print sent from Studio is linked to this proposal in the print history
 +    m_ai_last_applied_session = session_id;
 +

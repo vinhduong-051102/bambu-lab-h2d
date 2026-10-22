@@ -2,7 +2,7 @@ import { randomBytes } from 'crypto';
 import { promises as fs } from 'fs';
 import path from 'path';
 import { z } from 'zod';
-import type { AiOptimizeResult, PastPrint, StudioRequest } from './aiOptimize';
+import { settingRef, type AiOptimizeResult, type PastPrint, type StudioRequest } from './aiOptimize';
 
 /**
  * Every "AI tối ưu" answer is kept as a session (one JSON file each): what was on the plate, what the AI
@@ -48,8 +48,19 @@ export const feedbackSchema = z.object({
 export type PrintFeedback = z.infer<typeof feedbackSchema>;
 
 export const appliedSchema = z.object({
-  changes: z.array(z.object({ key: z.string().max(100), value: z.string().max(200) })).max(200),
+  changes: z
+    .array(
+      z.object({
+        key: z.string().max(100),
+        value: z.string().max(200),
+        // Filament changes only, as in the proposal
+        target: z.literal('filament').optional(),
+        filament: z.number().int().optional(),
+      })
+    )
+    .max(400),
 });
+type AppliedChange = z.infer<typeof appliedSchema>['changes'][number];
 
 export interface AiSession {
   id: string;
@@ -69,10 +80,10 @@ export interface AiSession {
     surface_area_mm2?: number;
     overhang_area_mm2?: number;
   }[];
-  /** Values the proposal was made against, for the keys it touched */
+  /** Values the proposal was made against, for the settings it touched, by settingRef */
   settings_before: Record<string, string>;
   result: AiOptimizeResult;
-  applied: { at: string; changes: { key: string; value: string }[] } | null;
+  applied: { at: string; changes: AppliedChange[] } | null;
   feedback: (PrintFeedback & { at: string }) | null;
 }
 
@@ -123,7 +134,12 @@ export class AiSessionStore {
     followUp: { previousId: string; comment: string } | null,
     now = new Date()
   ): Promise<AiSession> {
-    const touched = new Set([...result.changes.map((c) => c.key), ...result.rejected.map((r) => r.key)]);
+    const before: Record<string, string> = {};
+    for (const c of [...result.changes, ...result.rejected]) {
+      const settings = c.target === 'filament' ? request.filaments[(c.filament ?? 0) - 1]?.settings : request.settings;
+      const value = settings?.[c.key];
+      if (value !== undefined) before[settingRef(c)] = value;
+    }
     const session: AiSession = {
       id: newSessionId(now),
       created_at: now.toISOString(),
@@ -140,7 +156,7 @@ export class AiSessionStore {
         surface_area_mm2: o.surface_area_mm2,
         overhang_area_mm2: o.overhang_area_mm2,
       })),
-      settings_before: Object.fromEntries(Object.entries(request.settings).filter(([key]) => touched.has(key))),
+      settings_before: before,
       result,
       applied: null,
       feedback: null,
@@ -212,7 +228,7 @@ export class AiSessionStore {
       .map(({ session: s }) => toPastPrint(s));
   }
 
-  async markApplied(id: string, changes: { key: string; value: string }[], now = new Date()): Promise<AiSession | null> {
+  async markApplied(id: string, changes: AppliedChange[], now = new Date()): Promise<AiSession | null> {
     const session = await this.get(id);
     if (!session) return null;
     session.applied = { at: now.toISOString(), changes };
@@ -289,7 +305,11 @@ function toPastPrint(s: AiSession): PastPrint {
     process_preset: s.process_preset,
     filaments: s.filaments.map((f) => (f.type ? `${f.preset} (${f.type})` : f.preset)),
     objects: s.objects.map((o) => `${o.name} ${o.size_mm.map((n) => Math.round(n)).join('×')} mm`),
-    changes: s.applied!.changes.map((c) => ({ key: c.key, before: s.settings_before[c.key] ?? null, after: c.value })),
+    changes: s.applied!.changes.map((c) => {
+      const ref = settingRef(c);
+      const label = s.result.changes.find((p) => settingRef(p) === ref)?.label;
+      return { key: ref, ...(label ? { label } : {}), before: s.settings_before[ref] ?? null, after: c.value };
+    }),
     outcome: PRINT_OUTCOME_LABELS[feedback.outcome],
     issues: feedback.issues.map((i) => PRINT_ISSUE_LABELS[i]),
     note: note.length > NOTE_LIMIT ? `${note.slice(0, NOTE_LIMIT)}…` : note,

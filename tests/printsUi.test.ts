@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { diffSettings, escapeHtml, formatPrintTime, listSettings, orderSettingKeys, renderPrintRow } from '../src/ui/prints.js';
+import { diffSettings, escapeHtml, formatPrintTime, listSettings, orderSettingKeys, printSettings, renderPrintRow } from '../src/ui/prints.js';
 
 const labels = { layer_height: 'Chiều cao lớp', sparse_infill_density: 'Mật độ infill' };
 
@@ -14,6 +14,15 @@ describe('print history UI helpers', () => {
     expect(formatPrintTime(d.toISOString())).toBe('05/10 07:03');
     expect(formatPrintTime(null)).toBe('—');
     expect(formatPrintTime('not a date')).toBe('—');
+  });
+
+  it('lists the filament settings after the process settings', () => {
+    const setup = {
+      settings: { layer_height: '0.2' },
+      filaments: [{ preset: 'PLA', settings: { nozzle_temperature: '220,230' } }, { preset: 'PETG' }],
+    };
+    expect(printSettings(setup)).toEqual({ layer_height: '0.2', 'filament#1:nozzle_temperature': '220,230' });
+    expect(printSettings(null)).toBeNull();
   });
 
   it('orders labelled keys first, then the rest alphabetically', () => {

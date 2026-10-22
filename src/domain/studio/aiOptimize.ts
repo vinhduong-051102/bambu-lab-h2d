@@ -4,9 +4,10 @@ import { z } from 'zod';
 import type { PrinterState } from '../PrinterState';
 
 /**
- * "AI tối ưu" in Bambu Studio: Studio describes the open plate (presets, current process settings,
- * object geometry), Claude proposes process-setting changes, and only the keys below come back.
- * Studio shows them to the user and applies the accepted ones to the edited process preset.
+ * "AI tối ưu" in Bambu Studio: Studio describes the open plate (presets, the process and filament
+ * settings with how Studio defines each one, object geometry), Claude proposes setting changes, and
+ * only checked ones come back. Studio shows them to the user and applies the accepted ones to the
+ * edited process preset and to one filament preset.
  */
 
 type SettingSpec =
@@ -19,8 +20,9 @@ type SettingSpec =
   | { kind: 'floats'; min: number; max: number; label: string }
   | { kind: 'bools'; label: string };
 
-// Process (print preset) settings the AI may change, with the values Studio v02.08.04.57 accepts
-// (src/libslic3r/PrintConfig.cpp). Studio sends the whole process preset, so adding a key here is enough.
+// The main process (print preset) settings, with Vietnamese labels and ranges tighter than Studio's own
+// (src/libslic3r/PrintConfig.cpp, v02.08.04.57). Every other setting Studio describes is open to the AI
+// too, within Studio's limits (see allowedOption); these are listed first and checked more strictly.
 export const AI_SETTINGS = {
   layer_height: { kind: 'float', min: 0.04, max: 0.6, label: 'Chiều cao lớp' },
   initial_layer_print_height: { kind: 'float', min: 0.08, max: 0.6, label: 'Chiều cao lớp đầu' },
@@ -73,17 +75,50 @@ export const AI_SETTINGS = {
 export type AiSettingKey = keyof typeof AI_SETTINGS;
 const AI_SETTING_KEYS = Object.keys(AI_SETTINGS) as AiSettingKey[];
 
+/**
+ * How Studio defines a setting (its ConfigOptionDef): the value type, one value per extruder variant or
+ * not, the label in Studio's language, and the limits Studio's own editor enforces.
+ */
+const studioOptionSchema = z.object({
+  type: z.enum(['float', 'int', 'percent', 'float_or_percent', 'bool', 'enum']),
+  vector: z.boolean().default(false),
+  label: z.string().default(''),
+  category: z.string().default(''),
+  unit: z.string().default(''),
+  min: z.number().optional(),
+  max: z.number().optional(),
+  values: z.array(z.string()).optional(),
+  mode: z.enum(['simple', 'advanced', 'develop']).default('simple'),
+});
+export type StudioOption = z.infer<typeof studioOptionSchema>;
+
 const vec3 = z.tuple([z.number(), z.number(), z.number()]);
 
-/** What Studio writes when the button is clicked (studio/bambustudio/ai-button.patch) */
+/**
+ * What Studio writes when the button is clicked (studio/bambustudio/ai-button.patch). Version 1 (Studio
+ * before the filament settings) sends neither the definitions nor the filament settings: the AI then
+ * only gets AI_SETTINGS.
+ */
 export const studioRequestSchema = z.object({
-  version: z.literal(1),
+  version: z.union([z.literal(1), z.literal(2)]),
   goal: z.enum(['balanced', 'quality', 'speed', 'strength', 'material']).default('balanced'),
   printer_preset: z.string(),
   process_preset: z.string(),
   nozzle_diameters: z.array(z.number()),
-  filaments: z.array(z.object({ preset: z.string(), type: z.string().optional() })),
+  filaments: z.array(
+    z.object({
+      preset: z.string(),
+      type: z.string().optional(),
+      // On the current plate; filaments that print nothing only show by name
+      used: z.boolean().optional(),
+      // Extruder variants, in the order of the per-variant values ("Direct Drive Standard", ...)
+      variants: z.array(z.string()).optional(),
+      settings: z.record(z.string()).optional(),
+    })
+  ),
   settings: z.record(z.string()),
+  process_variants: z.array(z.string()).optional(),
+  options: z.record(studioOptionSchema).optional(),
   objects: z
     .array(
       z.object({
@@ -105,7 +140,7 @@ export type StudioRequest = z.infer<typeof studioRequestSchema>;
 
 /** The proposal a re-ask answers, and the user's comment on it */
 export interface FollowUp {
-  previous: { summary: string; changes: { key: string; label: string; value: string; reason: string }[] } | null;
+  previous: { summary: string; changes: AiChange[] } | null;
   comment: string;
 }
 
@@ -116,25 +151,40 @@ export interface PastPrint {
   process_preset: string;
   filaments: string[];
   objects: string[];
-  /** Applied changes, with the value each replaced (null when it was not kept) */
-  changes: { key: string; before: string | null; after: string }[];
+  /** Applied changes by settingRef, with the value each replaced (null when it was not kept) */
+  changes: { key: string; label?: string; before: string | null; after: string }[];
   outcome: string;
   issues: string[];
   note: string;
 }
 
-export interface AiChange {
-  key: AiSettingKey;
+/**
+ * Which preset a change goes to. Process changes carry neither field, as before filaments could be
+ * changed; a filament change names the filament (1-based, as Studio numbers them) and its preset.
+ */
+export interface FilamentTarget {
+  target?: 'filament';
+  filament?: number;
+  preset?: string;
+}
+
+export interface AiChange extends FilamentTarget {
+  key: string;
   label: string;
-  /** Studio's serialized form, e.g. "0.16", "15%", "1", "gyroid" */
+  /** Studio's serialized form, e.g. "0.16", "15%", "1", "gyroid", "220,230" */
   value: string;
   reason: string;
 }
 
-export interface AiRejected {
+export interface AiRejected extends FilamentTarget {
   key: string;
   value: string;
   reason: string;
+}
+
+/** One setting across sessions and print reports: "layer_height", or "filament#2:nozzle_temperature" */
+export function settingRef(change: { key: string; target?: string; filament?: number }): string {
+  return change.target === 'filament' ? `filament#${change.filament}:${change.key}` : change.key;
 }
 
 export interface AiOptimizeResult {
@@ -143,7 +193,10 @@ export interface AiOptimizeResult {
   rejected: AiRejected[];
 }
 
-/** One proposal as the model writes it: the value is free text, checked against AI_SETTINGS afterwards */
+/**
+ * One proposal as the model writes it. Keys and values are free text, checked against the settings of
+ * the plate afterwards: those differ from plate to plate, and a fixed schema stays in the API's cache.
+ */
 export const PROPOSAL_JSON_SCHEMA = {
   type: 'object',
   properties: {
@@ -153,11 +206,13 @@ export const PROPOSAL_JSON_SCHEMA = {
       items: {
         type: 'object',
         properties: {
-          key: { type: 'string', enum: AI_SETTING_KEYS },
+          target: { type: 'string', enum: ['process', 'filament'] },
+          filament: { type: 'integer' },
+          key: { type: 'string' },
           value: { type: 'string' },
           reason: { type: 'string' },
         },
-        required: ['key', 'value', 'reason'],
+        required: ['target', 'filament', 'key', 'value', 'reason'],
         additionalProperties: false,
       },
     },
@@ -166,18 +221,29 @@ export const PROPOSAL_JSON_SCHEMA = {
   additionalProperties: false,
 } as const;
 
-// Sent as written: the API enforces the key enum, which the SDK's transform would demote to a description
+// Sent as written: the API enforces the target enum, which the SDK's transform would demote to a description
 const proposalFormat = jsonSchemaOutputFormat(PROPOSAL_JSON_SCHEMA, { transform: false });
 
 export interface AiProposal {
   summary: string;
-  changes: { key: string; value: string; reason: string }[];
+  /** target defaults to "process"; filament is 1-based and only read for target "filament" */
+  changes: { target?: 'process' | 'filament'; filament?: number; key: string; value: string; reason: string }[];
 }
 
 /** A proposal made outside the gateway (`claude -p` in Studio's container), sent back to be checked */
 export const aiProposalSchema = z.object({
   summary: z.string(),
-  changes: z.array(z.object({ key: z.string(), value: z.string(), reason: z.string() })).max(100),
+  changes: z
+    .array(
+      z.object({
+        target: z.enum(['process', 'filament']).default('process'),
+        filament: z.number().int().default(0),
+        key: z.string(),
+        value: z.string(),
+        reason: z.string(),
+      })
+    )
+    .max(200),
 });
 
 const round = (n: number, digits: number) => Number(n.toFixed(digits));
@@ -282,29 +348,205 @@ function sameValue(key: AiSettingKey, a: string | undefined, b: string): boolean
   return Number(a.replace(/%$/, '')) === Number(b.replace(/%$/, ''));
 }
 
+// Settings Studio describes that the AI still may not change: what the material is rather than how it
+// prints (changing them only makes Studio's weights, costs and checks wrong), the temperature range the
+// AI's own temperatures are checked against, and positions set by dragging on the plate
+const AI_DENIED = new Set([
+  'filament_diameter', 'filament_density', 'filament_cost', 'filament_shrink', 'filament_is_support',
+  'filament_soluble', 'filament_printable', 'filament_extruder_compatibility', 'required_nozzle_HRC',
+  'temperature_vitrification', 'volumetric_speed_coefficients',
+  'nozzle_temperature_range_low', 'nozzle_temperature_range_high',
+  'wipe_tower_x', 'wipe_tower_y',
+]);
+
+/** Studio's definition of `key`, when the AI may change it in a preset holding `settings` */
+function allowedOption(request: StudioRequest, settings: Record<string, string> | undefined, key: string): StudioOption | null {
+  const option = request.options?.[key];
+  if (!option || !settings || !(key in settings)) return null;
+  // Developer-mode settings are hidden in Studio's editor, mostly experiments and printer internals
+  if (option.mode === 'develop' || AI_DENIED.has(key)) return null;
+  return option;
+}
+
+const stripNumber = (text: string) => text.trim().toLowerCase().replace(/(mm\/s|mm|°c|s)$/, '').trim();
+
+/** One value of a Studio setting from the model's text, in Studio's serialized form */
+function parseOptionValue(option: StudioOption, raw: string): { value: string } | { error: string } {
+  const text = raw.trim();
+  switch (option.type) {
+    case 'bool': {
+      const value = parseBool(text.toLowerCase());
+      return value ? { value } : { error: `"${raw}" không phải giá trị bật/tắt` };
+    }
+    case 'enum': {
+      const value = option.values?.find((v) => v.toLowerCase() === text.toLowerCase());
+      return value !== undefined ? { value } : { error: `"${raw}" không nằm trong ${(option.values ?? []).join(', ')}` };
+    }
+    default: {
+      const percent = text.endsWith('%');
+      if (percent && option.type !== 'percent' && option.type !== 'float_or_percent') return { error: `"${raw}" không dùng được %` };
+      const n = Number(stripNumber(text.replace(/%$/, '')));
+      if (!Number.isFinite(n)) return { error: `"${raw}" không phải số` };
+      if (option.type === 'int' && !Number.isInteger(n)) return { error: `"${raw}" phải là số nguyên` };
+      // A float_or_percent in % is relative to another setting: Studio's limits are for the absolute value
+      if (!(percent && option.type === 'float_or_percent')) {
+        if (option.min !== undefined && n < option.min) return { error: `${n} nhỏ hơn mức tối thiểu ${option.min}` };
+        if (option.max !== undefined && n > option.max) return { error: `${n} lớn hơn mức tối đa ${option.max}` };
+      }
+      if (option.type === 'percent' || percent) return { value: `${round(n, 2)}%` };
+      return { value: String(option.type === 'int' ? n : round(n, 4)) };
+    }
+  }
+}
+
+const isNil = (v: string) => v.trim() === 'nil';
+const numberOf = (v: string) => Number(v.trim().replace(/%$/, ''));
+
+/**
+ * The model's value for a Studio setting, or an error. A per-variant setting takes either one value or
+ * one per variant. One number for variants that differ (a High Flow variant faster than the standard
+ * one) is the first variant's new value, and every variant is scaled by the same ratio. "nil" (a variant
+ * left to another preset) stays nil, unless every variant is nil: then the value fills them all.
+ */
+export function normalizeOptionValue(option: StudioOption, raw: string, current: string | undefined): { value: string } | { error: string } {
+  if (!option.vector) return parseOptionValue(option, raw);
+  if (current === undefined) return { error: 'Studio không gửi giá trị hiện tại của tham số này' };
+  const now = current.split(',').map((v) => v.trim());
+  const parts = raw.split(',').map((v) => v.trim()).filter(Boolean);
+  const allNil = now.every(isNil);
+
+  if (parts.length === now.length && new Set(parts).size > 1) {
+    const values: string[] = [];
+    for (const [i, part] of parts.entries()) {
+      if (isNil(now[i]) && !allNil) {
+        values.push('nil');
+        continue;
+      }
+      const parsed = parseOptionValue(option, part);
+      if ('error' in parsed) return parsed;
+      values.push(parsed.value);
+    }
+    return { value: values.join(',') };
+  }
+  if (new Set(parts).size !== 1) return { error: `"${raw}" phải là một giá trị, hoặc ${now.length} giá trị theo thứ tự biến thể` };
+
+  const parsed = parseOptionValue(option, parts[0]);
+  if ('error' in parsed) return parsed;
+  const set = now.filter((v) => !isNil(v));
+  const numeric = option.type !== 'bool' && option.type !== 'enum' && !(option.type === 'float_or_percent' && parsed.value.endsWith('%'));
+  const differ = new Set(set.map(numberOf)).size > 1;
+  if (!numeric || !differ || set.some((v) => !Number.isFinite(numberOf(v)) || numberOf(v) <= 0)) {
+    return { value: now.map((v) => (isNil(v) && !allNil ? 'nil' : parsed.value)).join(',') };
+  }
+  const ratio = numberOf(parsed.value) / numberOf(set[0]);
+  const values: string[] = [];
+  for (const v of now) {
+    if (isNil(v)) {
+      values.push('nil');
+      continue;
+    }
+    const n = numberOf(v) * ratio;
+    const scaled = parseOptionValue(option, `${option.type === 'int' ? Math.round(n) : round(n, 2)}${v.endsWith('%') ? '%' : ''}`);
+    if ('error' in scaled) return { error: `Biến thể ${v} đổi theo cùng tỉ lệ thành ${round(n, 2)}: ${scaled.error}` };
+    values.push(scaled.value);
+  }
+  return { value: values.join(',') };
+}
+
+/** Same value in Studio's terms ("15%" vs "15.00%", "0.2" vs "0.20", per-variant lists alike) */
+function sameOptionValue(a: string | undefined, b: string): boolean {
+  if (a === undefined) return false;
+  const [x, y] = [a.split(','), b.split(',')];
+  return (
+    x.length === y.length &&
+    x.every((v, i) => {
+      const [p, q] = [v.trim(), y[i].trim()];
+      if (p.toLowerCase() === q.toLowerCase()) return true;
+      return !isNil(p) && !isNil(q) && Number.isFinite(numberOf(p)) && numberOf(p) === numberOf(q) && p.endsWith('%') === q.endsWith('%');
+    })
+  );
+}
+
+/** First value of a filament setting, as a number (nozzle_temperature_range_low and the like) */
+function firstNumber(settings: Record<string, string>, key: string): number | null {
+  const first = settings[key]?.split(',').find((v) => !isNil(v));
+  const n = first === undefined ? NaN : Number(first);
+  return Number.isFinite(n) ? n : null;
+}
+
+// Nozzle temperatures stay in the filament's own recommended range: outside it the AI is guessing
+const NOZZLE_TEMPERATURES = new Set(['nozzle_temperature', 'nozzle_temperature_initial_layer']);
+
+function checkFilamentRules(key: string, value: string, settings: Record<string, string>): string | null {
+  if (!NOZZLE_TEMPERATURES.has(key)) return null;
+  const [low, high] = [firstNumber(settings, 'nozzle_temperature_range_low'), firstNumber(settings, 'nozzle_temperature_range_high')];
+  if (low === null || high === null) return null;
+  const outside = value.split(',').filter((v) => !isNil(v)).map(Number).find((t) => t < low || t > high);
+  return outside === undefined ? null : `${outside}°C nằm ngoài khoảng nhiệt độ của filament ${low}–${high}°C`;
+}
+
+type ProposedChange = AiProposal['changes'][number];
+
 /** Keeps the proposals that are allowed, valid and actually change something; explains the rest */
 export function checkProposal(proposal: AiProposal, request: StudioRequest): AiOptimizeResult {
   const changes: AiChange[] = [];
   const rejected: AiRejected[] = [];
   const seen = new Set<string>();
-  for (const { key, value, reason } of proposal.changes) {
-    if (!(key in AI_SETTINGS)) {
-      rejected.push({ key, value, reason: 'Tham số không nằm trong danh sách AI được phép đổi' });
+  // Studio holds unsaved edits for one filament preset at a time, so a proposal changes at most one
+  let filamentPreset: string | null = null;
+
+  const check = (change: ProposedChange): { change: AiChange } | { error: string } | null => {
+    const { key, value } = change;
+    const reason = change.reason.trim();
+    if (change.target !== 'filament') {
+      if (seen.has(key)) return { error: 'Đề xuất trùng lặp' };
+      seen.add(key);
+      const current = request.settings[key];
+      if (key in AI_SETTINGS) {
+        const settingKey = key as AiSettingKey;
+        const normalized = normalizeValue(settingKey, value, request.nozzle_diameters, current);
+        if ('error' in normalized) return normalized;
+        if (sameValue(settingKey, current, normalized.value)) return null;
+        return { change: { key, label: AI_SETTINGS[settingKey].label, value: normalized.value, reason } };
+      }
+      const option = allowedOption(request, request.settings, key);
+      if (!option) return { error: 'Tham số không nằm trong danh sách AI được phép đổi' };
+      const normalized = normalizeOptionValue(option, value, current);
+      if ('error' in normalized) return normalized;
+      if (sameOptionValue(current, normalized.value)) return null;
+      return { change: { key, label: option.label || key, value: normalized.value, reason } };
+    }
+
+    const filament = change.filament ?? 0;
+    const slot = request.filaments[filament - 1];
+    if (!slot?.settings) return { error: `Không có filament #${filament}, hoặc Studio không gửi setting của nó` };
+    if (filamentPreset !== null && slot.preset !== filamentPreset) {
+      return { error: `Mỗi lần chỉ đổi được một preset filament: đã đổi ${filamentPreset}` };
+    }
+    // Filaments sharing a preset share its settings
+    if (seen.has(`filament:${slot.preset}:${key}`)) return { error: 'Đề xuất trùng lặp' };
+    seen.add(`filament:${slot.preset}:${key}`);
+    const option = allowedOption(request, slot.settings, key);
+    if (!option) return { error: 'Tham số không nằm trong danh sách AI được phép đổi' };
+    const current = slot.settings[key];
+    const normalized = normalizeOptionValue(option, value, current);
+    if ('error' in normalized) return normalized;
+    const broken = checkFilamentRules(key, normalized.value, slot.settings);
+    if (broken) return { error: broken };
+    if (sameOptionValue(current, normalized.value)) return null;
+    filamentPreset = slot.preset;
+    return { change: { target: 'filament', filament, preset: slot.preset, key, label: option.label || key, value: normalized.value, reason } };
+  };
+
+  for (const change of proposal.changes) {
+    const result = check(change);
+    if (result === null) continue;
+    if ('change' in result) {
+      changes.push(result.change);
       continue;
     }
-    const settingKey = key as AiSettingKey;
-    if (seen.has(settingKey)) {
-      rejected.push({ key, value, reason: 'Đề xuất trùng lặp' });
-      continue;
-    }
-    seen.add(settingKey);
-    const normalized = normalizeValue(settingKey, value, request.nozzle_diameters, request.settings[settingKey]);
-    if ('error' in normalized) {
-      rejected.push({ key, value, reason: normalized.error });
-      continue;
-    }
-    if (sameValue(settingKey, request.settings[settingKey], normalized.value)) continue;
-    changes.push({ key: settingKey, label: AI_SETTINGS[settingKey].label, value: normalized.value, reason: reason.trim() });
+    const target = change.target === 'filament' ? { target: 'filament' as const, filament: change.filament } : {};
+    rejected.push({ ...target, key: change.key, value: change.value, reason: result.error });
   }
   return { summary: proposal.summary.trim(), changes, rejected };
 }
@@ -318,11 +560,14 @@ const GOALS: Record<StudioRequest['goal'], string> = {
 };
 
 const SYSTEM_PROMPT = `Bạn là chuyên gia slicing cho máy in 3D Bambu Lab H2D (hai đầu phun) dùng Bambu Studio.
-Bạn nhận mô tả plate đang mở: preset máy, preset quá trình in, filament, giá trị hiện tại của các tham số được phép đổi, và hình học từng vật thể (kích thước mm, thể tích, diện tích đáy tiếp xúc bàn in, diện tích bề mặt nhô quá 45° không nằm trên bàn in).
+Bạn nhận mô tả plate đang mở: preset máy, preset quá trình in, filament, giá trị hiện tại của các tham số được phép đổi (của preset quá trình in và của preset filament đang dùng trên plate), và hình học từng vật thể (kích thước mm, thể tích, diện tích đáy tiếp xúc bàn in, diện tích bề mặt nhô quá 45° không nằm trên bàn in).
 
-Đề xuất thay đổi các tham số quá trình in để bản in thành công và phù hợp mục tiêu người dùng.
-- Chỉ dùng các key được liệt kê. Giá trị viết theo đúng cách Bambu Studio lưu: số thập phân dùng dấu chấm, phần trăm như "15%", bật/tắt là "1"/"0", enum đúng chính tả trong danh sách.
+Đề xuất thay đổi các tham số quá trình in và filament để bản in thành công và phù hợp mục tiêu người dùng.
+- Chỉ dùng các key được liệt kê, đúng nhóm của nó. Tham số quá trình in: target "process", filament 0. Tham số filament: target "filament", filament là số thứ tự # của filament. Mỗi lần chỉ đổi được một preset filament: chọn preset in phần lớn vật thể.
+- Giá trị viết theo đúng cách Bambu Studio lưu: số thập phân dùng dấu chấm, phần trăm như "15%", bật/tắt là "1"/"0", enum đúng chính tả trong danh sách. Không ghi đơn vị.
+- Tham số có nhiều giá trị (một giá trị cho mỗi biến thể đầu phun, như "220,230"): ghi một giá trị cho biến thể đầu tiên, các biến thể khác đổi theo cùng tỉ lệ; hoặc ghi đủ từng giá trị theo thứ tự biến thể. "nil" là biến thể không dùng giá trị này, cứ ghi một số bất kỳ ở vị trí đó.
 - Chỉ đề xuất khi có lý do cụ thể từ hình học, vật liệu hoặc mục tiêu. Không đổi tham số đã hợp lý. Nếu mọi thứ đã ổn, trả về danh sách rỗng.
+- Phần lớn tham số đã được Bambu tinh chỉnh cho máy và vật liệu này: ưu tiên các tham số chính, chỉ đụng đến tham số khác khi có lý do rõ. Không bật chế độ đặc biệt (spiral vase, fuzzy skin, in tuần tự từng vật...) nếu người dùng không yêu cầu. Nhiệt độ đầu phun giữ trong khoảng khuyến nghị của filament.
 - Cân nhắc: phần nhô lớn thì cần support (tree(auto) cho mẫu hữu cơ/phức tạp); vật cao, đáy nhỏ hoặc vật liệu dễ cong vênh (ABS, ASA, PA, PC) thì cần brim, chỉ dùng raft khi đáy quá nhỏ hoặc cong vênh nặng; chi tiết chịu lực thì thêm vòng tường và infill; mẫu trang trí thì giảm infill.
 - Số lớp vỏ trên/dưới thực tế là giá trị lớn hơn giữa số lớp và độ dày vỏ chia chiều cao lớp: muốn giảm vỏ thì giảm cả hai, muốn tăng thì tăng một trong hai là đủ.
 - Tốc độ: giá trị hiện tại và giá trị đề xuất là của đầu phun đầu tiên; các biến thể khác (như High Flow) đổi theo cùng tỉ lệ. Chỉ đổi khi mục tiêu là tốc độ hoặc bề mặt đẹp, và giữ trong mức vật liệu chịu được (TPU, vật liệu mềm phải in chậm).
@@ -351,6 +596,57 @@ function describeSettings(request: StudioRequest): string {
   }).join('\n');
 }
 
+const OPTION_TYPES: Record<StudioOption['type'], string> = {
+  float: 'số',
+  int: 'số nguyên',
+  percent: 'phần trăm',
+  float_or_percent: 'số hoặc %',
+  bool: '"1"/"0"',
+  enum: 'enum',
+};
+
+/** "- key (label, unit): hiện tại X; số 0–500" for a setting Studio describes */
+function describeOption(key: string, option: StudioOption, current: string): string {
+  const name = [option.label, option.unit].filter(Boolean).join(', ');
+  let allowed = option.type === 'enum' ? (option.values ?? []).join(' | ') : OPTION_TYPES[option.type];
+  if (option.min !== undefined && option.max !== undefined) allowed += ` ${option.min}–${option.max}`;
+  else if (option.min !== undefined) allowed += ` ≥ ${option.min}`;
+  else if (option.max !== undefined) allowed += ` ≤ ${option.max}`;
+  return `- ${key}${name ? ` (${name})` : ''}: hiện tại ${current}; ${allowed}`;
+}
+
+/** The settings of a preset the AI may change beyond AI_SETTINGS, grouped by Studio's categories */
+function describeOptions(request: StudioRequest, settings: Record<string, string>, skip: (key: string) => boolean): string[] {
+  const groups = new Map<string, string[]>();
+  for (const key of Object.keys(settings).sort()) {
+    const option = allowedOption(request, settings, key);
+    if (!option || skip(key)) continue;
+    const category = option.category || 'Khác';
+    groups.set(category, [...(groups.get(category) ?? []), describeOption(key, option, settings[key])]);
+  }
+  return [...groups.entries()].sort(([a], [b]) => a.localeCompare(b)).flatMap(([category, lines]) => [`[${category}]`, ...lines]);
+}
+
+const variantsLine = (variants: string[] | undefined) =>
+  variants?.length ? [`Tham số nhiều giá trị theo thứ tự biến thể: ${variants.join(', ')}`] : [];
+
+/** The filament presets on the plate with their settings; filaments sharing a preset are listed together */
+function describeFilaments(request: StudioRequest): string[] {
+  const presets = new Map<string, number[]>();
+  request.filaments.forEach((f, i) => {
+    if (f.settings && f.used !== false) presets.set(f.preset, [...(presets.get(f.preset) ?? []), i + 1]);
+  });
+  return [...presets.entries()].flatMap(([preset, numbers]) => {
+    const filament = request.filaments[numbers[0] - 1];
+    return [
+      '',
+      `Tham số filament ${numbers.map((n) => `#${n}`).join(', ')}: ${preset}${filament.type ? ` (${filament.type})` : ''} (target "filament", filament ${numbers[0]}):`,
+      ...variantsLine(filament.variants),
+      ...describeOptions(request, filament.settings!, () => false),
+    ];
+  });
+}
+
 /** Filament actually in the AMS and the nozzles fitted, as the gateway sees them over MQTT */
 function describePrinter(state: PrinterState | null): string {
   if (!state) return 'Không có dữ liệu máy in trực tiếp.';
@@ -369,7 +665,7 @@ function describeFollowUp(followUp: FollowUp): string[] {
     ? [
         'Lần trước bạn đã đề xuất (người dùng chưa áp dụng):',
         followUp.previous.summary,
-        ...followUp.previous.changes.map((c) => `- ${c.key} (${c.label}) = ${c.value}: ${c.reason}`),
+        ...followUp.previous.changes.map((c) => `- ${settingRef(c)} (${c.label}) = ${c.value}: ${c.reason}`),
       ]
     : ['Không còn lưu đề xuất lần trước.'];
   return [
@@ -384,7 +680,7 @@ function describeFollowUp(followUp: FollowUp): string[] {
 
 /** Earlier prints of similar plates on this printer, and what the user reported */
 function describePastPrints(pastPrints: PastPrint[]): string[] {
-  const label = (key: string) => (AI_SETTINGS as Record<string, SettingSpec>)[key]?.label;
+  const label = (c: PastPrint['changes'][number]) => c.label ?? (AI_SETTINGS as Record<string, SettingSpec>)[c.key]?.label;
   return [
     '',
     'Kết quả in thực tế của các plate tương tự trên máy này (đã áp dụng đề xuất rồi in), mới nhất trước khi giống nhau như nhau:',
@@ -392,7 +688,7 @@ function describePastPrints(pastPrints: PastPrint[]): string[] {
       `${i + 1}. ${p.created_at.slice(0, 10)}, mục tiêu ${p.goal}, preset ${p.process_preset}, filament ${p.filaments.join('; ') || 'không rõ'}`,
       `   Vật thể: ${p.objects.join('; ')}`,
       p.changes.length
-        ? `   Đã đổi: ${p.changes.map((c) => `${c.key}${label(c.key) ? ` (${label(c.key)})` : ''} ${c.before ?? '?'} → ${c.after}`).join('; ')}`
+        ? `   Đã đổi: ${p.changes.map((c) => `${c.key}${label(c) ? ` (${label(c)})` : ''} ${c.before ?? '?'} → ${c.after}`).join('; ')}`
         : '   Đã đổi: không, in với preset như cũ',
       `   Kết quả: ${p.outcome}${p.issues.length ? `; lỗi: ${p.issues.join(', ')}` : ''}`,
       ...(p.note ? [`   Ghi chú của người dùng: ${JSON.stringify(p.note)}`] : []),
@@ -412,13 +708,22 @@ export function buildUserPrompt(
     `Preset máy: ${request.printer_preset}`,
     `Preset quá trình in: ${request.process_preset}`,
     `Đường kính đầu phun trong preset: ${request.nozzle_diameters.join(', ')} mm`,
-    `Filament: ${request.filaments.map((f, i) => `#${i + 1} ${f.preset}${f.type ? ` (${f.type})` : ''}`).join('; ') || 'không rõ'}`,
+    `Filament: ${request.filaments.map((f, i) => `#${i + 1} ${f.preset}${f.type ? ` (${f.type})` : ''}${f.used === false ? ' (không dùng trên plate này)' : ''}`).join('; ') || 'không rõ'}`,
     '',
     'Máy in thực tế:',
     describePrinter(printerState),
     '',
-    'Tham số được phép đổi:',
+    'Tham số chính của preset quá trình in (target "process"):',
     describeSettings(request),
+    ...(request.options
+      ? [
+          '',
+          'Các tham số khác của preset quá trình in (target "process"):',
+          ...variantsLine(request.process_variants),
+          ...describeOptions(request, request.settings, (key) => key in AI_SETTINGS),
+        ]
+      : []),
+    ...describeFilaments(request),
     '',
     'Vật thể trên plate:',
     JSON.stringify(request.objects, null, 1),
