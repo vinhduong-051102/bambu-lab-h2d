@@ -2,7 +2,7 @@ import { randomBytes } from 'crypto';
 import { promises as fs } from 'fs';
 import path from 'path';
 import { z } from 'zod';
-import type { AiOptimizeResult, StudioRequest } from './aiOptimize';
+import { settingRef, type AiOptimizeResult, type PastPrint, type StudioRequest } from './aiOptimize';
 
 /**
  * Every "AI tối ưu" answer is kept as a session (one JSON file each): what was on the plate, what the AI
@@ -48,8 +48,19 @@ export const feedbackSchema = z.object({
 export type PrintFeedback = z.infer<typeof feedbackSchema>;
 
 export const appliedSchema = z.object({
-  changes: z.array(z.object({ key: z.string().max(100), value: z.string().max(200) })).max(200),
+  changes: z
+    .array(
+      z.object({
+        key: z.string().max(100),
+        value: z.string().max(200),
+        // Filament changes only, as in the proposal
+        target: z.literal('filament').optional(),
+        filament: z.number().int().optional(),
+      })
+    )
+    .max(400),
 });
+type AppliedChange = z.infer<typeof appliedSchema>['changes'][number];
 
 export interface AiSession {
   id: string;
@@ -60,12 +71,19 @@ export interface AiSession {
   goal: StudioRequest['goal'];
   printer_preset: string;
   process_preset: string;
+  /** Missing in sessions saved before past prints went into the prompt, as are the areas below */
+  nozzle_diameters?: number[];
   filaments: StudioRequest['filaments'];
-  objects: { name: string; size_mm: [number, number, number] }[];
-  /** Values the proposal was made against, for the keys it touched */
+  objects: {
+    name: string;
+    size_mm: [number, number, number];
+    surface_area_mm2?: number;
+    overhang_area_mm2?: number;
+  }[];
+  /** Values the proposal was made against, for the settings it touched, by settingRef */
   settings_before: Record<string, string>;
   result: AiOptimizeResult;
-  applied: { at: string; changes: { key: string; value: string }[] } | null;
+  applied: { at: string; changes: AppliedChange[] } | null;
   feedback: (PrintFeedback & { at: string }) | null;
 }
 
@@ -116,7 +134,12 @@ export class AiSessionStore {
     followUp: { previousId: string; comment: string } | null,
     now = new Date()
   ): Promise<AiSession> {
-    const touched = new Set([...result.changes.map((c) => c.key), ...result.rejected.map((r) => r.key)]);
+    const before: Record<string, string> = {};
+    for (const c of [...result.changes, ...result.rejected]) {
+      const settings = c.target === 'filament' ? request.filaments[(c.filament ?? 0) - 1]?.settings : request.settings;
+      const value = settings?.[c.key];
+      if (value !== undefined) before[settingRef(c)] = value;
+    }
     const session: AiSession = {
       id: newSessionId(now),
       created_at: now.toISOString(),
@@ -125,9 +148,15 @@ export class AiSessionStore {
       goal: request.goal,
       printer_preset: request.printer_preset,
       process_preset: request.process_preset,
+      nozzle_diameters: request.nozzle_diameters,
       filaments: request.filaments,
-      objects: request.objects.map((o) => ({ name: o.name, size_mm: o.size_mm })),
-      settings_before: Object.fromEntries(Object.entries(request.settings).filter(([key]) => touched.has(key))),
+      objects: request.objects.map((o) => ({
+        name: o.name,
+        size_mm: o.size_mm,
+        surface_area_mm2: o.surface_area_mm2,
+        overhang_area_mm2: o.overhang_area_mm2,
+      })),
+      settings_before: before,
       result,
       applied: null,
       feedback: null,
@@ -147,8 +176,8 @@ export class AiSessionStore {
     }
   }
 
-  /** Newest first */
-  async list(limit: number): Promise<AiSessionSummary[]> {
+  /** The newest `limit` sessions, newest first */
+  private async newest(limit: number): Promise<AiSession[]> {
     let names: string[];
     try {
       names = await fs.readdir(this.dir);
@@ -164,23 +193,42 @@ export class AiSessionStore {
       .reverse()
       .slice(0, limit);
     const sessions = await Promise.all(ids.map((id) => this.get(id)));
-    return sessions
-      .filter((s): s is AiSession => s !== null)
-      .map((s) => ({
-        id: s.id,
-        created_at: s.created_at,
-        objects: s.objects.map((o) => o.name),
-        process_preset: s.process_preset,
-        filaments: s.filaments.map((f) => f.preset),
-        summary: s.result.summary,
-        change_count: s.result.changes.length,
-        comment: s.comment,
-        applied_at: s.applied?.at ?? null,
-        feedback_outcome: s.feedback?.outcome ?? null,
-      }));
+    return sessions.filter((s): s is AiSession => s !== null);
   }
 
-  async markApplied(id: string, changes: { key: string; value: string }[], now = new Date()): Promise<AiSession | null> {
+  /** Newest first */
+  async list(limit: number): Promise<AiSessionSummary[]> {
+    return (await this.newest(limit)).map((s) => ({
+      id: s.id,
+      created_at: s.created_at,
+      objects: s.objects.map((o) => o.name),
+      process_preset: s.process_preset,
+      filaments: s.filaments.map((f) => f.preset),
+      summary: s.result.summary,
+      change_count: s.result.changes.length,
+      comment: s.comment,
+      applied_at: s.applied?.at ?? null,
+      feedback_outcome: s.feedback?.outcome ?? null,
+    }));
+  }
+
+  /**
+   * Earlier prints of plates like `request`, for the prompt: only sessions the user applied and then
+   * reported on, so the changes are known to have been printed. Most similar first, newest on a tie.
+   */
+  async pastPrints(request: StudioRequest, limit = PAST_PRINT_LIMIT): Promise<PastPrint[]> {
+    const plate = plateOf(request);
+    return (await this.newest(PAST_PRINT_SCAN))
+      .filter((s) => s.applied && s.feedback)
+      .map((s) => ({ session: s, score: similarity(plate, plateOf(s), request, s) }))
+      .filter((c): c is { session: AiSession; score: number } => c.score !== null)
+      // Stable sort over the newest-first list keeps newer sessions first on a tie
+      .sort((a, b) => b.score - a.score)
+      .slice(0, limit)
+      .map(({ session: s }) => toPastPrint(s));
+  }
+
+  async markApplied(id: string, changes: AppliedChange[], now = new Date()): Promise<AiSession | null> {
     const session = await this.get(id);
     if (!session) return null;
     session.applied = { at: now.toISOString(), changes };
@@ -195,4 +243,75 @@ export class AiSessionStore {
     await this.write(session);
     return session;
   }
+}
+
+// The newest sessions searched for past prints, and how many go into a prompt
+const PAST_PRINT_SCAN = 300;
+const PAST_PRINT_LIMIT = 5;
+const NOTE_LIMIT = 300;
+
+interface PlateShape {
+  materials: Set<string>;
+  /** Tallest object, mm */
+  height: number;
+  /** Share of the surface that overhangs, or null when the areas are unknown */
+  overhang: number | null;
+}
+
+type PlateSource = { filaments: StudioRequest['filaments']; objects: AiSession['objects'] };
+
+function plateOf({ filaments, objects }: PlateSource): PlateShape {
+  const surface = objects.reduce((sum, o) => sum + (o.surface_area_mm2 ?? NaN), 0);
+  const overhang = objects.reduce((sum, o) => sum + (o.overhang_area_mm2 ?? NaN), 0);
+  return {
+    // A filament without a type is matched by its preset name
+    materials: new Set(filaments.map((f) => (f.type ?? f.preset).trim().toUpperCase())),
+    height: Math.max(0, ...objects.map((o) => o.size_mm[2])),
+    overhang: surface > 0 && Number.isFinite(overhang) ? overhang / surface : null,
+  };
+}
+
+const sameNumbers = (a: number[], b: number[]) => a.length === b.length && a.every((n, i) => n === b[i]);
+
+/**
+ * How alike two plates are, or null when the earlier print says nothing about this one: no material in
+ * common, or a different nozzle. What went right or wrong with PLA is no lesson for PETG.
+ */
+function similarity(plate: PlateShape, past: PlateShape, request: StudioRequest, session: AiSession): number | null {
+  if (plate.materials.size > 0 && ![...plate.materials].some((m) => past.materials.has(m))) return null;
+  if (session.nozzle_diameters && !sameNumbers(session.nozzle_diameters, request.nozzle_diameters)) return null;
+
+  let score = 0;
+  if (plate.materials.size === past.materials.size && [...plate.materials].every((m) => past.materials.has(m))) score += 1;
+  if (session.process_preset === request.process_preset) score += 3;
+  if (session.goal === request.goal) score += 2;
+  if (plate.height > 0 && past.height > 0) {
+    const ratio = Math.max(plate.height, past.height) / Math.min(plate.height, past.height);
+    score += ratio <= 1.5 ? 2 : ratio <= 3 ? 1 : 0;
+  }
+  if (plate.overhang !== null && past.overhang !== null) {
+    const diff = Math.abs(plate.overhang - past.overhang);
+    score += diff <= 0.05 ? 2 : diff <= 0.15 ? 1 : 0;
+  }
+  return score;
+}
+
+function toPastPrint(s: AiSession): PastPrint {
+  const feedback = s.feedback!;
+  const note = feedback.note.trim();
+  return {
+    created_at: s.created_at,
+    goal: s.goal,
+    process_preset: s.process_preset,
+    filaments: s.filaments.map((f) => (f.type ? `${f.preset} (${f.type})` : f.preset)),
+    objects: s.objects.map((o) => `${o.name} ${o.size_mm.map((n) => Math.round(n)).join('×')} mm`),
+    changes: s.applied!.changes.map((c) => {
+      const ref = settingRef(c);
+      const label = s.result.changes.find((p) => settingRef(p) === ref)?.label;
+      return { key: ref, ...(label ? { label } : {}), before: s.settings_before[ref] ?? null, after: c.value };
+    }),
+    outcome: PRINT_OUTCOME_LABELS[feedback.outcome],
+    issues: feedback.issues.map((i) => PRINT_ISSUE_LABELS[i]),
+    note: note.length > NOTE_LIMIT ? `${note.slice(0, NOTE_LIMIT)}…` : note,
+  };
 }

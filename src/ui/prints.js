@@ -45,6 +45,19 @@ export function orderSettingKeys(keys, labels = {}) {
 const settingText = (value) => (value === undefined || value === null ? null : String(value));
 
 /**
+ * A print's settings as one list: the process settings, then each filament's as "filament#2:key" (the
+ * same names the AI sessions use). null when Studio sent no settings.
+ */
+export function printSettings(setup) {
+  if (!setup?.settings) return null;
+  const settings = { ...setup.settings };
+  (setup.filaments ?? []).forEach((filament, i) => {
+    for (const [key, value] of Object.entries(filament.settings ?? {})) settings[`filament#${i + 1}:${key}`] = value;
+  });
+  return settings;
+}
+
+/**
  * The settings whose values differ between two prints: [{ key, label, a, b }], a/b null when the key
  * is missing on that side. Returns null when either print has no settings to compare.
  */
@@ -410,7 +423,7 @@ export function initPrintHistory({ showToast, addLog }) {
 
     function render(print) {
       modal.setTitle(print.job_name);
-      const settings = print.setup?.settings ?? null;
+      const settings = printSettings(print.setup);
       modal.body.innerHTML = `
         <div class="print-detail-head">
           ${statusBadge(print.status)}
@@ -601,7 +614,7 @@ export function initPrintHistory({ showToast, addLog }) {
       // Older print on the left (A), newer on the right (B)
       const time = (p) => Date.parse(p.started_at ?? p.ended_at ?? '') || 0;
       const [a, b] = time(p1) <= time(p2) ? [p1, p2] : [p2, p1];
-      const diff = diffSettings(a.setup?.settings, b.setup?.settings, settingLabels);
+      const diff = diffSettings(printSettings(a.setup), printSettings(b.setup), settingLabels);
 
       let settingsHtml;
       if (!diff) {

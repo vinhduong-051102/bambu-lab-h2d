@@ -8,7 +8,14 @@ import { PrinterCommandService } from '../src/domain/commands/PrinterCommandServ
 import { PrinterService } from '../src/domain/PrinterService';
 import { setAiProposalSource, setAiSessionStore } from '../src/api/routes/studio';
 import { AiSessionStore } from '../src/domain/studio/aiSessions';
-import { buildUserPrompt, checkProposal, normalizeValue, type StudioRequest } from '../src/domain/studio/aiOptimize';
+import {
+  buildUserPrompt,
+  checkProposal,
+  normalizeOptionValue,
+  normalizeValue,
+  type AiProposal,
+  type StudioRequest,
+} from '../src/domain/studio/aiOptimize';
 import { createTestApp, type TestApp } from './helpers/testApp';
 
 const studioRequest: StudioRequest = {
@@ -54,13 +61,27 @@ describe('AI tối ưu: checking proposals', () => {
     expect(normalizeValue('support_type', 'tree(manual)', [0.4])).toHaveProperty('error');
   });
 
-  it('sets per-variant settings to one value for every variant Studio has', () => {
-    expect(normalizeValue('outer_wall_speed', '150', [0.4], '200,200,nil,200')).toEqual({ value: '150,150,nil,150' });
+  it('scales per-variant speeds by the ratio given for the first variant', () => {
+    // H2D: standard nozzle variants at 200, High Flow at 500 (as Studio v02.08.04.57 sends them)
+    expect(normalizeValue('outer_wall_speed', '150', [0.4], '200,500,500,200,500,500,500')).toEqual({
+      value: '150,375,375,150,375,375,375',
+    });
+    expect(normalizeValue('outer_wall_speed', '150', [0.4], 'nil,200,nil,500')).toEqual({ value: 'nil,150,nil,375' });
     expect(normalizeValue('outer_wall_speed', '150, 150', [0.4], '200,200')).toEqual({ value: '150,150' });
-    expect(normalizeValue('enable_overhang_speed', 'false', [0.4], '1,1')).toEqual({ value: '0,0' });
+    expect(normalizeValue('inner_wall_speed', '100', [0.4], '300,600')).toEqual({ value: '100,200' });
     expect(normalizeValue('outer_wall_speed', '150,200', [0.4], '200,200')).toHaveProperty('error');
     expect(normalizeValue('outer_wall_speed', '900', [0.4], '200,200')).toHaveProperty('error');
     expect(normalizeValue('outer_wall_speed', '150', [0.4])).toHaveProperty('error');
+    expect(normalizeValue('outer_wall_speed', '150', [0.4], 'nil,nil')).toHaveProperty('error');
+  });
+
+  it('sets per-variant switches to one value for every variant', () => {
+    expect(normalizeValue('enable_overhang_speed', 'false', [0.4], '1,1,nil')).toEqual({ value: '0,0,nil' });
+  });
+
+  it('shows the first variant of a speed in the prompt', () => {
+    const request = { ...studioRequest, settings: { ...studioRequest.settings, outer_wall_speed: '200,500,500,200' } };
+    expect(buildUserPrompt(request, null)).toContain('- outer_wall_speed (Tốc độ tường ngoài): hiện tại 200 (tất cả biến thể: 200,500,500,200)');
   });
 
   it('drops a per-variant change that keeps every value', () => {
@@ -100,6 +121,139 @@ describe('AI tối ưu: checking proposals', () => {
     expect(prompt).toContain('- sparse_infill_density (Mật độ infill): hiện tại 15%');
     expect(prompt).toContain('"overhang_area_mm2": 850');
     expect(prompt).toContain('Bambu PLA Basic @BBL H2D (PLA)');
+  });
+});
+
+// Version 2: Studio also sends how it defines each setting, and the settings of every filament
+const fullRequest: StudioRequest = {
+  ...studioRequest,
+  version: 2,
+  settings: { ...studioRequest.settings, gap_infill_speed: '250,250', spiral_mode: '0', top_one_wall_type: 'all top', wipe_tower_x: '165' },
+  process_variants: ['Direct Drive Standard', 'Direct Drive High Flow'],
+  filaments: [
+    {
+      preset: 'Bambu PLA Basic @BBL H2D',
+      type: 'PLA',
+      used: true,
+      variants: ['Direct Drive Standard', 'Direct Drive High Flow'],
+      settings: {
+        nozzle_temperature: '220,230',
+        nozzle_temperature_range_low: '190,190',
+        nozzle_temperature_range_high: '240,240',
+        filament_max_volumetric_speed: '21,40',
+        fan_max_speed: '100,100',
+        filament_retraction_length: 'nil,nil',
+        filament_density: '1.26',
+      },
+    },
+    { preset: 'Bambu PETG HF @BBL H2D', type: 'PETG', used: true, settings: { nozzle_temperature: '250', nozzle_temperature_range_low: '230', nozzle_temperature_range_high: '270' } },
+    { preset: 'Bambu PLA Basic @BBL H2D', type: 'PLA', used: false, settings: {} },
+  ],
+  options: {
+    gap_infill_speed: { type: 'float', vector: true, label: 'Gap infill', category: 'Speed', unit: 'mm/s', min: 1, max: 1000, mode: 'advanced' },
+    spiral_mode: { type: 'bool', vector: false, label: 'Spiral vase', category: 'Others', unit: '', mode: 'simple' },
+    top_one_wall_type: { type: 'enum', vector: false, label: 'Only one wall on top surfaces', category: 'Quality', unit: '', values: ['not apply', 'all top', 'topmost'], mode: 'develop' },
+    wipe_tower_x: { type: 'float', vector: false, label: 'X', category: 'Others', unit: 'mm', mode: 'simple' },
+    nozzle_temperature: { type: 'int', vector: true, label: 'Nozzle', category: 'Filament', unit: '°C', min: 0, max: 500, mode: 'simple' },
+    nozzle_temperature_range_low: { type: 'int', vector: true, label: 'Min', category: 'Filament', unit: '°C', mode: 'simple' },
+    nozzle_temperature_range_high: { type: 'int', vector: true, label: 'Max', category: 'Filament', unit: '°C', mode: 'simple' },
+    filament_max_volumetric_speed: { type: 'float', vector: true, label: 'Max volumetric speed', category: 'Filament', unit: 'mm³/s', min: 0, mode: 'simple' },
+    fan_max_speed: { type: 'int', vector: true, label: 'Fan max speed', category: 'Cooling', unit: '%', min: 0, max: 100, mode: 'simple' },
+    filament_retraction_length: { type: 'float', vector: true, label: 'Length', category: 'Setting Overrides', unit: 'mm', min: 0, mode: 'simple' },
+    filament_density: { type: 'float', vector: true, label: 'Density', category: 'Filament', unit: 'g/cm³', min: 0, mode: 'simple' },
+  },
+};
+
+describe('AI tối ưu: every setting Studio describes', () => {
+  const check = (changes: AiProposal['changes']) => checkProposal({ summary: '', changes }, fullRequest);
+
+  it('opens the other process settings within Studio limits, but not develop-mode or denied ones', () => {
+    const result = check([
+      { key: 'gap_infill_speed', value: '150', reason: 'Bề mặt đẹp hơn' },
+      { key: 'spiral_mode', value: 'true', reason: 'Bình hoa' },
+      { key: 'top_one_wall_type', value: 'topmost', reason: 'x' },
+      { key: 'wipe_tower_x', value: '100', reason: 'x' },
+      { key: 'gap_infill_speed', value: '2000', reason: 'trùng' },
+    ]);
+    expect(result.changes).toEqual([
+      { key: 'gap_infill_speed', label: 'Gap infill', value: '150,150', reason: 'Bề mặt đẹp hơn' },
+      { key: 'spiral_mode', label: 'Spiral vase', value: '1', reason: 'Bình hoa' },
+    ]);
+    expect(result.rejected.map((r) => r.key)).toEqual(['top_one_wall_type', 'wipe_tower_x', 'gap_infill_speed']);
+    expect(checkProposal({ summary: '', changes: [{ key: 'gap_infill_speed', value: '2000', reason: 'x' }] }, fullRequest).rejected[0].reason).toContain('1000');
+  });
+
+  it('changes one filament preset, scaling or setting each variant', () => {
+    const result = check([
+      { target: 'filament', filament: 1, key: 'nozzle_temperature', value: '225, 235', reason: 'Bám lớp tốt hơn' },
+      { target: 'filament', filament: 1, key: 'filament_max_volumetric_speed', value: '15', reason: 'In chậm cho đẹp' },
+      { target: 'filament', filament: 1, key: 'fan_max_speed', value: '80', reason: 'Giảm cong vênh' },
+      { target: 'filament', filament: 1, key: 'filament_retraction_length', value: '0.6', reason: 'Bớt kéo sợi' },
+    ]);
+    expect(result.rejected).toEqual([]);
+    expect(result.changes.map((c) => [c.target, c.filament, c.preset, c.key, c.value])).toEqual([
+      ['filament', 1, 'Bambu PLA Basic @BBL H2D', 'nozzle_temperature', '225,235'],
+      ['filament', 1, 'Bambu PLA Basic @BBL H2D', 'filament_max_volumetric_speed', '15,28.57'],
+      ['filament', 1, 'Bambu PLA Basic @BBL H2D', 'fan_max_speed', '80,80'],
+      ['filament', 1, 'Bambu PLA Basic @BBL H2D', 'filament_retraction_length', '0.6,0.6'],
+    ]);
+  });
+
+  it('keeps to one filament preset, the filament temperature range, and settings that describe the material', () => {
+    const result = check([
+      { target: 'filament', filament: 1, key: 'nozzle_temperature', value: '250', reason: 'x' },
+      { target: 'filament', filament: 1, key: 'filament_density', value: '1.3', reason: 'x' },
+      { target: 'filament', filament: 1, key: 'fan_max_speed', value: '80', reason: 'ok' },
+      { target: 'filament', filament: 3, key: 'fan_max_speed', value: '70', reason: 'cùng preset' },
+      { target: 'filament', filament: 2, key: 'nozzle_temperature', value: '255', reason: 'preset khác' },
+      { target: 'filament', filament: 9, key: 'fan_max_speed', value: '70', reason: 'x' },
+    ]);
+    expect(result.changes.map((c) => c.key)).toEqual(['fan_max_speed']);
+    expect(result.rejected.map((r) => [r.filament, r.key, r.reason])).toEqual([
+      [1, 'nozzle_temperature', expect.stringContaining('190–240')],
+      [1, 'filament_density', 'Tham số không nằm trong danh sách AI được phép đổi'],
+      [3, 'fan_max_speed', 'Đề xuất trùng lặp'],
+      [2, 'nozzle_temperature', expect.stringContaining('Bambu PLA Basic @BBL H2D')],
+      [9, 'fan_max_speed', expect.stringContaining('#9')],
+    ]);
+  });
+
+  it('normalizes per-variant values', () => {
+    const option = fullRequest.options!.nozzle_temperature;
+    expect(normalizeOptionValue(option, '210', '220,230,nil')).toEqual({ value: '210,220,nil' });
+    expect(normalizeOptionValue(option, '210', 'nil,nil')).toEqual({ value: '210,210' });
+    expect(normalizeOptionValue(option, '210,215', '220,230')).toEqual({ value: '210,215' });
+    expect(normalizeOptionValue(option, '210,215,220', '220,230')).toHaveProperty('error');
+    expect(normalizeOptionValue(option, '210.5', '220')).toHaveProperty('error');
+    expect(normalizeOptionValue(fullRequest.options!.spiral_mode, 'on', '0')).toEqual({ value: '1' });
+  });
+
+  it('lists the other settings and the filaments on the plate in the prompt', () => {
+    const prompt = buildUserPrompt(fullRequest, null);
+    expect(prompt).toContain('- gap_infill_speed (Gap infill, mm/s): hiện tại 250,250; số 1–1000');
+    expect(prompt).toContain('Tham số filament #1: Bambu PLA Basic @BBL H2D (PLA) (target "filament", filament 1):');
+    expect(prompt).toContain('- nozzle_temperature (Nozzle, °C): hiện tại 220,230; số nguyên 0–500');
+    expect(prompt).toContain('#3 Bambu PLA Basic @BBL H2D (PLA) (không dùng trên plate này)');
+    expect(prompt).not.toContain('top_one_wall_type');
+    expect(prompt).not.toContain('filament_density');
+    // AI_SETTINGS stay listed once, with their own ranges
+    expect(prompt.match(/- layer_height /g)).toHaveLength(1);
+  });
+
+  it('records filament values before the change and reports them with past prints', async () => {
+    const dir = mkdtempSync(path.join(os.tmpdir(), 'ai-sessions-'));
+    try {
+      const store = new AiSessionStore(dir);
+      const result = check([{ target: 'filament', filament: 1, key: 'fan_max_speed', value: '80', reason: 'Giảm cong vênh' }]);
+      const session = await store.create(fullRequest, result, null);
+      expect(session.settings_before).toEqual({ 'filament#1:fan_max_speed': '100,100' });
+      await store.markApplied(session.id, [{ target: 'filament', filament: 1, key: 'fan_max_speed', value: '80,80' }]);
+      await store.saveFeedback(session.id, { outcome: 'success', issues: [], note: '' });
+      const [past] = await store.pastPrints(fullRequest);
+      expect(past.changes).toEqual([{ key: 'filament#1:fan_max_speed', label: 'Fan max speed', before: '100,100', after: '80,80' }]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });
 
@@ -147,7 +301,7 @@ describe('POST /api/studio/ai-optimize', () => {
   });
 
   it('rejects a malformed Studio request', async () => {
-    const res = await app.inject({ method: 'POST', url: '/api/studio/ai-optimize', payload: { ...studioRequest, version: 2 } });
+    const res = await app.inject({ method: 'POST', url: '/api/studio/ai-optimize', payload: { ...studioRequest, version: 3 } });
     expect(res.statusCode).toBe(400);
     expect(res.json().error).toBe('INVALID_PAYLOAD');
     expect(prompts).toEqual([]);
@@ -175,7 +329,7 @@ describe('POST /api/studio/ai-optimize', () => {
     const body = res.json();
     expect(body.system).toContain('Bambu Lab H2D');
     expect(body.user).toContain('Máy in thực tế:');
-    expect(body.schema.properties.changes.items.properties.key.enum).toContain('enable_support');
+    expect(body.schema.properties.changes.items.properties.target.enum).toEqual(['process', 'filament']);
   });
 
   it('checks a proposal made by claude -p', async () => {
@@ -307,6 +461,114 @@ describe('AI sessions: re-ask, applied changes and print reports', () => {
     for (const id of ['20990101-000000-abcdef', '..%2F..%2Fetc']) {
       const res = await app.inject({ method: 'POST', url: `/api/studio/ai-sessions/${id}/feedback`, payload: { outcome: 'success' } });
       expect(res.statusCode, id).toBe(404);
+    }
+  });
+});
+
+describe('AI sessions: past prints in the prompt', () => {
+  let sessionDir: string;
+  let store: AiSessionStore;
+
+  beforeEach(() => {
+    sessionDir = mkdtempSync(path.join(os.tmpdir(), 'ai-sessions-'));
+    store = new AiSessionStore(sessionDir);
+  });
+
+  afterEach(() => {
+    rmSync(sessionDir, { recursive: true, force: true });
+  });
+
+  const supportResult = {
+    summary: 'Cần support.',
+    changes: [{ key: 'enable_support' as const, label: 'Bật support', value: '1', reason: 'Phần nhô lớn' }],
+    rejected: [],
+  };
+
+  /** A session for `request`, applied and reported unless told otherwise; `second` keeps ids in time order */
+  const printed = async (
+    request: StudioRequest,
+    second: number,
+    report: { applied?: boolean; feedback?: Parameters<AiSessionStore['saveFeedback']>[1] | null } = {}
+  ) => {
+    const session = await store.create(request, supportResult, null, new Date(2026, 9, 1, 10, 0, second));
+    if (report.applied !== false) await store.markApplied(session.id, [{ key: 'enable_support', value: '1' }]);
+    const feedback = report.feedback === undefined ? { outcome: 'usable' as const, issues: ['support_removal' as const], note: 'Support dính chặt' } : report.feedback;
+    if (feedback) await store.saveFeedback(session.id, feedback);
+    return session;
+  };
+
+  const petg: StudioRequest = { ...studioRequest, filaments: [{ preset: 'Bambu PETG HF @BBL H2D', type: 'PETG' }] };
+
+  it('keeps only applied and reported prints of the same material and nozzle', async () => {
+    const kept = await printed(studioRequest, 1);
+    await printed(studioRequest, 2, { applied: false });
+    await printed(studioRequest, 3, { feedback: null });
+    await printed(petg, 4);
+    await printed({ ...studioRequest, nozzle_diameters: [0.6, 0.6] }, 5);
+
+    const past = await store.pastPrints(studioRequest);
+    expect(past).toEqual([
+      {
+        created_at: kept.created_at,
+        goal: 'balanced',
+        process_preset: '0.20mm Standard @BBL H2D',
+        filaments: ['Bambu PLA Basic @BBL H2D (PLA)'],
+        objects: ['Bracket.stl 40×20×120 mm'],
+        changes: [{ key: 'enable_support', label: 'Bật support', before: '0', after: '1' }],
+        outcome: 'Có lỗi nhưng dùng được',
+        issues: ['Support khó gỡ'],
+        note: 'Support dính chặt',
+      },
+    ]);
+  });
+
+  it('puts the most similar plate first, then the newest', async () => {
+    const other = await printed({ ...studioRequest, goal: 'speed', process_preset: '0.28mm Extra Draft @BBL H2D' }, 1);
+    const older = await printed(studioRequest, 2);
+    const newer = await printed(studioRequest, 3);
+    const tiny = await printed(
+      { ...studioRequest, objects: [{ ...studioRequest.objects[0], name: 'Coin.stl', size_mm: [20, 20, 2], overhang_area_mm2: 0 }] },
+      4
+    );
+
+    const past = await store.pastPrints(studioRequest);
+    expect(past.map((p) => p.created_at)).toEqual([newer.created_at, older.created_at, tiny.created_at, other.created_at]);
+    expect(await store.pastPrints(studioRequest, 2)).toHaveLength(2);
+  });
+
+  it('describes past prints in the prompt, and leaves the section out without any', async () => {
+    await printed(studioRequest, 1, { feedback: { outcome: 'failed', issues: ['warping'], note: 'Bong góc "trái"' } });
+    const prompt = buildUserPrompt(studioRequest, null, null, await store.pastPrints(studioRequest));
+    expect(prompt).toContain('Kết quả in thực tế của các plate tương tự trên máy này');
+    expect(prompt).toContain('Đã đổi: enable_support (Bật support) 0 → 1');
+    expect(prompt).toContain('Kết quả: Hỏng, phải in lại; lỗi: Cong vênh, bong khỏi bàn');
+    expect(prompt).toContain('Ghi chú của người dùng: "Bong góc \\"trái\\""');
+    expect(buildUserPrompt(studioRequest, null)).not.toContain('Kết quả in thực tế');
+  });
+
+  it('sends past prints to the AI through the API', async () => {
+    const session = await printed(studioRequest, 1);
+    setAiSessionStore(store);
+    const stateStore = new PrinterStateStore('TEST_SERIAL_AI_PAST');
+    const capabilityRegistry = new CapabilityRegistry();
+    const mqtt = { publishRequest: async () => true };
+    const commandService = new PrinterCommandService(capabilityRegistry, stateStore, mqtt as any);
+    const app = createTestApp(new PrinterService({ serial: 'TEST_SERIAL_AI_PAST', stateStore, capabilityRegistry, commandService, mqttClient: mqtt as any }));
+    const prompts: string[] = [];
+    setAiProposalSource(async (_system, user) => {
+      prompts.push(user);
+      return { summary: 'Giữ nguyên.', changes: [] };
+    });
+    try {
+      expect((await app.inject({ method: 'POST', url: '/api/studio/ai-optimize', payload: studioRequest })).statusCode).toBe(200);
+      expect(prompts[0]).toContain(`1. ${session.created_at.slice(0, 10)}, mục tiêu balanced`);
+      const res = await app.inject({ method: 'POST', url: '/api/studio/ai-optimize/prompt', payload: studioRequest });
+      expect(res.json().user).toContain('Kết quả: Có lỗi nhưng dùng được; lỗi: Support khó gỡ');
+    } finally {
+      setAiProposalSource(null);
+      setAiSessionStore(null);
+      stateStore.destroy();
+      app.close();
     }
   });
 });

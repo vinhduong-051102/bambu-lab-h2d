@@ -7,7 +7,9 @@ result means rebuilding the image.
 A click (when this folder, mounted read-only at `/opt/studio-ai`, has an executable `on-click`):
 
 1. Studio writes `/tmp/studio-ai/request.json`: the printer, process and filament presets, every numeric,
-   on/off and choice setting of the edited process preset (the gateway picks the ones the AI may change), and each object's size, volume, bed-contact area and overhang area.
+   on/off and choice setting of the edited process preset and of each filament preset, how Studio defines each
+   of those settings (`options`: type, label, limits, choices), which filaments the current plate uses (the
+   gateway picks the settings the AI may change), and each object's size, volume, bed-contact area and overhang area.
 2. Studio runs `on-click /tmp/studio-ai/request.json /tmp/studio-ai/response.json` and waits without blocking
    (the button shows "AI đang phân tích...").
 3. `on-click` gets the setting changes from the gateway (`STUDIO_AI_URL`, default
@@ -17,8 +19,9 @@ A click (when this folder, mounted read-only at `/opt/studio-ai`, has an executa
      `{request, proposal}` to `$STUDIO_AI_URL/check`. Claude is billed to that Claude subscription.
    - without it: it posts the request to `$STUDIO_AI_URL`, and the gateway asks Claude with its `ANTHROPIC_API_KEY`.
 4. Studio lists the proposed changes with their reasons, with a box for the user's opinion:
-   - **Áp dụng** loads them into the edited process preset, as if they had been typed in the Process tab: they
-     show as modified and can be reset there. Studio then runs `gateway POST studio/ai-sessions/<id>/applied`
+   - **Áp dụng** loads them as if they had been typed in: process changes into the edited process preset, filament
+     changes into their filament preset, which Studio first opens in the Filament tab (asking about unsaved edits
+     of another filament preset, as switching by hand does). They show as modified and can be reset there. Studio then runs `gateway POST studio/ai-sessions/<id>/applied`
      so the gateway knows which proposal was used, and links it to the next print it sends.
    - **Hỏi lại AI** (once the box has text) runs step 1 again with `follow_up: {session_id, comment}` in the
      request: the gateway puts the earlier proposal and the comment in the prompt.
