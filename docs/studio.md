@@ -10,7 +10,7 @@ Without this setup, the **Bambu Studio** card stays hidden.
    ```bash
    docker compose -f docker-compose.studio.yml up -d --build
    ```
-   The image is linuxserver/bambustudio with Bambu Studio rebuilt from source, to add the **AI tối ưu** button (see [AI tối ưu button](#ai-tối-ưu-button)). The first build takes one to several hours and needs about 10 GB of RAM for Docker and 20 GB of disk. Later builds reuse the compiled dependencies.
+   The image is linuxserver/bambustudio with Bambu Studio rebuilt from source, to add the **AI tối ưu** button (see [AI tối ưu button](#ai-tối-ưu-button)). The first build takes one to several hours and needs about 10 GB of RAM for Docker and 20 GB of disk. Later builds reuse the compiled dependencies, and a BuildKit cache (ccache) of Studio's own sources, so changing a patch only recompiles the files it touches. `docker builder prune` clears both.
    Studio is then served on port **3100** (HTTP) and **3101** (HTTPS, self-signed certificate). Its settings live in `data/studio/config`, and files sent to it go to `data/studio/imports`.
 2. Add the following to `.env`, then restart the gateway:
    ```env
