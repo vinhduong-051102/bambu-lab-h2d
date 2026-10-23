@@ -1,5 +1,6 @@
 import { initStudio } from './studio';
 import { initCad } from './cad';
+import { initPages } from './pages';
 import { initPrintHistory } from './prints';
 import { initCameraZoom } from './cameraZoom';
 import { confirmDialog } from './confirmDialog';
@@ -674,9 +675,11 @@ export function initDashboard() {
   // Camera Info & Controls
   let cameraRetryTimer = null;
   let cameraRetryDelayMs = 3000;
+  // The camera card is only on the printer page: elsewhere the MJPEG stream is closed to save bandwidth
+  let cameraPaused = false;
 
   function restartCameraStream(resetBackoff = true) {
-    if (!cameraImg || disposed) return;
+    if (!cameraImg || disposed || cameraPaused) return;
     if (cameraRetryTimer) {
       clearTimeout(cameraRetryTimer);
       cameraRetryTimer = null;
@@ -1287,7 +1290,7 @@ export function initDashboard() {
   // (a one-off snapshot fallback used to leave the picture frozen for good).
   if (cameraImg) {
     cameraImg.onerror = () => {
-      if (disposed || cameraRetryTimer) return;
+      if (disposed || cameraPaused || cameraRetryTimer) return;
       cameraRetryTimer = setTimeout(() => {
         cameraRetryTimer = null;
         restartCameraStream(false);
@@ -1305,6 +1308,22 @@ export function initDashboard() {
   }
   const cameraStatusTimer = setInterval(fetchCameraStatus, 5000);
 
+  const disposePages = initPages({
+    onChange: (page, previous) => {
+      // Opening on the printer page: the stream was started above
+      if (!cameraImg || (previous === null && page === 'printer')) return;
+      cameraPaused = page !== 'printer';
+      if (!cameraPaused) {
+        restartCameraStream();
+        return;
+      }
+      if (cameraRetryTimer) {
+        clearTimeout(cameraRetryTimer);
+        cameraRetryTimer = null;
+      }
+      cameraImg.removeAttribute('src');
+    },
+  });
   const disposeStudio = initStudio({ showToast, addLog });
   const disposeCad = initCad({ showToast, addLog });
   const disposePrintHistory = initPrintHistory({ showToast, addLog });
@@ -1319,6 +1338,7 @@ export function initDashboard() {
 
   return () => {
     disposed = true;
+    disposePages();
     disposeStudio();
     disposeCad();
     disposePrintHistory();
