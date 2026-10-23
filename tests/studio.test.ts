@@ -9,6 +9,7 @@ import { PrinterService } from '../src/domain/PrinterService';
 import type { PrinterFileStorage } from '../src/bambu/BambuFtpClient';
 import { setPrinterStorageFactory } from '../src/bambu/printerStorage';
 import { env } from '../src/config/env';
+import { writeStl } from '../src/domain/studio/meshRepair';
 import { createTestApp, type TestApp } from './helpers/testApp';
 
 class MockStorage implements PrinterFileStorage {
@@ -81,9 +82,9 @@ describe('Studio & printer files API', () => {
   describe('embedded Bambu Studio', () => {
     let importDir: string;
 
-    const send = (name: string, content = 'solid c\nendsolid c\n') => {
+    const send = (name: string, content: string | Uint8Array = 'solid c\nendsolid c\n') => {
       const form = new FormData();
-      form.append('file', new File([content], name));
+      form.append('file', new File([typeof content === 'string' ? content : new Uint8Array(content)], name));
       return app.inject({ method: 'POST', url: '/api/studio/import', form });
     };
 
@@ -142,6 +143,26 @@ describe('Studio & printer files API', () => {
       expect(await fs.readFile(path.join(importDir, 'Bracket.stl'), 'utf8')).toBe('one');
       expect(await fs.readFile(path.join(importDir, 'Bracket (2).stl'), 'utf8')).toBe('two');
       expect((await fs.readdir(importDir)).filter((f) => f.endsWith('.part'))).toEqual([]);
+    });
+
+    it('repairs an STL mesh on import and keeps the file as sent', async () => {
+      // Unit cube missing its last face
+      const points = [[0, 0, 0], [1, 0, 0], [1, 1, 0], [0, 1, 0], [0, 0, 1], [1, 0, 1], [1, 1, 1], [0, 1, 1]].flat();
+      const faces = [[0, 2, 1], [0, 3, 2], [4, 5, 6], [4, 6, 7], [0, 1, 5], [0, 5, 4], [1, 2, 6], [1, 6, 5], [2, 3, 7], [2, 7, 6], [3, 0, 4]].flat();
+      const broken = writeStl(points, faces);
+
+      const res = await send('Cube.stl', broken);
+      expect(res.statusCode).toBe(201);
+      expect(res.json().repair).toMatchObject({ changed: true, holes_filled: 1, watertight: true, summary: 'đã vá 1 lỗ' });
+      expect((await fs.readFile(path.join(importDir, 'Cube.stl'))).readUInt32LE(80)).toBe(12);
+      expect(await fs.readFile(path.join(importDir, '.originals', 'Cube.stl'))).toEqual(broken);
+
+      // Not a mesh: imported as it is, with the reason
+      const text = await send('Notes.stl', 'not a mesh');
+      expect(text.json().repair.skipped).toMatch(/STL/);
+      expect(await fs.readFile(path.join(importDir, 'Notes.stl'), 'utf8')).toBe('not a mesh');
+      // Other formats aren't touched
+      expect((await send('Part.3mf', 'x')).json().repair).toBeUndefined();
     });
 
     it('strips directories from the browser-supplied name and rejects other types', async () => {

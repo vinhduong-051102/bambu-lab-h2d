@@ -77,6 +77,15 @@ export function initStudio({ showToast, addLog }) {
     });
   }
 
+  // The gateway repairs STL meshes on import (POST /api/studio/import → repair); the original is kept in
+  // /imports/.originals when it changed anything
+  function repairNote(repair) {
+    if (!repair) return '';
+    if (repair.skipped) return ` (chưa sửa lưới: ${repair.skipped})`;
+    if (repair.changed) return ` (đã sửa lưới: ${repair.summary}; bản gốc ở /imports/.originals)`;
+    return ` (lưới: ${repair.summary})`;
+  }
+
   async function importFiles(files) {
     if (files.length === 0) return;
     importLabel.classList.add('disabled');
@@ -85,7 +94,8 @@ export function initStudio({ showToast, addLog }) {
     try {
       for (const [i, file] of files.entries()) {
         const data = await uploadOne(file, i, files.length);
-        sent.push(data.studioPath);
+        sent.push(data.studioPath + repairNote(data.repair));
+        if (data.repair?.changed) addLog(`Đã sửa lưới ${data.name}: ${data.repair.summary}.`, 'success');
       }
       importStatus.textContent = `✅ Đã gửi: ${sent.join(', ')}. Trong Studio: File → Import → thư mục /imports.`;
       addLog(`Đã gửi ${sent.length} file vào Bambu Studio (/imports).`, 'success');

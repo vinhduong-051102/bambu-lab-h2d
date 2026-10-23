@@ -19,6 +19,7 @@ import {
   type StudioRequest,
 } from '../../domain/studio/aiOptimize';
 import { AiSessionStore, appliedSchema, feedbackSchema, PRINT_ISSUE_LABELS, PRINT_OUTCOME_LABELS } from '../../domain/studio/aiSessions';
+import { describeRepair, repairStl, StlParseError, type RepairReport } from '../../domain/studio/meshRepair';
 import { handler, json, readJsonBody } from '../http';
 
 const MAX_IMPORT_BYTES = 1024 * 1024 * 1024;
@@ -116,17 +117,46 @@ export const importToStudio = handler(async ({ request }) => {
 
   await fs.mkdir(dir, { recursive: true });
   const stored = await freeName(dir, name);
+  const original = new Uint8Array(await file.arrayBuffer());
+  const { content, repair } = repairImport(stored, original);
   // Written to a temp name first so Studio never sees a half-copied file
   const tempPath = path.join(dir, `.${stored}.part`);
   try {
-    await fs.writeFile(tempPath, new Uint8Array(await file.arrayBuffer()));
+    // The file as sent stays available (in a dot folder Studio's file dialog hides) when the repair changed it
+    if (repair && 'changed' in repair && repair.changed) {
+      await fs.mkdir(path.join(dir, ORIGINALS_DIR), { recursive: true });
+      await fs.writeFile(path.join(dir, ORIGINALS_DIR, stored), original);
+    }
+    await fs.writeFile(tempPath, content);
     await fs.rename(tempPath, path.join(dir, stored));
   } catch (err) {
     await fs.rm(tempPath, { force: true });
     return json({ success: false, error: 'WRITE_FAILED', message: `Không lưu được file: ${err instanceof Error ? err.message : String(err)}` }, 500);
   }
-  return json({ success: true, name: stored, studioPath: `/imports/${stored}` }, 201);
+  return json({ success: true, name: stored, studioPath: `/imports/${stored}`, ...(repair && { repair }) }, 201);
 });
+
+/** Folder (inside STUDIO_IMPORT_DIR) that keeps STL files as sent when the import repaired them */
+const ORIGINALS_DIR = '.originals';
+/** Larger STL files are imported as they are: the repair holds the whole mesh in memory */
+const MAX_REPAIR_BYTES = 200 * 1024 * 1024;
+
+type ImportRepair = (RepairReport & { summary: string }) | { skipped: string };
+
+/** An STL with its mesh repaired, or the file unchanged (other formats, too large, unreadable) */
+function repairImport(name: string, data: Uint8Array): { content: Uint8Array; repair: ImportRepair | null } {
+  if (!/\.stl$/i.test(name)) return { content: data, repair: null };
+  if (data.byteLength > MAX_REPAIR_BYTES) {
+    return { content: data, repair: { skipped: 'File lớn hơn 200 MB nên không tự sửa lưới.' } };
+  }
+  try {
+    const { stl, report } = repairStl(data);
+    return { content: report.changed ? new Uint8Array(stl) : data, repair: { ...report, summary: describeRepair(report) } };
+  } catch (err) {
+    const reason = err instanceof StlParseError ? err.message : `Lỗi khi sửa lưới: ${err instanceof Error ? err.message : String(err)}`;
+    return { content: data, repair: { skipped: reason } };
+  }
+}
 
 let proposalSourceOverride: ProposalSource | null = null;
 let sessionStoreOverride: AiSessionStore | null = null;

@@ -26,6 +26,8 @@ Without this setup, the **Bambu Studio** card stays hidden.
 ## Use
 
 1. **Send the model in.** Studio runs in a container, so its file dialogs can't see your computer. On the dashboard, use **📤 Gửi file vào Studio** to send `.3mf`, `.stl`, `.obj`, `.step` or `.stp` files. They are saved to `/imports` inside Studio, and an existing name gets a ` (2)` suffix. You can also drag files onto the Studio stream; those land in `/imports` too.
+
+   STL files sent from the dashboard are repaired on the way in, since Studio's own **Fix model** only exists on Windows. The gateway welds the mesh, removes faces that collapsed to a line or point and duplicate faces, flips faces that point against their neighbours, turns closed parts that are inside out, and closes holes it can fill safely. When it changed anything, the file as sent is kept in `/imports/.originals`, and the dashboard shows what was fixed. A repair that would leave more open or non-manifold edges than the file had is dropped, and the file is imported as sent. The gateway doesn't resolve self-intersections or non-manifold edges, and it doesn't repair STL files over 200 MB, other formats, or files dragged onto the stream.
 2. **Open it in Studio:** **▶ Mở Studio**, then **File → Import** (or **Open project** for a `.3mf`), and choose the `/imports` folder.
 3. **Slice and print from Studio:** **Slice plate**, then **Print plate**.
 
@@ -124,7 +126,7 @@ STUDIO_ALT_URLS=https://<machine>.<tailnet>.ts.net:8443/
 | Method | Path | |
 |---|---|---|
 | GET | `/api/studio` | `{ enabled, url, importsEnabled }` |
-| POST | `/api/studio/import` | `multipart/form-data` field `file`. Saves it to `STUDIO_IMPORT_DIR` and returns `{ success, name, studioPath }` |
+| POST | `/api/studio/import` | `multipart/form-data` field `file`. Saves it to `STUDIO_IMPORT_DIR` and returns `{ success, name, studioPath }`. For an STL, also `repair`: what the mesh repair did (`changed`, `holes_filled`, `faces_flipped`, `degenerate_removed`, `watertight`, …, `summary`), or `{ skipped }` with the reason |
 | POST | `/api/studio/ai-optimize` | Called by Studio's **AI tối ưu** button with the plate description Studio writes. Returns `{ success, session_id, summary, changes: [{ key, label, value, reason }], rejected }`; a filament change also has `target: "filament"`, `filament` (1-based) and `preset` and keeps it as a session. With `follow_up: { session_id, comment }` in the request, the earlier proposal and the comment go into the prompt. Reported prints of similar plates go into the prompt too. 501 without `ANTHROPIC_API_KEY` |
 | POST | `/api/studio/ai-optimize/prompt` | The same plate description in; `{ success, system, user, schema }` out, for `claude -p` in Studio's container. Needs no `ANTHROPIC_API_KEY` |
 | POST | `/api/studio/ai-optimize/check` | `{ request, proposal }`: the plate description and the proposal from `claude -p`. Same checks and answer as `/api/studio/ai-optimize` |
