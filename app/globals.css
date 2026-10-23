@@ -196,6 +196,80 @@ body {
   100% { opacity: 0.4; }
 }
 
+/* ---------- Pages (src/ui/pages.js) ---------- */
+.page-tabs {
+  display: flex;
+  gap: 6px;
+  padding: 6px;
+  background: var(--card-bg);
+  backdrop-filter: blur(12px);
+  border: 1px solid var(--card-border);
+  border-radius: var(--radius-lg);
+  overflow-x: auto;
+  scrollbar-width: none;
+  position: sticky;
+  top: 8px;
+  z-index: 20;
+}
+
+.page-tabs::-webkit-scrollbar {
+  display: none;
+}
+
+.page-tab {
+  position: relative;
+  flex: 0 0 auto;
+  padding: 9px 16px;
+  border-radius: var(--radius-md);
+  color: var(--text-muted);
+  font-size: 0.92rem;
+  font-weight: 500;
+  text-decoration: none;
+  white-space: nowrap;
+  transition: background var(--transition-fast), color var(--transition-fast);
+}
+
+.page-tab:hover {
+  color: var(--text-main);
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.page-tab.active {
+  color: #fff;
+  background: rgba(59, 130, 246, 0.22);
+  box-shadow: inset 0 0 0 1px rgba(59, 130, 246, 0.45);
+}
+
+.page-tab[hidden],
+.page-tab-dot[hidden] {
+  display: none;
+}
+
+/* A model is being designed on the AI page */
+.page-tab-dot {
+  position: absolute;
+  top: 7px;
+  right: 6px;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--primary-accent);
+  box-shadow: 0 0 6px var(--primary-glow);
+  animation: pulse 1.6s infinite;
+}
+
+/* Cards of the pages not shown; !important beats the cards' own display rules */
+.dashboard-grid > .page-hidden {
+  display: none !important;
+}
+
+@media (max-width: 640px) {
+  .page-tab {
+    padding: 8px 12px;
+    font-size: 0.85rem;
+  }
+}
+
 /* Control Quick Bar */
 .control-quick-bar {
   display: flex;
@@ -731,8 +805,6 @@ body {
   color: #e9d5ff;
 }
 
-body.compact-mode .console-card,
-body.compact-mode .diag-card,
 body.compact-mode .cam-help-box,
 body.compact-mode .header-badges,
 body.compact-mode #openApiModalBtn,
@@ -864,7 +936,7 @@ body.compact-mode .app-footer {
 
 /* AMS Card */
 .ams-card {
-  grid-column: span 6;
+  grid-column: span 12;
 }
 
 .ams-unit {
@@ -977,7 +1049,7 @@ body.compact-mode .app-footer {
 
 /* Console Card */
 .console-card {
-  grid-column: span 6;
+  grid-column: span 12;
 }
 
 .console-body {
@@ -2043,6 +2115,19 @@ button.is-loading::after,
   color: var(--text-muted);
   font-size: 0.8rem;
   overflow-wrap: anywhere;
+}
+
+/* Long prompts (revisions spell out every change) show 3 lines until clicked */
+.cad-prompt-text {
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  cursor: pointer;
+}
+
+.cad-prompt-text.expanded {
+  display: block;
 }
 
 .cad-progress {

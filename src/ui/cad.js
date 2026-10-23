@@ -86,7 +86,7 @@ export function renderJob(job) {
         <span class="print-badge cad-state-${escapeHtml(job.state)}">${escapeHtml(STATE_LABELS[job.state] ?? job.state)}</span>
       </div>
       <div class="cad-meta">${escapeHtml(formatPrintTime(job.created_at))} · ${escapeHtml(source)}${job.parent_id ? ' · bản sửa' : ''}</div>
-      ${job.title && job.title !== job.prompt ? `<div class="cad-prompt-text">${escapeHtml(job.prompt)}</div>` : ''}
+      ${job.title && job.title !== job.prompt ? `<div class="cad-prompt-text" title="Bấm để xem hết / thu gọn">${escapeHtml(job.prompt)}</div>` : ''}
       ${progress}${notes}${error}${report}
       ${warnings.length ? `<div class="cad-warnings">⚠️ ${warnings.map(escapeHtml).join('<br />⚠️ ')}</div>` : ''}
       ${details}${sent}
@@ -107,6 +107,8 @@ export function initCad({ showToast, addLog }) {
   const modelEl = $('cadModel');
   const createBtn = $('btnCadCreate');
   const statusEl = $('cadWorkerStatus');
+  // On the "Thiết kế AI" tab: shows while a model is being designed, seen from the other pages
+  const tabDot = $('cadTabDot');
   if (!card || !listEl) return () => {};
 
   let disposed = false;
@@ -127,6 +129,7 @@ export function initCad({ showToast, addLog }) {
   }
 
   function render() {
+    if (tabDot) tabDot.hidden = !jobs.some(isBusy);
     if (jobs.length === 0) {
       listEl.innerHTML = '<div class="prints-empty">Chưa có mô hình nào. Mô tả mô hình ở trên rồi bấm ✨ Tạo mô hình.</div>';
       rendered.clear();
@@ -206,6 +209,7 @@ export function initCad({ showToast, addLog }) {
   });
 
   listEl.addEventListener('click', async (event) => {
+    event.target.closest('.cad-prompt-text')?.classList.toggle('expanded');
     const button = event.target.closest('button[data-action]');
     const row = event.target.closest('.cad-row');
     if (!button || !row) return;

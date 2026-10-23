@@ -122,10 +122,18 @@ export function DashboardMarkup() {
             </button>
           </div>
         </section>
+        {/* Pages (src/ui/pages.js): each card below belongs to one through data-page; the URL hash picks it */}
+        <nav className="page-tabs" id="pageTabs" aria-label="Trang">
+          <a className="page-tab" href="#printer" data-page="printer">🖨️ Máy in</a>
+          <a className="page-tab" href="#studio" data-page="studio" hidden>🧩 Bambu Studio</a>
+          <a className="page-tab" href="#cad" data-page="cad" hidden>✨ Thiết kế AI<span className="page-tab-dot" id="cadTabDot" hidden /></a>
+          <a className="page-tab" href="#prints" data-page="prints">🕘 Lịch sử in</a>
+          <a className="page-tab" href="#system" data-page="system">🛠️ Hệ thống</a>
+        </nav>
         {/* Main Grid Content */}
         <main className="dashboard-grid">
           {/* Hero Card: Active Job & Progress */}
-          <section className="card job-hero-card">
+          <section data-page="printer" className="card job-hero-card">
             <div className="card-header">
               <div className="header-title">
                 <svg className="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
@@ -190,7 +198,7 @@ export function DashboardMarkup() {
             </div>
           </section>
           {/* Thermal Control Card */}
-          <section className="card temp-card">
+          <section data-page="printer" className="card temp-card">
             <div className="card-header">
               <div className="header-title">
                 <svg className="icon temp-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
@@ -351,7 +359,7 @@ export function DashboardMarkup() {
             </div>
           </section>
           {/* Live Camera Stream Card */}
-          <section className="card camera-card">
+          <section data-page="printer" className="card camera-card">
             <div className="card-header">
               <div className="header-title">
                 <svg className="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
@@ -502,7 +510,7 @@ export function DashboardMarkup() {
             </div>
           </section>
           {/* Cooling & Fans Control Card */}
-          <section className="card fan-card">
+          <section data-page="printer" className="card fan-card">
             <div className="card-header">
               <div className="header-title">
                 <svg className="icon fan-svg-icon" id="mainFanIcon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
@@ -583,7 +591,7 @@ export function DashboardMarkup() {
             </div>
           </section>
           {/* Bambu Studio Card: the real app streamed from its container (STUDIO_URL), exports staged for printing */}
-          <section className="card studio-card" id="studioCard" hidden>
+          <section data-page="studio" className="card studio-card" id="studioCard" hidden>
             <div className="card-header">
               <div className="header-title">
                 <svg className="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
@@ -615,7 +623,7 @@ export function DashboardMarkup() {
           </section>
 
           {/* AI modelling Card (src/ui/cad.js): Claude writes build123d models in the CAD container (CAD_WORKER_URL) */}
-          <section className="card cad-card" id="cadCard" hidden>
+          <section data-page="cad" className="card cad-card" id="cadCard" hidden>
             <div className="card-header">
               <div className="header-title">
                 <svg className="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
@@ -652,7 +660,7 @@ export function DashboardMarkup() {
           </section>
 
           {/* Print history Card (src/ui/prints.js) */}
-          <section className="card prints-card" id="printsCard">
+          <section data-page="prints" className="card prints-card" id="printsCard">
             <div className="card-header">
               <div className="header-title">
                 <svg className="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
@@ -676,7 +684,7 @@ export function DashboardMarkup() {
           </section>
 
           {/* AMS System Card */}
-          <section className="card ams-card">
+          <section data-page="printer" className="card ams-card">
             <div className="card-header">
               <div className="header-title">
                 <svg className="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
@@ -708,7 +716,7 @@ export function DashboardMarkup() {
             </div>
           </section>
           {/* Event Stream & Audit Log Console Card */}
-          <section className="card console-card">
+          <section data-page="system" className="card console-card">
             <div className="card-header">
               <div className="header-title">
                 <svg className="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
@@ -737,7 +745,7 @@ export function DashboardMarkup() {
             </div>
           </section>
           {/* Protocol Diagnostics & Raw Data Explorer Card */}
-          <section className="card diag-card">
+          <section data-page="system" className="card diag-card">
             <div className="card-header">
               <div className="header-title">
                 <svg className="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
