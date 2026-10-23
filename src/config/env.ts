@@ -61,6 +61,12 @@ const envSchema = z.object({
   STUDIO_AI_DATA_DIR: z.preprocess((val) => (typeof val === 'string' && val.trim() === '' ? undefined : val), z.string().default('./data/studio/ai')),
   // Print history: each print's camera photo when it ended, uploaded photos, the settings Studio sent and the report
   PRINT_HISTORY_DIR: z.preprocess((val) => (typeof val === 'string' && val.trim() === '' ? undefined : val), z.string().default('./data/prints')),
+  // CAD worker container (docker-compose.cad.yml) behind "Thiết kế mô hình bằng AI"; unset turns the feature off
+  CAD_WORKER_URL: z.preprocess((val) => (typeof val === 'string' && val.trim() === '' ? undefined : val), z.string().url().optional()),
+  // Host folder mounted at /jobs in the CAD container: one folder per model, with its code, files and status
+  CAD_JOBS_DIR: z.preprocess((val) => (typeof val === 'string' && val.trim() === '' ? undefined : val), z.string().default('./data/cad/jobs')),
+  // Claude model the dashboard offers first for new models (the CAD container's CAD_AI_MODEL is its own default)
+  CAD_AI_MODEL: z.preprocess((val) => (typeof val === 'string' && val.trim() === '' ? undefined : val), z.string().default('claude-opus-5-5')),
 });
 
 const _env = envSchema.safeParse(process.env);

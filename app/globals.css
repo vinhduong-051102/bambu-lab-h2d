@@ -1922,6 +1922,193 @@ button.is-loading::after,
   }
 }
 
+/* ---------- AI modelling (src/ui/cad.js) ---------- */
+.cad-card {
+  grid-column: span 12;
+}
+
+.cad-card[hidden],
+.cad-card [hidden] {
+  display: none !important;
+}
+
+.cad-worker-status {
+  align-self: center;
+  font-size: 0.8rem;
+  color: var(--text-muted);
+}
+
+.cad-form {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.cad-prompt,
+.cad-model,
+.cad-revise-input {
+  width: 100%;
+  background: rgba(0, 0, 0, 0.25);
+  color: var(--text-main);
+  border: 1px solid var(--card-border);
+  border-radius: var(--radius-sm);
+  padding: 8px 10px;
+  font: inherit;
+  font-size: 0.9rem;
+}
+
+.cad-prompt {
+  resize: vertical;
+  min-height: 70px;
+}
+
+.cad-prompt:focus,
+.cad-model:focus,
+.cad-revise-input:focus {
+  outline: none;
+  border-color: var(--primary-accent);
+}
+
+.cad-form-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.cad-model {
+  width: auto;
+  flex: 1;
+  min-width: 0;
+}
+
+.cad-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.cad-row {
+  display: grid;
+  grid-template-columns: 180px 1fr;
+  gap: 12px;
+  padding: 10px;
+  border: 1px solid var(--card-border);
+  border-radius: var(--radius-md);
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.cad-preview img,
+.cad-preview-empty {
+  display: block;
+  width: 180px;
+  height: 180px;
+  border-radius: var(--radius-sm);
+  background: #fff;
+  object-fit: contain;
+}
+
+.cad-preview-empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.25);
+  color: var(--text-muted);
+  font-size: 1.6rem;
+}
+
+.cad-body {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+  font-size: 0.85rem;
+}
+
+.cad-title-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.cad-title {
+  font-weight: 600;
+  font-size: 0.95rem;
+  overflow-wrap: anywhere;
+}
+
+.cad-meta,
+.cad-prompt-text,
+.cad-notes {
+  color: var(--text-muted);
+  font-size: 0.8rem;
+  overflow-wrap: anywhere;
+}
+
+.cad-progress {
+  color: #60a5fa;
+}
+
+.cad-error {
+  color: #f87171;
+  overflow-wrap: anywhere;
+}
+
+.cad-warnings {
+  color: #fbbf24;
+  font-size: 0.8rem;
+}
+
+.cad-details summary {
+  cursor: pointer;
+  color: var(--text-muted);
+}
+
+.cad-details ul {
+  margin: 4px 0 6px 18px;
+  padding: 0;
+}
+
+.cad-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.cad-actions a.btn-ams-action {
+  text-decoration: none;
+}
+
+.cad-revise {
+  display: flex;
+  gap: 6px;
+}
+
+.print-badge.cad-state-queued,
+.print-badge.cad-state-running { background: rgba(59, 130, 246, 0.18); color: #60a5fa; }
+.print-badge.cad-state-done { background: rgba(16, 185, 129, 0.2); color: #34d399; }
+.print-badge.cad-state-failed { background: rgba(239, 68, 68, 0.2); color: #f87171; }
+.print-badge.cad-state-cancelled { background: rgba(156, 163, 175, 0.2); color: var(--text-muted); }
+
+@media (max-width: 600px) {
+  .cad-row {
+    grid-template-columns: 1fr;
+  }
+
+  .cad-preview img,
+  .cad-preview-empty {
+    width: 100%;
+    height: auto;
+    aspect-ratio: 1;
+  }
+
+  .cad-form-row,
+  .cad-revise {
+    flex-direction: column;
+    align-items: stretch;
+  }
+}
+
 /* ---------- Print history (src/ui/prints.js) ---------- */
 .prints-card {
   grid-column: span 12;

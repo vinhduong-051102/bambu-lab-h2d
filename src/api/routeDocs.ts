@@ -75,6 +75,15 @@ export const GATEWAY_ROUTES: RouteDoc[] = [
   { method: 'GET', path: '/api/studio/ai-sessions/:id', category: 'Bambu Studio', description: 'Chi tiết một lần AI tối ưu: đề xuất, thay đổi đã áp dụng, báo cáo kết quả in' },
   { method: 'POST', path: '/api/studio/ai-sessions/:id/applied', category: 'Bambu Studio', description: 'Studio ghi lại các thay đổi người dùng đã áp dụng từ đề xuất AI', body: '{"changes": [{"key": "enable_support", "value": "1"}]}' },
   { method: 'POST', path: '/api/studio/ai-sessions/:id/feedback', category: 'Bambu Studio', description: 'Báo cáo kết quả in với setting AI đề xuất', body: '{"outcome": "usable", "issues": ["support_removal"], "note": "..."}' },
+  { method: 'GET', path: '/api/cad', category: 'Thiết kế AI', description: 'Thiết kế mô hình bằng AI có bật không (CAD_WORKER_URL), container CAD có chạy không, các model Claude dùng được', exampleUrl: '/api/cad' },
+  { method: 'GET', path: '/api/cad/guide', category: 'Thiết kế AI', description: 'Quy tắc thiết kế cho H2D và tóm tắt build123d (Markdown), cho Claude và Antigravity', exampleUrl: '/api/cad/guide' },
+  { method: 'GET', path: '/api/cad/jobs', category: 'Thiết kế AI', description: 'Các mô hình đã thiết kế, mới nhất trước', exampleUrl: '/api/cad/jobs?limit=30' },
+  { method: 'POST', path: '/api/cad/jobs', category: 'Thiết kế AI', description: 'Claude thiết kế mô hình từ mô tả (chạy nền bằng `claude -p` trong container CAD, tính vào gói Claude); parent_id để sửa một mô hình có sẵn', body: '{"prompt": "Giá đỡ điện thoại nghiêng 60°, dày 3 mm", "model": "claude-opus-5-5", "parent_id": null}' },
+  { method: 'POST', path: '/api/cad/builds', category: 'Thiết kế AI', description: 'Dựng code build123d có sẵn (Antigravity, script): xuất STL/STEP, ảnh xem trước và báo cáo kiểm tra', body: '{"code": "from build123d import *\\nresult = Box(20, 20, 10)", "title": "Khối thử"}' },
+  { method: 'GET', path: '/api/cad/jobs/:id', category: 'Thiết kế AI', description: 'Một mô hình: tiến độ, tóm tắt của Claude, báo cáo dựng và các file có sẵn', exampleUrl: '/api/cad/jobs/<id>' },
+  { method: 'POST', path: '/api/cad/jobs/:id/cancel', category: 'Thiết kế AI', description: 'Dừng Claude đang thiết kế mô hình', body: '{}' },
+  { method: 'POST', path: '/api/cad/jobs/:id/studio', category: 'Thiết kế AI', description: 'Gửi mô hình vào thư mục /imports của Bambu Studio (STL được tự sửa lưới)', body: '{"format": "stl"}' },
+  { method: 'GET', path: '/api/cad/jobs/:id/files/:name', category: 'Thiết kế AI', description: 'File của mô hình: model.py, model.stl, model.step, preview.png, report.json (?download=1 để tải về)', exampleUrl: '/api/cad/jobs/<id>/files/preview.png' },
 
   // Print history
   { method: 'GET', path: '/api/prints', category: 'Lịch sử in', description: 'Các bản in đã ghi lại (mới nhất trước): ảnh, kết quả, lựa chọn báo cáo', exampleUrl: '/api/prints?limit=50' },

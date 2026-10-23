@@ -614,6 +614,43 @@ export function DashboardMarkup() {
             </div>
           </section>
 
+          {/* AI modelling Card (src/ui/cad.js): Claude writes build123d models in the CAD container (CAD_WORKER_URL) */}
+          <section className="card cad-card" id="cadCard" hidden>
+            <div className="card-header">
+              <div className="header-title">
+                <svg className="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                  <path d="M12 2 3 7v10l9 5 9-5V7z" />
+                  <path d="m3 7 9 5 9-5M12 12v10" />
+                </svg>
+                <h2>Thiết kế mô hình bằng AI</h2>
+              </div>
+              <div className="studio-toolbar">
+                <span className="cad-worker-status" id="cadWorkerStatus" />
+                <button type="button" className="btn-ams-action" id="btnCadRefresh">↻ Làm mới</button>
+              </div>
+            </div>
+            <form className="cad-form" id="cadForm">
+              <textarea
+                id="cadPrompt"
+                className="cad-prompt"
+                rows={3}
+                maxLength={4000}
+                placeholder="Mô tả mô hình cần in, càng rõ kích thước càng tốt. Ví dụ: giá đỡ điện thoại nghiêng 60°, rộng 80 mm, dày 3 mm, có rãnh luồn cáp sạc."
+              />
+              <div className="cad-form-row">
+                <select id="cadModel" className="cad-model" aria-label="Model Claude" />
+                <button type="submit" className="btn-ams-action btn-ams-primary" id="btnCadCreate">✨ Tạo mô hình</button>
+              </div>
+            </form>
+            <div className="studio-note">
+              Claude viết code build123d, tự dựng, xem ảnh và sửa trong container CAD (tính vào giới hạn gói Claude, thường
+              vài phút). Mô hình làm từ Antigravity qua MCP <code>bambu-cad</code> cũng hiện ở đây.
+            </div>
+            <div className="cad-list" id="cadList">
+              <div className="prints-empty">⏳ Đang tải...</div>
+            </div>
+          </section>
+
           {/* Print history Card (src/ui/prints.js) */}
           <section className="card prints-card" id="printsCard">
             <div className="card-header">

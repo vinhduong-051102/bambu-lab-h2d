@@ -1,0 +1,207 @@
+"""
+Build runner: python build.py <model.py> [out dir]
+
+Runs a build123d model file (see guide.md: it assigns the finished solid to `result`), then writes to the out
+dir (default: out/ next to the model): model.stl, model.step, preview.png (four views) and report.json, which
+it also prints. Exits 1 when the model could not be built; report.json then says why.
+"""
+
+import json
+import math
+import runpy
+import struct
+import sys
+import time
+import traceback
+from pathlib import Path
+
+# Build plate of the H2D for one part (mm), and how far below Z = 0 a part may start before it counts as
+# not sitting on the plate
+MAX_SIZE = (320.0, 320.0, 320.0)
+PLATE_TOLERANCE = 0.05
+# Previews draw at most this many triangles (every n-th one beyond it), so a detailed mesh renders in seconds
+PREVIEW_TRIANGLES = 60000
+
+
+def read_stl(path):
+    """Binary STL → list of triangles, each three (x, y, z) tuples"""
+    data = path.read_bytes()
+    count = struct.unpack_from("<I", data, 80)[0]
+    triangles = []
+    for i in range(count):
+        values = struct.unpack_from("<12f", data, 84 + i * 50)
+        triangles.append((values[3:6], values[6:9], values[9:12]))
+    return triangles
+
+
+def mesh_check(triangles):
+    """Watertight when every edge is shared by exactly two triangles"""
+    edges = {}
+    for tri in triangles:
+        keys = [tuple(round(c, 4) for c in v) for v in tri]
+        for a, b in ((0, 1), (1, 2), (2, 0)):
+            edge = (keys[a], keys[b]) if keys[a] < keys[b] else (keys[b], keys[a])
+            edges[edge] = edges.get(edge, 0) + 1
+    open_edges = sum(1 for n in edges.values() if n == 1)
+    bad_edges = sum(1 for n in edges.values() if n > 2)
+    return {"triangles": len(triangles), "open_edges": open_edges, "non_manifold_edges": bad_edges,
+            "watertight": open_edges == 0 and bad_edges == 0}
+
+
+def feature_edges(tris, normals, limit=20000):
+    """Segments where the surface turns by more than 30°, or ends: the outline a CAD view would draw"""
+    import numpy as np
+
+    faces = {}
+    keys = np.round(tris, 4)
+    for t in range(len(tris)):
+        corners = [tuple(keys[t, i]) for i in range(3)]
+        for a, b in ((0, 1), (1, 2), (2, 0)):
+            edge = (corners[a], corners[b]) if corners[a] < corners[b] else (corners[b], corners[a])
+            faces.setdefault(edge, []).append(t)
+    sharp = math.cos(math.radians(30))
+    segments = [edge for edge, ts in faces.items()
+                if len(ts) != 2 or float(normals[ts[0]] @ normals[ts[1]]) < sharp]
+    return segments[:limit]
+
+
+def render_preview(triangles, size, path):
+    """Four views (isometric, front, right, top) in one PNG: shaded by light and by depth, outlined at sharp edges"""
+    import matplotlib.pyplot as plt
+    import numpy as np
+    from mpl_toolkits.mplot3d.art3d import Line3DCollection, Poly3DCollection
+
+    tris = np.array(triangles, dtype=float)
+    normals = np.cross(tris[:, 1] - tris[:, 0], tris[:, 2] - tris[:, 0])
+    lengths = np.linalg.norm(normals, axis=1)
+    normals = normals / np.where(lengths == 0, 1, lengths)[:, None]
+    edges = feature_edges(tris, normals) if len(tris) <= 4 * PREVIEW_TRIANGLES else []
+    if len(tris) > PREVIEW_TRIANGLES:
+        step = math.ceil(len(tris) / PREVIEW_TRIANGLES)
+        tris, normals = tris[::step], normals[::step]
+    centroids = tris.mean(axis=1)
+    lo, hi = tris.reshape(-1, 3).min(axis=0), tris.reshape(-1, 3).max(axis=0)
+    centre = (lo + hi) / 2
+    span = max(hi - lo) / 2 or 1
+
+    # (title, elevation, azimuth, axis hidden because the view looks along it)
+    views = [("Isometric", 30, -60, None), ("Front (−Y)", 0, -90, "y"), ("Right (+X)", 0, 0, "x"), ("Top", 90, -90, "z")]
+    fig = plt.figure(figsize=(10, 10), dpi=90)
+    fig.patch.set_facecolor("white")
+    for i, (title, elev, azim, hidden) in enumerate(views):
+        ax = fig.add_subplot(2, 2, i + 1, projection="3d")
+        ax.view_init(elev=elev, azim=azim)
+        e, a = math.radians(elev), math.radians(azim)
+        towards_viewer = np.array([math.cos(e) * math.cos(a), math.cos(e) * math.sin(a), math.sin(e)])
+        # Light from the viewer's upper left, so faces read differently in every view
+        le, la = math.radians(elev + 25), math.radians(azim - 30)
+        light = np.array([math.cos(le) * math.cos(la), math.cos(le) * math.sin(la), math.sin(le)])
+        shade = 0.4 + 0.6 * np.clip(normals @ light, 0, 1)
+        # Nearer faces lighter, so a floor reads apart from the rim above it in a straight-on view
+        depth = centroids @ towards_viewer
+        near = (depth - depth.min()) / ((depth.max() - depth.min()) or 1)
+        shade = shade * (0.6 + 0.4 * near)
+        colours = np.clip(np.column_stack([0.3 * shade + 0.05, 0.55 * shade + 0.1, 0.95 * shade, np.ones(len(shade))]), 0, 1)
+        # Edges in the face colour hide the seams between triangles
+        ax.add_collection3d(Poly3DCollection(tris, facecolors=colours, edgecolors=colours, linewidths=0.3))
+        if edges:
+            ax.add_collection3d(Line3DCollection(edges, colors="#0b1f3a", linewidths=0.6, alpha=0.8))
+        for setter, c in zip((ax.set_xlim, ax.set_ylim, ax.set_zlim), centre):
+            setter(c - span, c + span)
+        ax.set_box_aspect((1, 1, 1))
+        ax.set_proj_type("ortho")
+        for name, axis in (("x", ax.xaxis), ("y", ax.yaxis), ("z", ax.zaxis)):
+            if name == hidden:
+                axis.set_ticklabels([])
+                axis.set_label_text("")
+            else:
+                axis.set_label_text(name.upper())
+        ax.tick_params(labelsize=7)
+        ax.set_title(title, fontsize=11)
+    fig.suptitle(f"{size[0]:.1f} × {size[1]:.1f} × {size[2]:.1f} mm", fontsize=13)
+    fig.tight_layout()
+    fig.savefig(path)
+    plt.close(fig)
+
+
+def build(model, out):
+    from build123d import Compound, Shape, export_step, export_stl
+
+    namespace = runpy.run_path(str(model), run_name="__model__")
+    shape = namespace.get("result")
+    if shape is None:
+        raise ValueError("The model file does not assign the finished part to `result`.")
+    if isinstance(shape, (list, tuple)):
+        shape = Compound(children=list(shape))
+    if not isinstance(shape, Shape):
+        # Builders (BuildPart) hold their part in .part
+        shape = getattr(shape, "part", shape)
+    if not isinstance(shape, Shape):
+        raise ValueError(f"`result` is a {type(shape).__name__}, not a build123d shape.")
+    solids = shape.solids()
+    if not solids:
+        raise ValueError("`result` has no solids: it must be a 3D part, not a sketch, face or wire.")
+
+    box = shape.bounding_box()
+    size = (box.size.X, box.size.Y, box.size.Z)
+    volume = sum(s.volume for s in solids)
+    warnings = []
+    if any(s > m for s, m in zip(size, MAX_SIZE)):
+        warnings.append(f"Larger than the H2D's {MAX_SIZE[0]:.0f} × {MAX_SIZE[1]:.0f} × {MAX_SIZE[2]:.0f} mm.")
+    if abs(box.min.Z) > PLATE_TOLERANCE:
+        warnings.append(f"The lowest point is at Z = {box.min.Z:.2f} mm, not on the build plate (Z = 0).")
+    # A property since build123d 0.10, a method before
+    valid = shape.is_valid() if callable(shape.is_valid) else shape.is_valid
+    if not valid:
+        warnings.append("OpenCascade reports the shape as invalid (self-intersecting or broken faces).")
+    if volume <= 0:
+        warnings.append("The solids have no volume.")
+
+    stl, step, preview = out / "model.stl", out / "model.step", out / "preview.png"
+    export_stl(shape, str(stl), tolerance=0.01, angular_tolerance=0.1)
+    export_step(shape, str(step))
+    triangles = read_stl(stl)
+    mesh = mesh_check(triangles)
+    if not mesh["watertight"]:
+        warnings.append(f"The STL mesh is not watertight ({mesh['open_edges']} open, "
+                        f"{mesh['non_manifold_edges']} non-manifold edges).")
+    render_preview(triangles, size, preview)
+
+    return {
+        "size_mm": [round(v, 2) for v in size],
+        "min_mm": [round(box.min.X, 2), round(box.min.Y, 2), round(box.min.Z, 2)],
+        "max_mm": [round(box.max.X, 2), round(box.max.Y, 2), round(box.max.Z, 2)],
+        "volume_cm3": round(volume / 1000, 3),
+        "solids": len(solids),
+        "mesh": mesh,
+        "warnings": warnings,
+        "files": ["model.stl", "model.step", "preview.png"],
+    }
+
+
+def main():
+    if len(sys.argv) < 2:
+        print(__doc__)
+        sys.exit(2)
+    model = Path(sys.argv[1]).resolve()
+    out = Path(sys.argv[2]).resolve() if len(sys.argv) > 2 else model.parent / "out"
+    out.mkdir(parents=True, exist_ok=True)
+    for stale in ("model.stl", "model.step", "preview.png", "report.json"):
+        (out / stale).unlink(missing_ok=True)
+
+    started = time.monotonic()
+    try:
+        report = {"ok": True, **build(model, out)}
+    except Exception as err:  # noqa: BLE001 - the model's own errors are what the report is for
+        lines = traceback.format_exception(err)
+        # The runner's frames say nothing about the model; keep the ones from the model file onwards
+        start = next((i for i, line in enumerate(lines) if str(model) in line), 0)
+        report = {"ok": False, "error": f"{type(err).__name__}: {err}", "traceback": "".join(lines[start:])[-4000:]}
+    report["seconds"] = round(time.monotonic() - started, 1)
+    (out / "report.json").write_text(json.dumps(report, indent=2, ensure_ascii=False))
+    print(json.dumps(report, indent=2, ensure_ascii=False))
+    sys.exit(0 if report["ok"] else 1)
+
+
+if __name__ == "__main__":
+    main()
