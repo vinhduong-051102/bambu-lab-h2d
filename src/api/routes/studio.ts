@@ -1,4 +1,3 @@
-import { promises as fs } from 'fs';
 import os from 'os';
 import path from 'path';
 import Anthropic from '@anthropic-ai/sdk';
@@ -19,35 +18,12 @@ import {
   type StudioRequest,
 } from '../../domain/studio/aiOptimize';
 import { AiSessionStore, appliedSchema, feedbackSchema, PRINT_ISSUE_LABELS, PRINT_OUTCOME_LABELS } from '../../domain/studio/aiSessions';
-import { describeRepair, repairStl, StlParseError, type RepairReport } from '../../domain/studio/meshRepair';
+import { safeFileName, saveStudioImport, STUDIO_FILE_RE, type StudioImport } from '../../domain/studio/studioImports';
 import { handler, json, readJsonBody } from '../http';
 
 const MAX_IMPORT_BYTES = 1024 * 1024 * 1024;
 
-// Files Bambu Studio can open with File → Import / Open
-const STUDIO_FILE_RE = /\.(3mf|stl|obj|step|stp)$/i;
-
 const importDir = (): string | null => (env.STUDIO_IMPORT_DIR ? path.resolve(env.STUDIO_IMPORT_DIR) : null);
-
-/** Browser-supplied name → a plain file name with no path or control characters */
-function safeFileName(name: string): string {
-  const base = path.basename(name.replace(/\\/g, '/')).replace(/[\x00-\x1f<>:"|?*]/g, '_').trim();
-  return base === '.' || base === '..' ? '' : base;
-}
-
-/** "part.stl" → "part (2).stl" when the name is taken, so an upload never replaces a file Studio has open */
-async function freeName(dir: string, name: string): Promise<string> {
-  const match = name.match(/^(.*?)((?:\.gcode)?\.[^.]+)$/);
-  const [stem, ext] = match ? [match[1], match[2]] : [name, ''];
-  for (let i = 1; ; i++) {
-    const candidate = i === 1 ? name : `${stem} (${i})${ext}`;
-    try {
-      await fs.access(path.join(dir, candidate));
-    } catch {
-      return candidate;
-    }
-  }
-}
 
 /** Whether a host name or IP is this machine, i.e. Studio's container runs next to the gateway */
 function isThisMachine(hostname: string): boolean {
@@ -115,48 +91,14 @@ export const importToStudio = handler(async ({ request }) => {
     );
   }
 
-  await fs.mkdir(dir, { recursive: true });
-  const stored = await freeName(dir, name);
-  const original = new Uint8Array(await file.arrayBuffer());
-  const { content, repair } = repairImport(stored, original);
-  // Written to a temp name first so Studio never sees a half-copied file
-  const tempPath = path.join(dir, `.${stored}.part`);
+  let saved: StudioImport;
   try {
-    // The file as sent stays available (in a dot folder Studio's file dialog hides) when the repair changed it
-    if (repair && 'changed' in repair && repair.changed) {
-      await fs.mkdir(path.join(dir, ORIGINALS_DIR), { recursive: true });
-      await fs.writeFile(path.join(dir, ORIGINALS_DIR, stored), original);
-    }
-    await fs.writeFile(tempPath, content);
-    await fs.rename(tempPath, path.join(dir, stored));
+    saved = await saveStudioImport(dir, name, new Uint8Array(await file.arrayBuffer()));
   } catch (err) {
-    await fs.rm(tempPath, { force: true });
     return json({ success: false, error: 'WRITE_FAILED', message: `Không lưu được file: ${err instanceof Error ? err.message : String(err)}` }, 500);
   }
-  return json({ success: true, name: stored, studioPath: `/imports/${stored}`, ...(repair && { repair }) }, 201);
+  return json({ success: true, name: saved.name, studioPath: `/imports/${saved.name}`, ...(saved.repair && { repair: saved.repair }) }, 201);
 });
-
-/** Folder (inside STUDIO_IMPORT_DIR) that keeps STL files as sent when the import repaired them */
-const ORIGINALS_DIR = '.originals';
-/** Larger STL files are imported as they are: the repair holds the whole mesh in memory */
-const MAX_REPAIR_BYTES = 200 * 1024 * 1024;
-
-type ImportRepair = (RepairReport & { summary: string }) | { skipped: string };
-
-/** An STL with its mesh repaired, or the file unchanged (other formats, too large, unreadable) */
-function repairImport(name: string, data: Uint8Array): { content: Uint8Array; repair: ImportRepair | null } {
-  if (!/\.stl$/i.test(name)) return { content: data, repair: null };
-  if (data.byteLength > MAX_REPAIR_BYTES) {
-    return { content: data, repair: { skipped: 'File lớn hơn 200 MB nên không tự sửa lưới.' } };
-  }
-  try {
-    const { stl, report } = repairStl(data);
-    return { content: report.changed ? new Uint8Array(stl) : data, repair: { ...report, summary: describeRepair(report) } };
-  } catch (err) {
-    const reason = err instanceof StlParseError ? err.message : `Lỗi khi sửa lưới: ${err instanceof Error ? err.message : String(err)}`;
-    return { content: data, repair: { skipped: reason } };
-  }
-}
 
 let proposalSourceOverride: ProposalSource | null = null;
 let sessionStoreOverride: AiSessionStore | null = null;

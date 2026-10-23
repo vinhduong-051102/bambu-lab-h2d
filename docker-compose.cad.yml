@@ -1,0 +1,30 @@
+# CAD worker for "Thiết kế mô hình bằng AI" on the dashboard (see docs/cad.md).
+#   docker compose -f docker-compose.cad.yml up -d --build
+# Then in .env: CAD_WORKER_URL=http://127.0.0.1:3102 (and CAD_JOBS_DIR=./data/cad/jobs, the default)
+services:
+  cad:
+    build: ./cad
+    image: bambu-lab-h2d/cad:latest
+    container_name: bambu-cad
+    restart: unless-stopped
+    environment:
+      - JOBS_DIR=/jobs
+      # Claude writes the models on your Claude subscription (`claude setup-token`), like Studio's "AI tối ưu"
+      - CLAUDE_CODE_OAUTH_TOKEN=${CLAUDE_CODE_OAUTH_TOKEN:-}
+      - CAD_AI_MODEL=${CAD_AI_MODEL:-claude-opus-5-5}
+      - TZ=Asia/Ho_Chi_Minh
+    volumes:
+      # Shared with the gateway (CAD_JOBS_DIR): one folder per job
+      - ./data/cad/jobs:/jobs
+      # The worker, build runner, Claude's instructions and the modelling guide, editable without a rebuild
+      - ./cad:/opt/cad:ro
+    ports:
+      # Only the gateway on this machine talks to the worker: it runs the model code it is given
+      - "127.0.0.1:3102:8000"
+    # Model code is untrusted: keep the container small and unprivileged
+    mem_limit: 4g
+    pids_limit: 512
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
