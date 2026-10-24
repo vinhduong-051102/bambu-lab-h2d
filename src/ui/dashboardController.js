@@ -2,6 +2,7 @@ import { initStudio } from './studio';
 import { initCad } from './cad';
 import { initPages } from './pages';
 import { initPrintHistory } from './prints';
+import { initTimelapse } from './timelapse';
 import { initCameraZoom } from './cameraZoom';
 import { confirmDialog } from './confirmDialog';
 
@@ -1327,6 +1328,7 @@ export function initDashboard() {
   const disposeStudio = initStudio({ showToast, addLog });
   const disposeCad = initCad({ showToast, addLog });
   const disposePrintHistory = initPrintHistory({ showToast, addLog });
+  const disposeTimelapse = initTimelapse({ showToast, addLog });
   const disposeCameraZoom = initCameraZoom({
     viewport: document.getElementById('cameraViewport'),
     img: cameraImg,
@@ -1342,6 +1344,7 @@ export function initDashboard() {
     disposeStudio();
     disposeCad();
     disposePrintHistory();
+    disposeTimelapse();
     disposeCameraZoom();
     clearInterval(cameraStatusTimer);
     if (cameraRetryTimer) clearTimeout(cameraRetryTimer);

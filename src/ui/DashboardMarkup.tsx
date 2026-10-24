@@ -683,6 +683,25 @@ export function DashboardMarkup() {
             </div>
           </section>
 
+          {/* Timelapse videos on the printer (src/ui/timelapse.js) */}
+          <section data-page="prints" className="card timelapse-card" id="timelapseCard">
+            <div className="card-header">
+              <div className="header-title">
+                <svg className="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                  <rect x="2" y="5" width="15" height="14" rx="2" />
+                  <path d="M17 10l5-3v10l-5-3z" />
+                </svg>
+                <h2>Timelapse</h2>
+              </div>
+              <div className="studio-toolbar">
+                <button type="button" className="btn-ams-action" id="btnTimelapseRefresh">↻ Làm mới</button>
+              </div>
+            </div>
+            <div className="timelapse-list" id="timelapseList">
+              <div className="prints-empty">⏳ Đang đọc timelapse trên máy in...</div>
+            </div>
+          </section>
+
           {/* AMS System Card */}
           <section data-page="printer" className="card ams-card">
             <div className="card-header">

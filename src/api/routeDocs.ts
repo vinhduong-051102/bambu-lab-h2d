@@ -85,6 +85,11 @@ export const GATEWAY_ROUTES: RouteDoc[] = [
   { method: 'POST', path: '/api/cad/jobs/:id/studio', category: 'Thiết kế AI', description: 'Gửi mô hình vào thư mục /imports của Bambu Studio (STL được tự sửa lưới)', body: '{"format": "stl"}' },
   { method: 'GET', path: '/api/cad/jobs/:id/files/:name', category: 'Thiết kế AI', description: 'File của mô hình: model.py, model.stl, model.step, preview.png, report.json (?download=1 để tải về)', exampleUrl: '/api/cad/jobs/<id>/files/preview.png' },
 
+  // Timelapse
+  { method: 'GET', path: '/api/timelapse', category: 'Lịch sử in', description: 'Video timelapse trên máy in (mới nhất trước), kèm bản in tương ứng trong lịch sử', exampleUrl: '/api/timelapse' },
+  { method: 'GET', path: '/api/timelapse/:name', category: 'Lịch sử in', description: 'Phát/tải video timelapse (lấy từ máy in lần đầu xem, hỗ trợ tua)' },
+  { method: 'GET', path: '/api/timelapse/:name/thumbnail', category: 'Lịch sử in', description: 'Ảnh thumbnail của video timelapse' },
+
   // Print history
   { method: 'GET', path: '/api/prints', category: 'Lịch sử in', description: 'Các bản in đã ghi lại (mới nhất trước): ảnh, kết quả, lựa chọn báo cáo', exampleUrl: '/api/prints?limit=50' },
   { method: 'GET', path: '/api/prints/:id', category: 'Lịch sử in', description: 'Chi tiết một bản in: setting Studio đã dùng, ảnh, báo cáo' },

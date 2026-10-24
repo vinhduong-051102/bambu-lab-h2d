@@ -55,6 +55,12 @@ The dashboard's **Lịch sử in** card lists the prints with their photos, sett
 
 Each print is a folder in `PRINT_HISTORY_DIR` (default `./data/prints`) with `record.json` and its photos. The gateway only records prints while it is running. A print it first sees already running is recorded without a start time.
 
+### Timelapse
+
+The printer keeps its timelapse videos in `/timelapse` on its storage (`video_<date>_<time>.mp4`, with a thumbnail in `/timelapse/thumbnail`). It only records one when **Timelapse** is ticked in Studio's send dialog. The **Timelapse** card on the dashboard's **Lịch sử in** page lists them, newest first, with their thumbnails, and plays one in a window with a **⬇ Tải về** link. A video is paired with the print in the history that ended within 20 minutes of it, and also plays in that print's detail window.
+
+The gateway reads the printer's listing over FTPS (cached for 30 seconds) and copies a video or thumbnail to `TIMELAPSE_CACHE_DIR` (default `./data/timelapse`) the first time it is watched. The first play of a video takes a few seconds (about 0.7 MB per second from this printer), and later plays and seeking come from the copy. The cache isn't cleared automatically. The time in a video's file name is the printer's own clock (UTC+8 on this printer), so the dashboard shows the time the printer finished writing the file instead.
+
 To turn it on, either sign in with a Claude subscription (Pro/Max) or give the gateway an API key.
 
 **With a Claude subscription, no API key.** Studio's container asks Claude itself with `claude -p` (Claude Code, installed in the image), billed to your subscription's usage limits. The gateway still builds the prompt and checks the answer. Create a long-lived token on any machine with Claude Code, put it in `.env`, then recreate the Studio container:
@@ -140,3 +146,6 @@ STUDIO_ALT_URLS=https://<machine>.<tailnet>.ts.net:8443/
 | POST | `/api/prints/:id/feedback` | `{ outcome, issues, note }`: the report on the print, also saved on its AI proposal |
 | POST | `/api/prints/:id/photos` | `multipart/form-data` field `file`: a JPEG, PNG or WebP photo up to 20 MB |
 | GET / DELETE | `/api/prints/:id/photos/:name` | The photo, or remove it |
+| GET | `/api/timelapse?refresh=1` | Timelapse videos on the printer, newest first: `{ name, size, ended_at, name_time, has_thumbnail, print }`, where `print` is the paired print or null. `refresh=1` skips the 30-second listing cache |
+| GET | `/api/timelapse/:name` | The video, copied from the printer on first view. Answers `Range` requests (206) |
+| GET | `/api/timelapse/:name/thumbnail` | The printer's thumbnail of the video (JPEG) |

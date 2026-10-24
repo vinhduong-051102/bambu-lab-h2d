@@ -40,6 +40,8 @@ export interface InjectOptions {
   payload?: unknown;
   /** multipart/form-data body (the Request sets the boundary header itself) */
   form?: FormData;
+  /** Extra request headers, e.g. Range */
+  headers?: Record<string, string>;
 }
 
 export interface InjectResponse {
@@ -63,7 +65,7 @@ export function createTestApp(printerService: PrinterService, printerManager?: P
   setRuntime({ printerService, printerManager });
 
   return {
-    async inject({ method, url, payload, form }) {
+    async inject({ method, url, payload, form, headers }) {
       const { pathname } = new URL(url, 'http://localhost');
       let response: Response | undefined;
 
@@ -80,7 +82,7 @@ export function createTestApp(printerService: PrinterService, printerManager?: P
         const params = Object.fromEntries(route.paramNames.map((name, i) => [name, decodeURIComponent(match[i + 1])]));
         const request = new Request(new URL(url, 'http://localhost'), {
           method,
-          headers: payload !== undefined ? { 'Content-Type': 'application/json' } : undefined,
+          headers: { ...(payload !== undefined && { 'Content-Type': 'application/json' }), ...headers },
           body: form ?? (payload !== undefined ? JSON.stringify(payload) : undefined),
         });
         response = await routeHandler(request, { params: Promise.resolve(params) });

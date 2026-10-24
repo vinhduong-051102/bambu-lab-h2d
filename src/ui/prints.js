@@ -442,6 +442,8 @@ export function initPrintHistory({ showToast, addLog }) {
           ${photosHtml(print, { deletable: true })}
         </section>
 
+        <section class="print-section print-timelapse" hidden></section>
+
         <section class="print-section">
           <h4>Thiết lập khi in</h4>
           ${setupHtml(print.setup)}
@@ -483,6 +485,25 @@ export function initPrintHistory({ showToast, addLog }) {
         filter = e.target.value;
         renderSettings();
       });
+
+      // Timelapse: the printer's video of this print, when there is one (GET /api/timelapse pairs them)
+      const timelapseBox = body.querySelector('.print-timelapse');
+      fetchJson('/api/timelapse')
+        .then(({ videos }) => {
+          const video = videos.find((v) => v.print?.id === print.id);
+          if (!video || !modal.isOpen() || !timelapseBox.isConnected) return;
+          const src = `/api/timelapse/${encodeURIComponent(video.name)}`;
+          timelapseBox.innerHTML = `
+            <div class="print-section-head">
+              <h4>Timelapse</h4>
+              <a class="btn-ams-action" href="${escapeHtml(src)}" download="${escapeHtml(video.name)}">⬇ Tải về</a>
+            </div>
+            <video class="timelapse-video" controls playsinline preload="metadata" src="${escapeHtml(src)}"></video>`;
+          timelapseBox.hidden = false;
+        })
+        .catch(() => {
+          // No timelapse section when the printer can't be read: the rest of the print still shows
+        });
 
       // Photos: upload one by one, then reload the print and the list
       const uploadLabel = body.querySelector('.print-upload-btn');
