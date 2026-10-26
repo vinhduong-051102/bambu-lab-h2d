@@ -55,7 +55,7 @@ Tests mock MQTT connection automatically and verify state normalization, capabil
 | `app/api/**/route.ts` | Route Handlers; thin re-exports of `src/api/routes/*` |
 | `src/api/routes/*` | REST endpoint logic (framework-agnostic `Request` → `Response`) |
 | `src/runtime/` | Gateway bootstrap and the shared runtime registry |
-| `src/ui/` | Dashboard client component, markup and browser script |
+| `src/ui/` | Dashboard: React + antd components (one folder per page), the live-data context and pure helpers |
 
 Adding an endpoint: write the handler in `src/api/routes/<area>.ts` using `handler()` from `src/api/http.ts`,
 then add `app/api/<path>/route.ts` exporting it as `GET`/`POST`/... with `export const dynamic = 'force-dynamic'`.
