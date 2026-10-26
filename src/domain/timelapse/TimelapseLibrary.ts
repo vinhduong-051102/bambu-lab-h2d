@@ -136,18 +136,24 @@ export class TimelapseLibrary {
   }
 }
 
-/** The print whose end is closest to the video's, within `toleranceMs` */
-export function matchPrint<P extends { id: string; ended_at: string | null }>(
+/**
+ * The print that names this video as its timelapse or, among the prints naming none, the one whose end is
+ * closest to the video's, within `toleranceMs`. The time only works while the printer's clock is right:
+ * it was 10 days behind in October 2026, and those videos are named on their prints.
+ */
+export function matchPrint<P extends { id: string; ended_at: string | null; timelapse?: string }>(
   video: TimelapseVideo,
   prints: P[],
   toleranceMs = 20 * 60 * 1000
 ): P | null {
+  const named = prints.find((p) => p.timelapse === video.name);
+  if (named) return named;
   if (!video.ended_at) return null;
   const end = Date.parse(video.ended_at);
   let best: P | null = null;
   let bestGap = toleranceMs;
   for (const print of prints) {
-    if (!print.ended_at) continue;
+    if (!print.ended_at || print.timelapse) continue;
     const gap = Math.abs(Date.parse(print.ended_at) - end);
     if (gap <= bestGap) {
       best = print;

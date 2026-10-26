@@ -43,6 +43,8 @@ export interface PrintRecord {
   setup: PrintSetup | null;
   photos: PrintPhoto[];
   feedback: (PrintFeedback & { at: string }) | null;
+  /** The name of the printer's timelapse video of this print, when it was paired by hand (see matchPrint) */
+  timelapse?: string;
   /** The local AI's review of the print's timelapse, once the user chose to use it for later prints */
   video_review?: TimelapseReview;
 }

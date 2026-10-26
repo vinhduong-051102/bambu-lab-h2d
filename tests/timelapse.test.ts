@@ -65,6 +65,15 @@ describe('timelapse listing', () => {
     expect(matchPrint(video, [{ id: 'far', ended_at: '2026-10-11T12:00:00.000Z' }])).toBeNull();
   });
 
+  it('pairs a video named on a print whatever the times, and keeps that print for it', () => {
+    const video = { name: 'v.mp4', size: 1, ended_at: '2026-10-11T16:51:00.000Z', name_time: null, has_thumbnail: false };
+    // The printer's clock was days behind
+    const named = { id: 'named', ended_at: '2026-10-21T23:00:00.000Z', timelapse: 'v.mp4' };
+    expect(matchPrint(video, [{ id: 'near', ended_at: '2026-10-11T16:50:10.000Z' }, named])?.id).toBe('named');
+    const other = { ...video, name: 'other.mp4' };
+    expect(matchPrint(other, [{ id: 'near', ended_at: '2026-10-11T16:50:10.000Z', timelapse: 'v.mp4' }])).toBeNull();
+  });
+
   it('lists videos newest first, caches the listing and the downloads', async () => {
     const dir = mkdtempSync(path.join(os.tmpdir(), 'timelapse-'));
     try {
