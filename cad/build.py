@@ -65,8 +65,14 @@ def feature_edges(tris, normals, limit=20000):
     return segments[:limit]
 
 
-def render_preview(triangles, size, path):
-    """Four views (isometric, front, right, top) in one PNG: shaded by light and by depth, outlined at sharp edges"""
+# (title, elevation, azimuth, axis hidden because the view looks along it)
+VIEWS = [("Isometric", 30, -60, None), ("Front (−Y)", 0, -90, "y"), ("Right (+X)", 0, 0, "x"), ("Top", 90, -90, "z")]
+
+
+def render_preview(triangles, size, path, face_colours=None, views=VIEWS):
+    """Four views (isometric, front, right, top) in one PNG: shaded by light and by depth, outlined at sharp edges.
+    face_colours (sRGB 0–255 per triangle) paints a coloured figure in its filaments instead of the usual blue.
+    `views` replaces the four, in rows of two (three when there are more than four)."""
     import matplotlib.pyplot as plt
     import numpy as np
     from mpl_toolkits.mplot3d.art3d import Line3DCollection, Poly3DCollection
@@ -76,20 +82,22 @@ def render_preview(triangles, size, path):
     lengths = np.linalg.norm(normals, axis=1)
     normals = normals / np.where(lengths == 0, 1, lengths)[:, None]
     edges = feature_edges(tris, normals) if len(tris) <= 4 * PREVIEW_TRIANGLES else []
+    base = np.asarray(face_colours, dtype=float) / 255 if face_colours is not None else None
     if len(tris) > PREVIEW_TRIANGLES:
         step = math.ceil(len(tris) / PREVIEW_TRIANGLES)
         tris, normals = tris[::step], normals[::step]
+        base = base[::step] if base is not None else None
     centroids = tris.mean(axis=1)
     lo, hi = tris.reshape(-1, 3).min(axis=0), tris.reshape(-1, 3).max(axis=0)
     centre = (lo + hi) / 2
     span = max(hi - lo) / 2 or 1
 
-    # (title, elevation, azimuth, axis hidden because the view looks along it)
-    views = [("Isometric", 30, -60, None), ("Front (−Y)", 0, -90, "y"), ("Right (+X)", 0, 0, "x"), ("Top", 90, -90, "z")]
-    fig = plt.figure(figsize=(10, 10), dpi=90)
+    columns = 3 if len(views) > 4 else 2
+    rows = math.ceil(len(views) / columns)
+    fig = plt.figure(figsize=(5 * columns, 5 * rows), dpi=90)
     fig.patch.set_facecolor("white")
     for i, (title, elev, azim, hidden) in enumerate(views):
-        ax = fig.add_subplot(2, 2, i + 1, projection="3d")
+        ax = fig.add_subplot(rows, columns, i + 1, projection="3d")
         ax.view_init(elev=elev, azim=azim)
         e, a = math.radians(elev), math.radians(azim)
         towards_viewer = np.array([math.cos(e) * math.cos(a), math.cos(e) * math.sin(a), math.sin(e)])
@@ -101,10 +109,14 @@ def render_preview(triangles, size, path):
         depth = centroids @ towards_viewer
         near = (depth - depth.min()) / ((depth.max() - depth.min()) or 1)
         shade = shade * (0.6 + 0.4 * near)
-        colours = np.clip(np.column_stack([0.3 * shade + 0.05, 0.55 * shade + 0.1, 0.95 * shade, np.ones(len(shade))]), 0, 1)
+        if base is not None:
+            colours = np.clip(np.column_stack([base * (0.35 + 0.75 * shade)[:, None], np.ones(len(shade))]), 0, 1)
+        else:
+            colours = np.clip(np.column_stack([0.3 * shade + 0.05, 0.55 * shade + 0.1, 0.95 * shade, np.ones(len(shade))]), 0, 1)
         # Edges in the face colour hide the seams between triangles
         ax.add_collection3d(Poly3DCollection(tris, facecolors=colours, edgecolors=colours, linewidths=0.3))
-        if edges:
+        # A coloured figure's own boundaries between colours say enough; edges would cover them
+        if edges and base is None:
             ax.add_collection3d(Line3DCollection(edges, colors="#0b1f3a", linewidths=0.6, alpha=0.8))
         for setter, c in zip((ax.set_xlim, ax.set_ylim, ax.set_zlim), centre):
             setter(c - span, c + span)

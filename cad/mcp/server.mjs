@@ -8,6 +8,8 @@
  *
  * No dependencies: MCP over stdio is newline-delimited JSON-RPC 2.0, and this server only offers tools.
  */
+import { readFile } from 'node:fs/promises';
+import { basename } from 'node:path';
 import { createInterface } from 'node:readline';
 
 const GATEWAY_URL = (process.env.GATEWAY_URL || 'http://localhost:3000').replace(/\/+$/, '');
@@ -79,6 +81,46 @@ const TOOLS = [
     },
   },
   {
+    name: 'cad_make_figure',
+    description:
+      'Make an organic model (character, animal, statue, decoration) with Hunyuan3D-2 on the gateway\'s GPU, from a ' +
+      'picture on this computer and/or a description, sized for printing. build123d cannot make such shapes. Best ' +
+      'from one subject in front three-quarter view on a plain background. Runs in the background for about a ' +
+      'minute (more when the model first loads): follow it with cad_get_job.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        prompt: { type: 'string', description: 'What to make; without image_path the picture is drawn from it' },
+        image_path: { type: 'string', description: 'A PNG, JPEG or WebP file on this computer' },
+        height_mm: { type: 'number', minimum: 10, maximum: 300, description: 'Height of the figure, default 80' },
+        base: { type: 'boolean', description: 'Add a round plinth so it stands steadily (default false)' },
+        colour: { type: 'boolean', description: 'Print it in several filaments: texture it, then paint a 3MF (adds 1-2 minutes)' },
+        colours: { type: 'integer', minimum: 2, maximum: 8, description: 'How many filaments, default 4' },
+        palette: { type: 'string', enum: ['auto', 'ams'], description: 'ams: use the colours loaded in the AMS instead' },
+        parent_id: { type: 'string', description: 'A figure job to make again from its picture with a new seed' },
+      },
+      additionalProperties: false,
+    },
+  },
+  {
+    name: 'cad_fix_figure',
+    description:
+      'Have Claude review a finished figure (from cad_make_figure, or a fix of one) against its picture from six ' +
+      'sides and fix it with mesh code: feet cut off, loose bits, crumpled surfaces, holes, thin parts, or what ' +
+      'the prompt asks. Keeps its size, pose and filament colours. A new job; runs in the background for several ' +
+      'minutes on the user\'s Claude subscription: follow it with cad_get_job.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        job_id: { type: 'string', description: 'The finished figure to fix' },
+        prompt: { type: 'string', description: 'What to fix; leave out to let Claude find the problems itself' },
+        model: { type: 'string', enum: ['claude-opus-5-5', 'claude-sonnet-5-5'] },
+      },
+      required: ['job_id'],
+      additionalProperties: false,
+    },
+  },
+  {
     name: 'cad_ask_claude',
     description:
       'Hand a model request to Claude in the CAD container instead (it runs on the user\'s Claude subscription, ' +
@@ -101,13 +143,15 @@ class GatewayError extends Error {}
 async function gateway(method, route, body) {
   let res;
   try {
+    // FormData (a picture upload) sets its own multipart Content-Type
+    const form = body instanceof FormData;
     res = await fetch(`${GATEWAY_URL}${route}`, {
       method,
       headers: {
-        ...(body !== undefined && { 'Content-Type': 'application/json' }),
+        ...(body !== undefined && !form && { 'Content-Type': 'application/json' }),
         ...(API_KEY && { Authorization: `Bearer ${API_KEY}` }),
       },
-      body: body === undefined ? undefined : JSON.stringify(body),
+      body: body === undefined || form ? body : JSON.stringify(body),
       signal: AbortSignal.timeout(240000),
     });
   } catch (err) {
@@ -144,7 +188,7 @@ function describe(job) {
     notes: job.notes?.length ? job.notes : undefined,
     summary: job.result ?? undefined,
     report: job.report,
-    files: `${GATEWAY_URL}/api/cad/jobs/${job.id}/files/<model.py|model.stl|model.step|preview.png>`,
+    files: `${GATEWAY_URL}/api/cad/jobs/${job.id}/files/<model.py|model.stl|model.step|model.3mf|preview.png|fix.py|views.png>`,
     sent_to_studio: job.sent?.map((s) => s.name),
   };
 }
@@ -182,6 +226,30 @@ async function callTool(name, args) {
       const sent = await gatewayJson('POST', `/api/cad/jobs/${encodeURIComponent(args.job_id)}/studio`, { format: args.format ?? 'stl' });
       return [text({ studio_path: sent.studioPath, repair: sent.repair, next: 'In Bambu Studio: File → Import → /imports' })];
     }
+    case 'cad_make_figure': {
+      const form = new FormData();
+      for (const key of ['prompt', 'height_mm', 'base', 'parent_id', 'colour', 'colours', 'palette']) {
+        if (args[key] !== undefined) form.append(key, String(args[key]));
+      }
+      if (args.image_path) {
+        let data;
+        try {
+          data = await readFile(args.image_path);
+        } catch (err) {
+          throw new GatewayError(`Cannot read ${args.image_path}: ${err.message}`);
+        }
+        form.append('image', new Blob([data]), basename(args.image_path));
+      }
+      const res = await gateway('POST', '/api/cad/meshes', form);
+      const data = await res.json().catch(() => null);
+      if (!res.ok || !data) throw new GatewayError(data?.message || `Gateway answered HTTP ${res.status} for /api/cad/meshes.`);
+      return [text({ job_id: data.job.id, state: data.job.state, next: 'The GPU works in the background; check with cad_get_job.' })];
+    }
+    case 'cad_fix_figure': {
+      const { job_id: jobId, ...body } = args;
+      const { job } = await gatewayJson('POST', `/api/cad/jobs/${encodeURIComponent(jobId)}/fix`, body);
+      return [text({ job_id: job.id, state: job.state, next: 'Claude reviews and fixes it in the background; check with cad_get_job.' })];
+    }
     case 'cad_ask_claude': {
       const { job } = await gatewayJson('POST', '/api/cad/jobs', args);
       return [text({ job_id: job.id, state: job.state, next: 'Claude works in the background; check with cad_get_job.' })];
@@ -200,8 +268,10 @@ async function handle(message) {
         capabilities: { tools: {} },
         serverInfo: { name: 'bambu-cad', version: '1.0.0' },
         instructions:
-          'Design 3D-printable models for the Bambu Lab H2D: call cad_guide once, write build123d code, call ' +
-          'cad_build and check the preview, and send the accepted model with cad_send_to_studio.',
+          'Design 3D-printable models for the Bambu Lab H2D. Technical parts: call cad_guide once, write build123d code, call ' +
+          'cad_build and check the preview. Characters and other organic shapes: cad_make_figure, then cad_fix_figure ' +
+          'when the preview shows problems. Send the accepted ' +
+          'model with cad_send_to_studio.',
       };
     case 'ping':
       return {};

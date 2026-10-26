@@ -9,8 +9,9 @@ request.md, this worker writes model.py (through Claude), out/ (through build.py
   POST /jobs/<id>/build        Builds the job's model.py now and answers with build.py's report
   POST /jobs/<id>/cancel       Stops the job's Claude run
 
-status.json: {"state": "running" | "done" | "failed" | "cancelled", "step": "starting" | "writing" | "building" |
-"reviewing" | "finishing", "notes": ["• ..."], "builds": n, "started_at", "finished_at", "error", "result":
+status.json: {"state": "running" | "done" | "failed" | "cancelled", "step": "starting" | "reading" | "writing" |
+"building" | "reviewing" | "finishing", "steps": [every step so far: {id, started_at, finished_at, detail}; a
+build's detail is its outcome], "notes": ["• ..."], "builds": n, "started_at", "finished_at", "error", "result":
 {summary, ...the output schema}, "report": <last out/report.json>}
 """
 
@@ -98,16 +99,54 @@ def run_build(directory):
 
 
 def step_of(tool_name, tool_input):
-    """What a tool call means for the progress shown to the user"""
+    """What a tool call means for the progress shown to the user: (step, detail), or (None, None)"""
     command = str(tool_input.get("command", ""))
     target = str(tool_input.get("file_path", ""))
+    name = target.rsplit("/", 1)[-1]
     if tool_name == "Bash" and "build.py" in command:
-        return "building"
+        return "building", None
     if tool_name == "Read" and target.endswith(".png"):
-        return "reviewing"
-    if tool_name in ("Write", "Edit") and target.endswith(".py"):
-        return "writing"
-    return None
+        return "reviewing", f"Xem {name} (4 góc nhìn)"
+    if tool_name == "Read" and name in ("guide.md", "request.md", "model.py"):
+        return "reading", f"Đọc {name}"
+    if tool_name == "Write" and target.endswith(".py"):
+        return "writing", f"Viết {name}"
+    if tool_name == "Edit" and target.endswith(".py"):
+        return "writing", f"Sửa {name}"
+    return None, None
+
+
+def begin_step(status, step, detail=None):
+    """Appends a step to status["steps"], closing the one before; a repeated step (two edits in a row) stays one,
+    except builds, which each get their own line for their outcome"""
+    steps = status.setdefault("steps", [])
+    if steps and steps[-1]["id"] == step and step != "building":
+        if detail:
+            steps[-1]["detail"] = detail
+        return steps[-1]
+    if steps and steps[-1].get("finished_at") is None:
+        steps[-1]["finished_at"] = now()
+    entry = {"id": step, "started_at": now(), "finished_at": None, "detail": detail}
+    steps.append(entry)
+    status["step"] = step
+    return entry
+
+
+def build_outcome(content):
+    """A build's tool result (build.py's JSON report) as one line: ✓ 60 × 40 × 20 mm, 1 cảnh báo / ✗ <error>"""
+    if isinstance(content, list):
+        content = "".join(part.get("text", "") for part in content if isinstance(part, dict))
+    text = str(content or "")
+    try:
+        report = json.loads(text[text.find("{"): text.rfind("}") + 1])
+    except ValueError:
+        return None
+    if not report.get("ok"):
+        return f"✗ {report.get('error') or 'lỗi'}"[:240]
+    size = " × ".join(f"{v:g}" for v in report.get("size_mm") or [])
+    count = len(report.get("warnings") or [])
+    watertight = (report.get("mesh") or {}).get("watertight")
+    return f"✓ {size} mm" + ("" if watertight is not False else ", lưới hở") + (f", {count} cảnh báo" if count else "")
 
 
 def claude_error(result, stderr):
@@ -123,8 +162,12 @@ def claude_error(result, stderr):
 def generate(job_id, model):
     directory = job_dir(job_id)
     status = {"state": "running", "step": "starting", "notes": [], "builds": 0, "model": model,
-              "started_at": now(), "finished_at": None, "error": None, "result": None, "report": None}
+              "started_at": now(), "finished_at": None, "error": None, "result": None, "report": None,
+              "steps": [], "progress": None}
+    begin_step(status, "starting", f"Khởi động Claude Code ({model})")
     write_json(directory / "status.json", status)
+    # Build tool calls by id, so their results land on the build's own line
+    builds = {}
 
     command = [
         "claude", "-p",
@@ -161,6 +204,18 @@ def generate(job_id, model):
                 continue
             if event.get("type") == "result":
                 result_line = event
+            if event.get("type") == "user":
+                changed = False
+                for block in event.get("message", {}).get("content", []):
+                    entry = builds.get(block.get("tool_use_id")) if isinstance(block, dict) else None
+                    if entry is not None:
+                        outcome = build_outcome(block.get("content"))
+                        entry["detail"] = f"{entry['detail']}: {outcome}" if outcome else entry["detail"]
+                        entry["finished_at"] = now()
+                        changed = True
+                if changed and job_id not in cancelled:
+                    write_json(directory / "status.json", status)
+                continue
             if event.get("type") != "assistant":
                 continue
             changed = False
@@ -172,10 +227,14 @@ def generate(job_id, model):
                         status["notes"] = notes[-30:]
                         changed = True
                 elif block.get("type") == "tool_use":
-                    step = step_of(block.get("name"), block.get("input") or {})
+                    step, detail = step_of(block.get("name"), block.get("input") or {})
                     if step:
-                        status["step"] = step
                         status["builds"] += step == "building"
+                        if step == "building":
+                            detail = f"Lần dựng {status['builds']}"
+                        entry = begin_step(status, step, detail)
+                        if step == "building":
+                            builds[block.get("id")] = entry
                         changed = True
             if changed and job_id not in cancelled:
                 write_json(directory / "status.json", status)
@@ -201,12 +260,15 @@ def generate(job_id, model):
         status.update(state="failed", error="Claude không viết model.py.")
     else:
         # Built once more here, so the files and report always match the model.py that was kept
-        status["step"] = "finishing"
+        begin_step(status, "finishing", "Dựng lại model.py cuối cùng, xuất STL, STEP và ảnh xem trước")
         write_json(directory / "status.json", status)
         report = run_build(directory)
         status.update(report=report, result=result_line["structured_output"],
                       state="done" if report.get("ok") else "failed",
                       error=None if report.get("ok") else f"model.py cuối cùng không dựng được: {report.get('error')}")
+    steps = status.get("steps") or []
+    if steps and steps[-1].get("finished_at") is None:
+        steps[-1]["finished_at"] = now()
     with lock:
         # Cancelled during the last build
         if job_id in cancelled:

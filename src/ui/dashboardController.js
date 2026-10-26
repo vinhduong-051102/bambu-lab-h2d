@@ -1,6 +1,7 @@
 import { initStudio } from './studio';
 import { initCad } from './cad';
 import { initPages } from './pages';
+import { BambuColourCatalogue } from '../domain/filaments/bambuColors';
 import { initPrintHistory } from './prints';
 import { initTimelapse } from './timelapse';
 import { initCameraZoom } from './cameraZoom';
@@ -415,6 +416,8 @@ export function initDashboard() {
 
   // Latest AMS units, used to fill the tray picker of the setting modal
   let lastAmsUnits = [];
+  // Bambu's colour catalogue (GET /api/filaments/colors): names a tray's colour when it is one of Bambu's own
+  let colourCatalogue = null;
 
   function amsTrayLabel(amsId, slotId) {
     return amsId >= 128 ? `AMS HT ${amsId - 127}` : `AMS ${amsId + 1} • Khay ${slotId + 1}`;
@@ -458,6 +461,10 @@ export function initDashboard() {
         // The badge only marks a load in progress; a finished load shows in the status line instead
         const activeBadge = isTarget && !isActive ? '<span class="active-tray-badge">ĐANG NẠP…</span>' : '';
         const statusText = isEmpty ? 'Trống' : (isActive ? `Đã nạp • ${extruderLabel(fil.loadedExtruderId)}` : 'Sẵn sàng');
+        const official = isEmpty ? null : colourCatalogue?.identify(fil.infoIdx, hexColor);
+        const colourName = official
+          ? `<div class="tray-colour-name" title="Màu Bambu chính hãng, mã cuộn ${official.code}">${official.name} · ${official.code}</div>`
+          : '';
 
         return `
           <div class="tray-item ${activeClass}" data-ams-id="${amsId}" data-slot-id="${slotId}" data-empty="${isEmpty}" data-loaded="${isActive}" style="${isEmpty ? 'opacity: 0.55; cursor: not-allowed;' : ''}" title="${label} - ${fil.type || 'Trống'}">
@@ -466,6 +473,7 @@ export function initDashboard() {
             <div class="color-dot" style="background-color: ${isEmpty ? '#374151' : hexColor};" title="Màu: ${hexColor}"></div>
             <div style="font-size: 0.76rem; font-weight: 700; color: #f8fafc;">${isEmpty ? 'Trống' : (fil.type || 'N/A')}</div>
             <div style="font-size: 0.68rem; color: #94a3b8;">${isEmpty ? '&nbsp;' : (fil.subBrand || fil.subBrands || 'Generic')}</div>
+            ${colourName}
             <div style="font-size: 0.7rem; font-weight: 600; color: #34d399; margin-top: 2px;">Remain: ${remText}</div>
             <div style="font-size: 0.65rem; color: #64748b; margin-top: 2px; text-align: center;">
               <strong style="color: ${isActive ? '#34d399' : '#94a3b8'}">${statusText}</strong>
@@ -1308,6 +1316,15 @@ export function initDashboard() {
     restartCameraStream();
   }
   const cameraStatusTimer = setInterval(fetchCameraStatus, 5000);
+
+  fetch('/api/filaments/colors')
+    .then((res) => (res.ok ? res.json() : null))
+    .then((data) => {
+      if (disposed || !data?.colours) return;
+      colourCatalogue = new BambuColourCatalogue(data.colours);
+      renderAMS(lastAmsUnits);
+    })
+    .catch(() => {});
 
   const disposePages = initPages({
     onChange: (page, previous) => {

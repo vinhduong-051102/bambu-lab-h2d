@@ -1,0 +1,35 @@
+# Mesh worker for "Thiết kế AI → Nhân vật" on the dashboard (see docs/cad.md): Hunyuan3D-2 on the NVIDIA GPU, and
+# Claude reviewing and fixing the figures it makes.
+#   docker compose -f docker-compose.mesh3d.yml up -d --build
+# Then in .env: MESH_WORKER_URL=http://127.0.0.1:3103
+services:
+  mesh3d:
+    build: ./mesh3d
+    image: bambu-lab-h2d/mesh3d:latest
+    container_name: bambu-mesh3d
+    restart: unless-stopped
+    environment:
+      - JOBS_DIR=/jobs
+      # Claude turns a description into the picture brief and reviews figures, on your Claude subscription
+      - CLAUDE_CODE_OAUTH_TOKEN=${CLAUDE_CODE_OAUTH_TOKEN:-}
+      # Optional Hugging Face read token: model downloads without one are rate limited and slow
+      - HF_TOKEN=${HF_TOKEN:-}
+      # Models leave the GPU after this many seconds without a job
+      - MESH_IDLE_UNLOAD_S=${MESH_IDLE_UNLOAD_S:-600}
+      - TZ=Asia/Ho_Chi_Minh
+    volumes:
+      # Shared with the gateway and the CAD worker (CAD_JOBS_DIR): one folder per job
+      - ./data/cad/jobs:/jobs
+      # Hunyuan3D-2mini, HunyuanDiT, Hunyuan3D-Paint and the background remover (~40 GB), downloaded on first
+      # use; MESH_MODELS_DIR puts them on a roomier drive
+      - ${MESH_MODELS_DIR:-./data/mesh3d/models}:/models
+      # The worker, and the CAD worker's preview renderer
+      - ./mesh3d:/opt/mesh3d:ro
+      - ./cad:/opt/cad:ro
+    ports:
+      - "127.0.0.1:3103:8000"
+    gpus: all
+    # PyTorch's data loaders share memory between processes
+    shm_size: "2gb"
+    security_opt:
+      - no-new-privileges:true

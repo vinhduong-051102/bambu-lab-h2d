@@ -1,3 +1,5 @@
+import type { BambuColourCatalogue } from '../../domain/filaments/bambuColors';
+import { colourCatalogue } from './filaments';
 import { AMSTray, PrinterState } from '../../domain/PrinterState';
 import type { PrinterService } from '../../domain/PrinterService';
 import { BambuCommandBuilder } from '../../bambu/commands/BambuCommandBuilder';
@@ -114,7 +116,8 @@ async function publishTracked(
   return { record, failure: null };
 }
 
-function serializeTray(fil: AMSTray) {
+function serializeTray(fil: AMSTray, catalogue: BambuColourCatalogue | null) {
+  const official = catalogue?.identify(fil.infoIdx, fil.color) ?? null;
   return {
     id: fil.id,
     type: fil.type || 'UNKNOWN',
@@ -135,11 +138,15 @@ function serializeTray(fil: AMSTray) {
     isEmpty: fil.isEmpty ?? false,
     isLoaded: fil.isLoaded ?? false,
     loadedExtruderId: fil.loadedExtruderId ?? null,
+    // The Bambu colour this is (by material id and colour), e.g. "Cyan" and spool code "10603"; null otherwise
+    colorName: official?.name ?? null,
+    colorCode: official?.code ?? null,
   };
 }
 
 // 1. GET /api/ams - Fetch current AMS state & active tray
-export const getAms = handler(({ printerService }) => {
+export const getAms = handler(async ({ printerService }) => {
+  const catalogue = await colourCatalogue();
   const state = printerService.stateStore.getState();
   tracker().verifyTelemetry(state);
 
@@ -149,7 +156,7 @@ export const getAms = handler(({ printerService }) => {
     humidity: unit.humidity ?? null,
     humidityRaw: unit.humidityRaw ?? null,
     status: unit.status ?? null,
-    trays: (unit.trays || []).map(serializeTray),
+    trays: (unit.trays || []).map((tray) => serializeTray(tray, catalogue)),
     activeTrayId: unit.activeTrayId ?? null,
     targetTrayId: unit.targetTrayId ?? null,
     currentTrayId: unit.currentTrayId ?? null,

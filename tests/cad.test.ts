@@ -133,13 +133,15 @@ describe('AI modelling API (/api/cad)', () => {
 
   it('is off without CAD_WORKER_URL', async () => {
     setCadWorker(null);
-    const saved = env.CAD_WORKER_URL;
+    const saved = { cad: env.CAD_WORKER_URL, mesh: env.MESH_WORKER_URL };
     env.CAD_WORKER_URL = undefined;
+    env.MESH_WORKER_URL = undefined;
     try {
       expect((await app.inject({ method: 'GET', url: '/api/cad' })).json()).toEqual({ enabled: false });
       expect((await create({ prompt: 'Một cái hộp' })).statusCode).toBe(501);
     } finally {
-      env.CAD_WORKER_URL = saved;
+      env.CAD_WORKER_URL = saved.cad;
+      env.MESH_WORKER_URL = saved.mesh;
     }
   });
 

@@ -147,7 +147,7 @@ Detailed documentation is available in `docs/`:
 - [`docs/api.md`](file:///home/vinhdq/bambu-h2d-gateway/docs/api.md) — Full REST API & WebSocket Reference
 - [`docs/development.md`](file:///home/vinhdq/bambu-h2d-gateway/docs/development.md) — Developer & Testing Guide
 - [`docs/studio.md`](docs/studio.md) — Bambu Studio embedded in the dashboard (slicing & printing)
-- [`docs/cad.md`](docs/cad.md) — AI model design (Claude, Antigravity) for printing
+- [`docs/cad.md`](docs/cad.md) — AI model design (Claude, Antigravity, Hunyuan3D-2 figures) for printing
 
 ---
 

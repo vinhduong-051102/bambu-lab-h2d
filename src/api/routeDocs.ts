@@ -35,6 +35,10 @@ export const GATEWAY_ROUTES: RouteDoc[] = [
   { method: 'GET', path: '/api/ams/command/:commandId', category: 'AMS Control', description: 'Trạng thái vòng đời của một lệnh AMS' },
   { method: 'GET', path: '/api/ams/debug', category: 'AMS Control', description: 'Debug protocol AMS thô (Raw Payload -> Parser -> State -> Command status)', exampleUrl: '/api/ams/debug' },
   { method: 'GET', path: '/api/ams/:amsId/tray/:trayId/rfid', category: 'AMS Control', description: 'Đọc thông tin chip RFID từ khay nhựa AMS chỉ định', exampleUrl: '/api/ams/0/tray/0/rfid' },
+  { method: 'GET', path: '/api/filaments/custom', category: 'AMS Control', description: '"Filament của tôi": filament hãng khác/màu tự nhập đã lưu để tô màu mô hình', exampleUrl: '/api/filaments/custom' },
+  { method: 'POST', path: '/api/filaments/custom', category: 'AMS Control', description: 'Lưu một filament tự nhập', body: '{"name": "Cam đất", "brand": "eSun", "material": "PLA", "hex": "#C8783C"}' },
+  { method: 'DELETE', path: '/api/filaments/custom/:id', category: 'AMS Control', description: 'Xóa một filament tự nhập' },
+  { method: 'GET', path: '/api/filaments/colors', category: 'AMS Control', description: 'Bảng màu nhựa chính hãng Bambu Lab (từ Bambu Studio): mã cuộn, mã loại nhựa, tên và mã màu; ?material= để lọc một loại', exampleUrl: '/api/filaments/colors?material=PLA%20Basic' },
 
   // 4. Camera Live Stream & Telemetry
   { method: 'GET', path: '/api/camera/status', category: 'Camera Stream', description: 'Trạng thái luồng RTSP camera, FPS, độ phân giải & frame count', exampleUrl: '/api/camera/status' },
@@ -79,11 +83,13 @@ export const GATEWAY_ROUTES: RouteDoc[] = [
   { method: 'GET', path: '/api/cad/guide', category: 'Thiết kế AI', description: 'Quy tắc thiết kế cho H2D và tóm tắt build123d (Markdown), cho Claude và Antigravity', exampleUrl: '/api/cad/guide' },
   { method: 'GET', path: '/api/cad/jobs', category: 'Thiết kế AI', description: 'Các mô hình đã thiết kế, mới nhất trước', exampleUrl: '/api/cad/jobs?limit=30' },
   { method: 'POST', path: '/api/cad/jobs', category: 'Thiết kế AI', description: 'Claude thiết kế mô hình từ mô tả (chạy nền bằng `claude -p` trong container CAD, tính vào gói Claude); parent_id để sửa một mô hình có sẵn', body: '{"prompt": "Giá đỡ điện thoại nghiêng 60°, dày 3 mm", "model": "claude-opus-5-5", "parent_id": null}' },
+  { method: 'POST', path: '/api/cad/meshes', category: 'Thiết kế AI', description: 'Mô hình nhân vật/trang trí từ ảnh hoặc mô tả bằng Hunyuan3D-2 trên GPU (container mesh3d): chỉnh kích thước, đặt sát bàn in, sửa lưới, thêm đế; colour=true tô màu (3MF theo số màu hoặc màu AMS)', body: 'multipart/form-data: image=@nhan-vat.png, prompt=..., height_mm=80, base=true (hoặc JSON {"prompt": "..."})' },
   { method: 'POST', path: '/api/cad/builds', category: 'Thiết kế AI', description: 'Dựng code build123d có sẵn (Antigravity, script): xuất STL/STEP, ảnh xem trước và báo cáo kiểm tra', body: '{"code": "from build123d import *\\nresult = Box(20, 20, 10)", "title": "Khối thử"}' },
   { method: 'GET', path: '/api/cad/jobs/:id', category: 'Thiết kế AI', description: 'Một mô hình: tiến độ, tóm tắt của Claude, báo cáo dựng và các file có sẵn', exampleUrl: '/api/cad/jobs/<id>' },
   { method: 'POST', path: '/api/cad/jobs/:id/cancel', category: 'Thiết kế AI', description: 'Dừng Claude đang thiết kế mô hình', body: '{}' },
+  { method: 'POST', path: '/api/cad/jobs/:id/fix', category: 'Thiết kế AI', description: 'Claude review mô hình nhân vật đã dựng (so với ảnh gốc, xem 6 phía) rồi sửa: đắp chân cụt, bỏ mảnh rời, làm mịn bề mặt sần, vá lỗ, giữ màu filament; prompt rỗng thì Claude tự tìm lỗi. Tạo job mới, bản cũ giữ nguyên', body: '{"prompt": "Chân bị cụt, đứng không vững", "model": "claude-opus-5-5"}' },
   { method: 'POST', path: '/api/cad/jobs/:id/studio', category: 'Thiết kế AI', description: 'Gửi mô hình vào thư mục /imports của Bambu Studio (STL được tự sửa lưới)', body: '{"format": "stl"}' },
-  { method: 'GET', path: '/api/cad/jobs/:id/files/:name', category: 'Thiết kế AI', description: 'File của mô hình: model.py, model.stl, model.step, preview.png, report.json (?download=1 để tải về)', exampleUrl: '/api/cad/jobs/<id>/files/preview.png' },
+  { method: 'GET', path: '/api/cad/jobs/:id/files/:name', category: 'Thiết kế AI', description: 'File của mô hình: model.py, model.stl, model.step, model.3mf, preview.png, concept.png, report.json, fix.py, views.png (?download=1 để tải về)', exampleUrl: '/api/cad/jobs/<id>/files/preview.png' },
 
   // Timelapse
   { method: 'GET', path: '/api/timelapse', category: 'Lịch sử in', description: 'Video timelapse trên máy in (mới nhất trước), kèm bản in tương ứng trong lịch sử', exampleUrl: '/api/timelapse' },

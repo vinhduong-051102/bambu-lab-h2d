@@ -1994,6 +1994,15 @@ button.is-loading::after,
   }
 }
 
+/* A tray's official Bambu colour name and spool code */
+.tray-colour-name {
+  font-size: 0.66rem;
+  color: #cbd5e1;
+  margin-top: 1px;
+  text-align: center;
+  overflow-wrap: anywhere;
+}
+
 /* ---------- AI modelling (src/ui/cad.js) ---------- */
 .cad-card {
   grid-column: span 12;
@@ -2051,6 +2060,225 @@ button.is-loading::after,
   width: auto;
   flex: 1;
   min-width: 0;
+}
+
+/* Technical / figure switch */
+.cad-kind {
+  display: inline-flex;
+  align-self: flex-start;
+  gap: 4px;
+  padding: 4px;
+  border: 1px solid var(--card-border);
+  border-radius: var(--radius-md);
+  background: rgba(0, 0, 0, 0.25);
+}
+
+.cad-kind-option input {
+  position: absolute;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.cad-kind-option span {
+  display: block;
+  padding: 6px 14px;
+  border-radius: var(--radius-sm);
+  font-size: 0.88rem;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+
+.cad-kind-option input:checked + span {
+  color: #fff;
+  background: rgba(59, 130, 246, 0.25);
+  box-shadow: inset 0 0 0 1px rgba(59, 130, 246, 0.45);
+}
+
+.cad-kind-option input:focus-visible + span {
+  outline: 2px solid var(--primary-accent);
+}
+
+.cad-figure-fields {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+  font-size: 0.85rem;
+}
+
+.cad-image-btn {
+  display: inline-flex;
+  align-items: center;
+  cursor: pointer;
+}
+
+.cad-image-name {
+  color: var(--text-muted);
+  overflow-wrap: anywhere;
+  min-width: 0;
+}
+
+.cad-inline {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text-main);
+}
+
+.cad-number {
+  width: 72px;
+  background: rgba(0, 0, 0, 0.25);
+  color: var(--text-main);
+  border: 1px solid var(--card-border);
+  border-radius: var(--radius-sm);
+  padding: 5px 8px;
+  font: inherit;
+}
+
+.cad-model[hidden] {
+  display: none;
+}
+
+.cad-colour-fields {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+}
+
+.cad-palette-select {
+  width: auto;
+}
+
+/* A coloured figure's filaments: slot, colour, share, name; how far from the model's colour; a mixing recipe */
+.cad-palette {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 0.78rem;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+}
+
+.cad-swatch-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 10px;
+}
+
+.cad-delta {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0 6px;
+  border-radius: var(--radius-sm);
+  font-size: 0.72rem;
+}
+
+.cad-delta i,
+.cad-mix i,
+.cad-pick i {
+  display: inline-block;
+  width: 11px;
+  height: 11px;
+  border-radius: 2px;
+  border: 1px solid rgba(255, 255, 255, 0.25);
+  vertical-align: -1px;
+  margin-right: 3px;
+}
+
+.cad-origin {
+  font-size: 0.72rem;
+  padding: 0 6px;
+  border-radius: var(--radius-sm);
+}
+
+.cad-origin-ams,
+.cad-origin-custom { background: rgba(16, 185, 129, 0.15); color: #34d399; }
+.cad-origin-bambu { background: rgba(59, 130, 246, 0.15); color: #60a5fa; }
+
+.cad-delta-near { background: rgba(16, 185, 129, 0.15); color: #34d399; }
+.cad-delta-off { background: rgba(245, 158, 11, 0.15); color: #fbbf24; }
+.cad-delta-far { background: rgba(239, 68, 68, 0.15); color: #f87171; }
+
+.cad-mix {
+  flex-basis: 100%;
+  padding-left: 18px;
+  color: var(--text-muted);
+  font-size: 0.74rem;
+}
+
+/* "Filament của tôi" */
+.cad-filaments summary {
+  cursor: pointer;
+  font-size: 0.85rem;
+  color: var(--text-main);
+}
+
+.cad-filament-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 8px 0;
+  font-size: 0.8rem;
+}
+
+.cad-filament {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.cad-filament-form,
+.cad-custom-pick {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 10px;
+  font-size: 0.82rem;
+}
+
+.cad-custom-pick[hidden] {
+  display: none;
+}
+
+.cad-filament-form input[type='color'] {
+  width: 36px;
+  height: 30px;
+  padding: 0;
+  border: 1px solid var(--card-border);
+  border-radius: var(--radius-sm);
+  background: none;
+}
+
+.cad-filament-input {
+  background: rgba(0, 0, 0, 0.25);
+  color: var(--text-main);
+  border: 1px solid var(--card-border);
+  border-radius: var(--radius-sm);
+  padding: 5px 8px;
+  font: inherit;
+  min-width: 0;
+  flex: 1 1 140px;
+}
+
+.cad-filament-material {
+  flex: 0 1 110px;
+}
+
+.cad-swatch {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.cad-swatch i {
+  width: 14px;
+  height: 14px;
+  border-radius: 3px;
+  border: 1px solid rgba(255, 255, 255, 0.25);
 }
 
 .cad-list {
@@ -2134,6 +2362,81 @@ button.is-loading::after,
   color: #60a5fa;
 }
 
+/* Step timeline: done ✓, retried ↻ (a build that failed and was fixed), current ⏳ with its progress, ahead ○ */
+.cad-steps {
+  list-style: none;
+  margin: 2px 0;
+  padding: 8px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  border-left: 2px solid rgba(59, 130, 246, 0.35);
+  background: rgba(0, 0, 0, 0.18);
+  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+}
+
+.cad-step {
+  display: grid;
+  grid-template-columns: 18px 1fr auto;
+  gap: 8px;
+  align-items: start;
+  font-size: 0.8rem;
+}
+
+.cad-step-icon {
+  text-align: center;
+}
+
+.cad-step-main {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.cad-step-label {
+  color: var(--text-main);
+}
+
+.cad-step-detail {
+  color: var(--text-muted);
+  overflow-wrap: anywhere;
+}
+
+.cad-step-time {
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  white-space: nowrap;
+}
+
+.cad-step.is-done .cad-step-icon { color: var(--success-color); }
+.cad-step.is-retry .cad-step-icon { color: var(--warning-color); }
+.cad-step.is-failed .cad-step-icon,
+.cad-step.is-failed .cad-step-label { color: #f87171; }
+.cad-step.is-current .cad-step-label { color: #60a5fa; font-weight: 600; }
+.cad-step.is-ahead { opacity: 0.45; }
+.cad-step.is-more { color: var(--text-muted); font-size: 0.75rem; display: block; }
+
+.cad-step-bar {
+  height: 4px;
+  margin-top: 3px;
+  border-radius: 2px;
+  background: rgba(255, 255, 255, 0.08);
+  overflow: hidden;
+}
+
+.cad-step-bar span {
+  display: block;
+  height: 100%;
+  background: var(--primary-accent);
+  transition: width 0.6s ease;
+}
+
+.cad-timeline .cad-steps {
+  margin-top: 6px;
+}
+
 .cad-error {
   color: #f87171;
   overflow-wrap: anywhere;
@@ -2152,6 +2455,25 @@ button.is-loading::after,
 .cad-details ul {
   margin: 4px 0 6px 18px;
   padding: 0;
+}
+
+/* Claude's review of a figure: fixed problems green, ones left as they were red */
+.cad-details ul.cad-issues {
+  list-style: none;
+  margin-left: 0;
+}
+
+.cad-issue.is-fixed {
+  color: var(--success-color);
+}
+
+.cad-issue.is-open {
+  color: var(--danger-color);
+}
+
+.cad-issue b {
+  color: var(--text-main);
+  font-weight: 600;
 }
 
 .cad-actions {

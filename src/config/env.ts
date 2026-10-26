@@ -71,6 +71,14 @@ const envSchema = z.object({
   CAD_WORKER_URL: z.preprocess((val) => (typeof val === 'string' && val.trim() === '' ? undefined : val), z.string().url().optional()),
   // Host folder mounted at /jobs in the CAD container: one folder per model, with its code, files and status
   CAD_JOBS_DIR: z.preprocess((val) => (typeof val === 'string' && val.trim() === '' ? undefined : val), z.string().default('./data/cad/jobs')),
+  // Mesh worker container (docker-compose.mesh3d.yml): figures from a picture or a description with Hunyuan3D-2
+  MESH_WORKER_URL: z.preprocess((val) => (typeof val === 'string' && val.trim() === '' ? undefined : val), z.string().url().optional()),
+  // Bambu Lab's filament colour catalogue (from Bambu Studio's repository), cached here after the first download
+  BAMBU_COLOR_CODES_FILE: z.preprocess((val) => (typeof val === 'string' && val.trim() === '' ? undefined : val), z.string().default('./data/bambu/filaments_color_codes.json')),
+  // Bambu Studio's colour mixing recipes, cached here after the first download
+  BAMBU_MIX_RECIPES_FILE: z.preprocess((val) => (typeof val === 'string' && val.trim() === '' ? undefined : val), z.string().default('./data/bambu/standard_color_recipes.json')),
+  // "Filament của tôi": filaments the user saved for painting figures
+  CUSTOM_FILAMENTS_FILE: z.preprocess((val) => (typeof val === 'string' && val.trim() === '' ? undefined : val), z.string().default('./data/filaments/custom.json')),
   // Claude model the dashboard offers first for new models (the CAD container's CAD_AI_MODEL is its own default)
   CAD_AI_MODEL: z.preprocess((val) => (typeof val === 'string' && val.trim() === '' ? undefined : val), z.string().default('claude-opus-5-5')),
 });
