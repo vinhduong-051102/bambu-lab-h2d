@@ -20,7 +20,9 @@ import {
   type VisionModel,
 } from '../src/domain/timelapse/TimelapseReviewer';
 import { setTimelapseStores } from '../src/api/routes/timelapse';
-import { renderReview } from '../src/ui/timelapseReview.js';
+import { createElement } from 'react';
+import { renderToStaticMarkup } from 'react-dom/server';
+import { ReviewResult } from '../src/ui/prints/TimelapseReview';
 import { createTestApp, type TestApp } from './helpers/testApp';
 
 const VIDEO_NAME = 'video_2026-10-13_02-33-28.mp4';
@@ -241,8 +243,9 @@ describe('Timelapse review API', () => {
 
 describe('review rendering', () => {
   it('shows the guess, issues, where they were seen and the advice, escaped', () => {
-    const html = renderReview(
-      {
+    const html = renderToStaticMarkup(
+      createElement(ReviewResult, {
+        review: {
         ...ANSWER,
         observations: [{ frame: 2, problem: '<b>cong</b>' }],
         model: 'qwen3-vl:8b',
@@ -251,8 +254,10 @@ describe('review rendering', () => {
         video: VIDEO_NAME,
         print_id: null,
         used: null,
-      },
-      { outcomes: [{ id: 'usable', label: 'Có lỗi nhưng dùng được' }], issues: [{ id: 'warping', label: 'Cong vênh' }] }
+        },
+        outcomes: [{ id: 'usable', label: 'Có lỗi nhưng dùng được' }],
+        issues: [{ id: 'warping', label: 'Cong vênh' }],
+      })
     );
     expect(html).toContain('AI đoán: Có lỗi nhưng dùng được');
     expect(html).toContain('<li>Cong vênh</li>');

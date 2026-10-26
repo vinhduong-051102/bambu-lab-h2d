@@ -1,5 +1,8 @@
 import { describe, expect, it } from 'vitest';
-import { diffSettings, escapeHtml, formatPrintTime, listSettings, orderSettingKeys, printSettings, renderPrintRow } from '../src/ui/prints.js';
+import { createElement } from 'react';
+import { renderToStaticMarkup } from 'react-dom/server';
+import { diffSettings, escapeHtml, formatPrintTime, listSettings, orderSettingKeys, printSettings } from '../src/ui/prints.js';
+import { PrintRow } from '../src/ui/prints/rows';
 
 const labels = { layer_height: 'Chiều cao lớp', sparse_infill_density: 'Mật độ infill' };
 
@@ -61,8 +64,9 @@ describe('print history UI helpers', () => {
   });
 
   it('renders a list row with escaped text and badges', () => {
-    const html = renderPrintRow(
-      {
+    const html = renderToStaticMarkup(
+      createElement(PrintRow, {
+        print: {
         id: 'p1',
         job_name: '<b>Hộp</b>',
         started_at: null,
@@ -73,8 +77,9 @@ describe('print history UI helpers', () => {
         ai_session_id: 'abc',
         photos: [{ name: 'end.jpg', source: 'camera', taken_at: '2026-10-01T00:00:00Z' }],
         feedback_outcome: 'usable',
-      },
-      { outcomes: [{ id: 'usable', label: 'Có lỗi nhưng dùng được' }] }
+        },
+        outcomes: [{ id: 'usable', label: 'Có lỗi nhưng dùng được' }],
+      })
     );
     expect(html).toContain('&lt;b&gt;Hộp&lt;/b&gt;');
     expect(html).not.toContain('<b>Hộp');

@@ -4,13 +4,14 @@ import { ApiOutlined, AppstoreOutlined, CaretRightOutlined, EyeOutlined, PauseOu
 import { Badge, Button, Card, Col, Flex, Layout, Row, Space, Switch, Tabs, Tag, Typography } from 'antd';
 import { useEffect, useState, type ReactNode } from 'react';
 import { useActions, useCommand, useLive, type WsStatus } from './DashboardContext';
-import { LegacyCadCard, LegacyPrintsCard } from './legacy/LegacyCards';
+import { LegacyCadCard } from './legacy/LegacyCards';
 import { pageFromHash } from './pages';
 import { AmsCard } from './printer/AmsCard';
 import { CameraCard } from './printer/CameraCard';
 import { FanCard } from './printer/FanCard';
 import { JobCard } from './printer/JobCard';
 import { TemperatureCard } from './printer/TemperatureCard';
+import { PrintHistoryCard } from './prints/PrintHistoryCard';
 import { StudioCard } from './studio/StudioCard';
 import { ConsoleCard } from './system/ConsoleCard';
 import { DiagnosticsCard } from './system/DiagnosticsCard';
@@ -192,7 +193,7 @@ export function Shell() {
       forceRender: true,
       children: <LegacyCadCard />,
     },
-    { key: 'prints', label: '🕘 Lịch sử in', forceRender: true, children: <LegacyPrintsCard /> },
+    { key: 'prints', label: '🕘 Lịch sử in', children: <PrintHistoryCard /> },
     { key: 'system', label: '🛠️ Hệ thống', children: grid([<ConsoleCard key="console" />, {}], [<DiagnosticsCard key="diag" />, {}]) },
   ].filter((p) => p !== false);
 

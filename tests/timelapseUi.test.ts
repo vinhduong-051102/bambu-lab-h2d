@@ -1,6 +1,12 @@
 import { describe, it, expect } from 'vitest';
-import { formatSize, renderVideoRow, thumbnailUrl, videoUrl } from '../src/ui/timelapse.js';
-import { historyItems, renderPrintRow } from '../src/ui/prints.js';
+import { createElement } from 'react';
+import { renderToStaticMarkup } from 'react-dom/server';
+import { formatSize, thumbnailUrl, videoUrl } from '../src/ui/timelapse.js';
+import { historyItems } from '../src/ui/prints.js';
+import { PrintRow, VideoRow } from '../src/ui/prints/rows';
+
+const renderVideoRow = (v: any) => renderToStaticMarkup(createElement(VideoRow, { video: v }));
+const renderPrintRow = (p: any, options: any = {}) => renderToStaticMarkup(createElement(PrintRow, { print: p, ...options }));
 
 const video = (name: string, ended_at: string | null, print: { id: string; job_name: string } | null = null) => ({
   name,
@@ -31,14 +37,14 @@ describe('timelapse helpers', () => {
   it('renders a video row with its print, escaping the job name', () => {
     const html = renderVideoRow(video('video_2026-10-13_02-33-28.mp4', '2026-10-12T20:21:00.000Z', { id: 'x', job_name: '<b>Plate</b>' }));
     expect(html).toContain('/api/timelapse/video_2026-10-13_02-33-28.mp4/thumbnail');
-    expect(html).toContain('data-name="video_2026-10-13_02-33-28.mp4"');
     expect(html).toContain('&lt;b&gt;Plate&lt;/b&gt;');
     expect(html).not.toContain('<b>Plate</b>');
   });
 
   it('shows a placeholder when the video has no thumbnail', () => {
     const html = renderVideoRow({ ...video('v.mp4', null, { id: 'x', job_name: 'x' }), has_thumbnail: false });
-    expect(html).toContain('print-thumb-empty');
+    expect(html).not.toContain('<img');
+    expect(html).toContain('<span aria-hidden="true">🎬</span>');
   });
 });
 
