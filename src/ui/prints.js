@@ -15,7 +15,7 @@ const VIDEOS_REFRESH_MS = 5 * 60_000;
 const LIST_LIMIT = 50;
 const NO_SETUP_TEXT = 'Không có setting (bản in không gửi từ Studio)';
 
-export const STATUS_LABELS = { printing: 'Đang in', finished: 'Hoàn thành', failed: 'Lỗi' };
+export const STATUS_LABELS = { printing: 'Đang in', finished: 'Hoàn thành', failed: 'Lỗi', unknown: 'Không rõ' };
 
 // ---------- Pure helpers (unit-tested in tests/printsUi.test.ts) ----------
 

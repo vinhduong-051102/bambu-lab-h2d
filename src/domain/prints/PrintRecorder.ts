@@ -15,11 +15,15 @@ export interface PrintRecorderOptions {
 
 /**
  * Opens a print record when the printer starts a job (with the settings Studio sent for it) and, when
- * the job finishes or fails, closes it and keeps a photo from the printer camera.
+ * the job finishes or fails, closes it and keeps a photo from the printer camera. A print that ended while
+ * the gateway wasn't running is closed when the gateway starts again: with the outcome the printer still
+ * shows for it, or as unknown once the printer shows another job.
  */
 export class PrintRecorder {
   private current: PrintRecord | null = null;
   private lastStatus: PrinterState['state'] | null = null;
+  /** The last ended job checked for a record left open ("finished:Plate01") */
+  private missedChecked: string | null = null;
   // State changes arrive faster than the disk work they start: run that work one step at a time
   private queue: Promise<unknown> = Promise.resolve();
   private unsubscribe: (() => void) | null = null;
@@ -69,15 +73,27 @@ export class PrintRecorder {
       if (!this.current || this.current.job_name !== jobName) this.enqueue(() => this.open(jobName, isNewJob));
       return;
     }
-    if ((status === 'FINISHED' || status === 'FAILED') && (previous === 'RUNNING' || previous === 'PAUSED')) {
-      this.enqueue(() => this.close(status === 'FINISHED' ? 'finished' : 'failed'));
+    if (status === 'FINISHED' || status === 'FAILED') {
+      const ended = status === 'FINISHED' ? 'finished' : 'failed';
+      if (previous === 'RUNNING' || previous === 'PAUSED') {
+        this.enqueue(() => this.close(ended));
+        return;
+      }
+      // The print ended while the gateway wasn't running: the printer still shows how, but not when.
+      // Checked once per job and outcome, the printer repeats its state every few seconds.
+      const missed = `${ended}:${jobName}`;
+      if (!this.current && jobName && this.missedChecked !== missed) {
+        this.missedChecked = missed;
+        this.enqueue(() => this.closeMissed(jobName, ended));
+      }
     }
   }
 
   private async open(jobName: string, startedNow: boolean): Promise<void> {
     if (this.current?.job_name === jobName) return;
+    const records = await this.closeOthers(jobName);
     // After a gateway restart, keep filling the record already open for this job
-    const open = (await this.journal.list(20)).find((r) => r.status === 'printing' && r.job_name === jobName);
+    const open = records.find((r) => r.status === 'printing' && r.job_name === jobName);
     if (open) {
       this.current = open;
       return;
@@ -106,5 +122,30 @@ export class PrintRecorder {
       return;
     }
     await this.journal.addPhoto(record.id, frame, 'camera', '.jpg', this.now());
+  }
+
+  /**
+   * Prints still open under another name than the printer's job ended while the gateway wasn't running:
+   * closed as unknown. Returns the recent records, as they were before.
+   */
+  private async closeOthers(jobName: string): Promise<PrintRecord[]> {
+    const records = await this.journal.list(20);
+    for (const stale of records.filter((r) => r.status === 'printing' && r.job_name !== jobName)) {
+      await this.journal.update(stale.id, (r) => {
+        r.status = 'unknown';
+      });
+      logger.info({ id: stale.id, jobName: stale.job_name }, '[PRINT HISTORY] Print ended unseen, outcome unknown');
+    }
+    return records;
+  }
+
+  /** Closes the record still open for this job with the printer's outcome; no end time and no photo */
+  private async closeMissed(jobName: string, status: 'finished' | 'failed'): Promise<void> {
+    const open = (await this.closeOthers(jobName)).find((r) => r.status === 'printing' && r.job_name === jobName);
+    if (!open) return;
+    await this.journal.update(open.id, (r) => {
+      r.status = status;
+    });
+    logger.info({ id: open.id, status }, '[PRINT HISTORY] Print ended while the gateway was off');
   }
 }

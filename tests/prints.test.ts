@@ -132,6 +132,68 @@ describe('PrintRecorder', () => {
     expect(prints).toHaveLength(1);
     expect(prints[0].status).toBe('finished');
   });
+
+  it('closes a print that ended while the gateway was off, with the outcome the printer shows', async () => {
+    setState(store, 'IDLE', null);
+    setState(store, 'RUNNING', 'Plate01_Bracket');
+    await recorder.idle();
+    recorder.stop();
+
+    const restarted = new PrintRecorder(journal, store, { getLatestFrame: () => frame }, { photoDelayMs: 0 });
+    restarted.start();
+    setState(store, 'FAILED', 'Plate01_Bracket');
+    setState(store, 'FAILED', 'Plate01_Bracket');
+    await restarted.idle();
+    restarted.stop();
+
+    const [print] = await journal.list(10);
+    // When it ended, and the plate then, aren't known
+    expect(print).toMatchObject({ status: 'failed', ended_at: null, photos: [] });
+  });
+
+  it('closes as unknown a print left open once the printer shows another job', async () => {
+    setState(store, 'IDLE', null);
+    setState(store, 'RUNNING', 'Plate05_Box');
+    await recorder.idle();
+    recorder.stop();
+
+    // The gateway comes back after another print ended, then the next one starts
+    const restarted = new PrintRecorder(journal, store, { getLatestFrame: () => frame }, { photoDelayMs: 0 });
+    restarted.start();
+    setState(store, 'FINISHED', 'Plate07_Lid');
+    await restarted.idle();
+    expect(await journal.list(10)).toEqual([expect.objectContaining({ job_name: 'Plate05_Box', status: 'unknown', ended_at: null })]);
+
+    setState(store, 'RUNNING', 'Plate03_Hook');
+    setState(store, 'FINISHED', 'Plate03_Hook');
+    await restarted.idle();
+    restarted.stop();
+    const prints = await journal.list(10);
+    // Records made in the same second have no order between them
+    expect(Object.fromEntries(prints.map((p) => [p.job_name, p.status]))).toEqual({
+      Plate03_Hook: 'finished',
+      Plate05_Box: 'unknown',
+    });
+  });
+
+  it('closes an older print left open when a new one starts', async () => {
+    setState(store, 'IDLE', null);
+    setState(store, 'RUNNING', 'Plate05_Box');
+    await recorder.idle();
+    recorder.stop();
+
+    const restarted = new PrintRecorder(journal, store, { getLatestFrame: () => frame }, { photoDelayMs: 0 });
+    restarted.start();
+    setState(store, 'RUNNING', 'Plate03_Hook');
+    await restarted.idle();
+    restarted.stop();
+    const prints = await journal.list(10);
+    // Records made in the same second have no order between them
+    expect(Object.fromEntries(prints.map((p) => [p.job_name, p.status]))).toEqual({
+      Plate03_Hook: 'printing',
+      Plate05_Box: 'unknown',
+    });
+  });
 });
 
 describe('Print history API', () => {

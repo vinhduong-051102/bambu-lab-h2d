@@ -22,7 +22,8 @@ export const printSetupSchema = studioRequestSchema
   });
 export type PrintSetup = z.infer<typeof printSetupSchema> & { received_at: string };
 
-export type PrintStatus = 'printing' | 'finished' | 'failed';
+/** unknown: the print ended while the gateway wasn't running, and the printer had moved on to another job */
+export type PrintStatus = 'printing' | 'finished' | 'failed' | 'unknown';
 
 export interface PrintPhoto {
   name: string;
@@ -35,6 +36,7 @@ export interface PrintRecord {
   job_name: string;
   /** null when the gateway first saw the print already running */
   started_at: string | null;
+  /** null while printing, and when the print ended while the gateway wasn't running */
   ended_at: string | null;
   status: PrintStatus;
   /** null for a print that wasn't sent from this Studio (or whose setup didn't arrive) */

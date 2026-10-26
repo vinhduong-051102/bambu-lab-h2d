@@ -532,7 +532,7 @@ index d38b5d2..191ed58 100644
 +            wxString name = wxString::FromUTF8(p.value("job_name", ""));
 +            if (name.length() > 40)
 +                name = name.Left(39) + wxString::FromUTF8("…");
-+            const char *status_text = status == "finished" ? "hoàn thành" : status == "failed" ? "lỗi" : "đang in";
++            const char *status_text = status == "finished" ? "hoàn thành" : status == "failed" ? "lỗi" : status == "unknown" ? "không rõ" : "đang in";
 +            const bool with_ai = p.contains("ai_session_id") && p["ai_session_id"].is_string();
 +            // Studio runs with LC_ALL=C, so text with accents or symbols always goes through FromUTF8
 +            labels.Add(wxString::Format(wxString::FromUTF8("%s · %s · %s%s%s"), ai_session_time(p.value("id", "")), name,
