@@ -550,6 +550,27 @@ describe('AI sessions: past prints in the prompt', () => {
     expect(buildUserPrompt(studioRequest, null)).not.toContain('Kết quả in thực tế');
   });
 
+  it('counts a print the local AI reviewed from its timelapse, even before the user reports', async () => {
+    const session = await printed(studioRequest, 1, { feedback: null });
+    await store.saveVideoReview(session.id, {
+      video: 'video_2026-10-12_00-32-49.mp4',
+      model: 'qwen3-vl:8b',
+      at: '2026-10-01T12:00:00.000Z',
+      print_id: null,
+      frames_at: [0, 50, 100],
+      summary: 'Góc trái bong khỏi bàn từ giữa bản in.',
+      outcome_guess: 'usable',
+      issues: ['warping'],
+      observations: [{ frame: 2, problem: 'Góc trái cong lên' }],
+      suggestions: ['Thêm brim 5 mm'],
+      used: { at: '2026-10-01T12:05:00.000Z', print_id: '20261001-120000-abcdef' },
+    });
+    const [past] = await store.pastPrints(studioRequest);
+    expect(past).toMatchObject({ outcome: 'người dùng chưa báo', issues: [], note: '' });
+    expect(past.video_review).toBe('Góc trái bong khỏi bàn từ giữa bản in. Lỗi thấy: Cong vênh, bong khỏi bàn. Đề xuất: Thêm brim 5 mm');
+    expect(buildUserPrompt(studioRequest, null, null, [past])).toContain('AI cục bộ xem timelapse');
+  });
+
   it('sends past prints to the AI through the API', async () => {
     const session = await printed(studioRequest, 1);
     setAiSessionStore(store);

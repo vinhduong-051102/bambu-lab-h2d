@@ -61,6 +61,16 @@ The printer keeps its timelapse videos in `/timelapse` on its storage (`video_<d
 
 The gateway reads the printer's listing over FTPS (cached for 30 seconds) and copies a video or thumbnail to `TIMELAPSE_CACHE_DIR` (default `./data/timelapse`) the first time it is watched. The first play of a video takes a few seconds (about 0.7 MB per second from this printer), and later plays and seeking come from the copy. The cache isn't cleared automatically. The time in a video's file name is the printer's own clock (UTC+8 on this printer), so the dashboard shows the time the printer finished writing the file instead.
 
+#### AI nhận xét (a local model reviews the timelapse)
+
+The video window, and a print's detail window when its video is paired, have a **🤖 Nhờ AI xem video** button. A vision model in [Ollama](https://ollama.com) on the gateway's machine looks at 10 frames spread over the video (the H2D records one frame per layer with the toolhead parked, so they are the print at evenly spaced heights, the last one finished) and answers with a summary, its guess at the outcome, the problems it saw (the same list as the print report) with where in the video, and what to change next time. Nothing leaves the machine.
+
+The review is kept in `TIMELAPSE_CACHE_DIR/reviews/<video>.json` and is only shown at first. Under it, **✅ Dùng cho lần in sau** puts it to use: it is copied to the print (`video_review` in its `record.json`) and to the print's "AI tối ưu" proposal, and **Bỏ dùng** takes it off again (the review stays). "AI tối ưu" reads a used review with the past prints of similar plates, as a line marked as coming from a small model (the user's own report wins when they disagree). A proposal that was applied and printed counts as a past print once it has a report or a video review.
+
+The printer's clock drifts (it seems to stop while the printer is off), so a video often isn't paired with its print by time. When it isn't, the video window offers the recent prints to pick from before asking for the review.
+
+Setup: install Ollama, then `ollama pull qwen3-vl:8b` (about 6 GB; on this machine `OLLAMA_MODELS` puts it on F:). `OLLAMA_URL` (default `http://127.0.0.1:11434`) and `TIMELAPSE_AI_MODEL` (default `qwen3-vl:8b`) choose another server or model; any Ollama model that reads images works. A review takes about a minute on the RTX 5070 Ti and runs one at a time. The frames are cut with the gateway's own ffmpeg.
+
 To turn it on, either sign in with a Claude subscription (Pro/Max) or give the gateway an API key.
 
 **With a Claude subscription, no API key.** Studio's container asks Claude itself with `claude -p` (Claude Code, installed in the image), billed to your subscription's usage limits. The gateway still builds the prompt and checks the answer. Create a long-lived token on any machine with Claude Code, put it in `.env`, then recreate the Studio container:
@@ -149,3 +159,7 @@ STUDIO_ALT_URLS=https://<machine>.<tailnet>.ts.net:8443/
 | GET | `/api/timelapse?refresh=1` | Timelapse videos on the printer, newest first: `{ name, size, ended_at, name_time, has_thumbnail, print }`, where `print` is the paired print or null. `refresh=1` skips the 30-second listing cache |
 | GET | `/api/timelapse/:name` | The video, copied from the printer on first view. Answers `Range` requests (206) |
 | GET | `/api/timelapse/:name/thumbnail` | The printer's thumbnail of the video (JPEG) |
+| GET | `/api/timelapse/:name/review` | The local AI's review of the video: `{ status: none \| running \| failed \| done, review?, error?, model, outcomes, issues }` |
+| POST | `/api/timelapse/:name/review` | `{ print_id? }`: has the Ollama vision model review the video (202, then poll GET). The review is only shown, not used yet |
+| POST | `/api/timelapse/:name/review/use` | `{ print_id? }`: uses the review for later prints: saved on the print (the one it was made for, or `print_id`) and its AI proposal |
+| DELETE | `/api/timelapse/:name/review/use` | Stops using the review for later prints; the review itself stays |

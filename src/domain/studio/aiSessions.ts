@@ -3,6 +3,7 @@ import { promises as fs } from 'fs';
 import path from 'path';
 import { z } from 'zod';
 import { settingRef, type AiOptimizeResult, type PastPrint, type StudioRequest } from './aiOptimize';
+import type { TimelapseReview } from '../timelapse/TimelapseReviewer';
 
 /**
  * Every "AI tối ưu" answer is kept as a session (one JSON file each): what was on the plate, what the AI
@@ -85,6 +86,8 @@ export interface AiSession {
   result: AiOptimizeResult;
   applied: { at: string; changes: AppliedChange[] } | null;
   feedback: (PrintFeedback & { at: string }) | null;
+  /** The local AI's review of the print's timelapse, when one was made */
+  video_review?: TimelapseReview;
 }
 
 /** One line of the session list Studio shows */
@@ -214,12 +217,13 @@ export class AiSessionStore {
 
   /**
    * Earlier prints of plates like `request`, for the prompt: only sessions the user applied and then
-   * reported on, so the changes are known to have been printed. Most similar first, newest on a tie.
+   * reported on (or whose timelapse the local AI reviewed), so the changes are known to have been printed.
+   * Most similar first, newest on a tie.
    */
   async pastPrints(request: StudioRequest, limit = PAST_PRINT_LIMIT): Promise<PastPrint[]> {
     const plate = plateOf(request);
     return (await this.newest(PAST_PRINT_SCAN))
-      .filter((s) => s.applied && s.feedback)
+      .filter((s) => s.applied && (s.feedback || s.video_review))
       .map((s) => ({ session: s, score: similarity(plate, plateOf(s), request, s) }))
       .filter((c): c is { session: AiSession; score: number } => c.score !== null)
       // Stable sort over the newest-first list keeps newer sessions first on a tie
@@ -232,6 +236,16 @@ export class AiSessionStore {
     const session = await this.get(id);
     if (!session) return null;
     session.applied = { at: now.toISOString(), changes };
+    await this.write(session);
+    return session;
+  }
+
+  /** The timelapse review the user chose to use for later prints; null removes it */
+  async saveVideoReview(id: string, review: TimelapseReview | null): Promise<AiSession | null> {
+    const session = await this.get(id);
+    if (!session) return null;
+    if (review) session.video_review = review;
+    else delete session.video_review;
     await this.write(session);
     return session;
   }
@@ -249,6 +263,7 @@ export class AiSessionStore {
 const PAST_PRINT_SCAN = 300;
 const PAST_PRINT_LIMIT = 5;
 const NOTE_LIMIT = 300;
+const VIDEO_REVIEW_LIMIT = 600;
 
 interface PlateShape {
   materials: Set<string>;
@@ -296,9 +311,22 @@ function similarity(plate: PlateShape, past: PlateShape, request: StudioRequest,
   return score;
 }
 
+/** The video review as one line of the prompt: what the model saw, and what it would change */
+function videoReviewLine(review: TimelapseReview): string {
+  const issues = review.issues.map((i) => PRINT_ISSUE_LABELS[i]);
+  const text = [
+    review.summary.trim(),
+    issues.length ? `Lỗi thấy: ${issues.join(', ')}.` : '',
+    review.suggestions.length ? `Đề xuất: ${review.suggestions.join('; ')}` : '',
+  ]
+    .filter(Boolean)
+    .join(' ');
+  return text.length > VIDEO_REVIEW_LIMIT ? `${text.slice(0, VIDEO_REVIEW_LIMIT)}…` : text;
+}
+
 function toPastPrint(s: AiSession): PastPrint {
-  const feedback = s.feedback!;
-  const note = feedback.note.trim();
+  const feedback = s.feedback;
+  const note = feedback?.note.trim() ?? '';
   return {
     created_at: s.created_at,
     goal: s.goal,
@@ -310,8 +338,9 @@ function toPastPrint(s: AiSession): PastPrint {
       const label = s.result.changes.find((p) => settingRef(p) === ref)?.label;
       return { key: ref, ...(label ? { label } : {}), before: s.settings_before[ref] ?? null, after: c.value };
     }),
-    outcome: PRINT_OUTCOME_LABELS[feedback.outcome],
-    issues: feedback.issues.map((i) => PRINT_ISSUE_LABELS[i]),
+    outcome: feedback ? PRINT_OUTCOME_LABELS[feedback.outcome] : 'người dùng chưa báo',
+    issues: feedback?.issues.map((i) => PRINT_ISSUE_LABELS[i]) ?? [],
     note: note.length > NOTE_LIMIT ? `${note.slice(0, NOTE_LIMIT)}…` : note,
+    ...(s.video_review ? { video_review: videoReviewLine(s.video_review) } : {}),
   };
 }

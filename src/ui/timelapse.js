@@ -4,6 +4,7 @@
  * first time, so the first play of a video takes a few seconds.
  */
 import { escapeHtml, formatPrintTime } from './prints';
+import { mountReview } from './timelapseReview';
 
 // ---------- Pure helpers (unit-tested in tests/timelapseUi.test.ts) ----------
 
@@ -88,6 +89,7 @@ export function initTimelapse({ showToast, addLog }) {
             }</span>
             <a class="btn-ams-action" href="${escapeHtml(videoUrl(video.name))}" download="${escapeHtml(video.name)}">⬇ Tải về</a>
           </div>
+          <section class="print-section"></section>
         </div>
       </div>`;
     backdrop.querySelector('.prints-modal-title').textContent = video.print?.job_name ?? video.name;
@@ -98,6 +100,7 @@ export function initTimelapse({ showToast, addLog }) {
       loading.textContent = '❌ Không phát được video (máy in không trả lời, hoặc trình duyệt không hỗ trợ định dạng này). Thử Tải về.';
     });
     player.src = videoUrl(video.name);
+    const stopReview = mountReview(backdrop.querySelector('.print-section'), video, { showToast, addLog });
 
     const onKey = (e) => {
       if (e.key === 'Escape' && !e.defaultPrevented) close();
@@ -105,6 +108,7 @@ export function initTimelapse({ showToast, addLog }) {
     function close() {
       if (closeModal !== close) return;
       closeModal = null;
+      stopReview();
       player.pause();
       player.removeAttribute('src');
       player.load();

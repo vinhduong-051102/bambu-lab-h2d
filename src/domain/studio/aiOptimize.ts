@@ -156,6 +156,8 @@ export interface PastPrint {
   outcome: string;
   issues: string[];
   note: string;
+  /** What the local AI saw in the print's timelapse; a small model, so weighed below the user's report */
+  video_review?: string;
 }
 
 /**
@@ -720,6 +722,9 @@ function describePastPrints(pastPrints: PastPrint[]): string[] {
         : '   Đã đổi: không, in với preset như cũ',
       `   Kết quả: ${p.outcome}${p.issues.length ? `; lỗi: ${p.issues.join(', ')}` : ''}`,
       ...(p.note ? [`   Ghi chú của người dùng: ${JSON.stringify(p.note)}`] : []),
+      ...(p.video_review
+        ? [`   AI cục bộ xem timelapse (model nhỏ, có thể nhầm; người dùng báo khác thì tin người dùng): ${JSON.stringify(p.video_review)}`]
+        : []),
     ]),
   ];
 }

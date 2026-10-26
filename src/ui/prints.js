@@ -4,6 +4,7 @@
  * report form, settings); two ticked prints open side by side with only the settings that differ.
  */
 import { confirmDialog } from './confirmDialog';
+import { mountReview, renderReview } from './timelapseReview';
 
 const REFRESH_MS = 60_000;
 const LIST_LIMIT = 50;
@@ -443,6 +444,9 @@ export function initPrintHistory({ showToast, addLog }) {
         </section>
 
         <section class="print-section print-timelapse" hidden></section>
+        <section class="print-section print-video-review"${print.video_review ? '' : ' hidden'}>
+          ${print.video_review ? `<h4>🤖 AI nhận xét timelapse</h4>${renderReview(print.video_review, { outcomes, issues })}` : ''}
+        </section>
 
         <section class="print-section">
           <h4>Thiết lập khi in</h4>
@@ -500,6 +504,10 @@ export function initPrintHistory({ showToast, addLog }) {
             </div>
             <video class="timelapse-video" controls playsinline preload="metadata" src="${escapeHtml(src)}"></video>`;
           timelapseBox.hidden = false;
+          // The review then shows with its button beside the video, instead of on its own
+          const reviewBox = body.querySelector('.print-video-review');
+          reviewBox.hidden = false;
+          mountReview(reviewBox, video, { showToast, addLog, printId: print.id });
         })
         .catch(() => {
           // No timelapse section when the printer can't be read: the rest of the print still shows

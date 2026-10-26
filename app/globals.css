@@ -2785,6 +2785,66 @@ button.is-loading::after,
   margin-top: 10px;
 }
 
+/* "AI nhận xét" on a timelapse (src/ui/timelapseReview.js) */
+.timelapse-review {
+  margin-top: 14px;
+}
+
+.timelapse-review-result {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 0.82rem;
+}
+
+.timelapse-review-result h5 {
+  margin: 4px 0 0;
+  font-size: 0.8rem;
+  color: var(--text-muted);
+}
+
+.review-list {
+  padding-left: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.timelapse-review-print {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+  font-size: 0.82rem;
+}
+
+.timelapse-review-print select {
+  max-width: 100%;
+}
+
+.timelapse-review-use {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-top: 10px;
+  font-size: 0.82rem;
+}
+
+.timelapse-review-use .timelapse-review-print {
+  flex-basis: 100%;
+  margin-bottom: 0;
+}
+
+.timelapse-review-use.is-used {
+  justify-content: space-between;
+  padding: 8px 10px;
+  border-radius: var(--radius-sm);
+  background: rgba(16, 185, 129, 0.12);
+  color: #34d399;
+}
+
 @media (max-width: 640px) {
   .timelapse-list {
     grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));

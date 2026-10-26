@@ -89,6 +89,10 @@ export const GATEWAY_ROUTES: RouteDoc[] = [
   { method: 'GET', path: '/api/timelapse', category: 'Lịch sử in', description: 'Video timelapse trên máy in (mới nhất trước), kèm bản in tương ứng trong lịch sử', exampleUrl: '/api/timelapse' },
   { method: 'GET', path: '/api/timelapse/:name', category: 'Lịch sử in', description: 'Phát/tải video timelapse (lấy từ máy in lần đầu xem, hỗ trợ tua)' },
   { method: 'GET', path: '/api/timelapse/:name/thumbnail', category: 'Lịch sử in', description: 'Ảnh thumbnail của video timelapse' },
+  { method: 'GET', path: '/api/timelapse/:name/review', category: 'Lịch sử in', description: 'Nhận xét của AI cục bộ (Ollama) về video: none / running / failed / done' },
+  { method: 'POST', path: '/api/timelapse/:name/review', category: 'Lịch sử in', description: 'Nhờ AI cục bộ xem video và nhận xét {print_id?}; chỉ là nhận xét, chưa dùng cho lần in sau' },
+  { method: 'POST', path: '/api/timelapse/:name/review/use', category: 'Lịch sử in', description: 'Dùng nhận xét cho lần in sau {print_id?}: lưu vào bản in và đề xuất AI tối ưu của nó' },
+  { method: 'DELETE', path: '/api/timelapse/:name/review/use', category: 'Lịch sử in', description: 'Bỏ dùng nhận xét cho lần in sau (nhận xét vẫn giữ)' },
 
   // Print history
   { method: 'GET', path: '/api/prints', category: 'Lịch sử in', description: 'Các bản in đã ghi lại (mới nhất trước): ảnh, kết quả, lựa chọn báo cáo', exampleUrl: '/api/prints?limit=50' },

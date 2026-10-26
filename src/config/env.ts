@@ -63,6 +63,10 @@ const envSchema = z.object({
   PRINT_HISTORY_DIR: z.preprocess((val) => (typeof val === 'string' && val.trim() === '' ? undefined : val), z.string().default('./data/prints')),
   // Timelapse videos and thumbnails copied from the printer the first time they are watched
   TIMELAPSE_CACHE_DIR: z.preprocess((val) => (typeof val === 'string' && val.trim() === '' ? undefined : val), z.string().default('./data/timelapse')),
+  // Ollama, where the vision model behind "AI nhận xét" on a timelapse runs (on this machine's GPU)
+  OLLAMA_URL: z.preprocess((val) => (typeof val === 'string' && val.trim() === '' ? undefined : val), z.string().url().default('http://127.0.0.1:11434')),
+  // The Ollama vision model that reviews timelapses (`ollama pull <model>` first)
+  TIMELAPSE_AI_MODEL: z.preprocess((val) => (typeof val === 'string' && val.trim() === '' ? undefined : val), z.string().default('qwen3-vl:8b')),
   // CAD worker container (docker-compose.cad.yml) behind "Thiết kế mô hình bằng AI"; unset turns the feature off
   CAD_WORKER_URL: z.preprocess((val) => (typeof val === 'string' && val.trim() === '' ? undefined : val), z.string().url().optional()),
   // Host folder mounted at /jobs in the CAD container: one folder per model, with its code, files and status

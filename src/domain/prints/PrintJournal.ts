@@ -4,6 +4,7 @@ import path from 'path';
 import { z } from 'zod';
 import { studioRequestSchema } from '../studio/aiOptimize';
 import type { PrintFeedback } from '../studio/aiSessions';
+import type { TimelapseReview } from '../timelapse/TimelapseReviewer';
 
 /**
  * Print history: one folder per print with record.json and its photos (the printer camera's shot when
@@ -40,6 +41,8 @@ export interface PrintRecord {
   setup: PrintSetup | null;
   photos: PrintPhoto[];
   feedback: (PrintFeedback & { at: string }) | null;
+  /** The local AI's review of the print's timelapse, once the user chose to use it for later prints */
+  video_review?: TimelapseReview;
 }
 
 export interface PrintSummary {
