@@ -3,7 +3,7 @@ import { commandErrorResponse, handler, json, readJsonBody } from '../http';
 
 const nozzleTempSchema = z.object({
   target: z
-    .number({ required_error: 'target temperature is required' })
+    .number({ error: (issue) => (issue.input === undefined ? 'target temperature is required' : undefined) })
     .finite('target must be a finite number')
     .min(0, 'Target temperature cannot be negative')
     .max(300, 'Target Hotend temperature cannot exceed 300°C'),
@@ -11,13 +11,13 @@ const nozzleTempSchema = z.object({
 
 const bedTempSchema = z.object({
   target: z
-    .number({ required_error: 'target temperature is required' })
+    .number({ error: (issue) => (issue.input === undefined ? 'target temperature is required' : undefined) })
     .finite('target must be a finite number')
     .min(0, 'Target temperature cannot be negative')
     .max(120, 'Target Heatbed temperature cannot exceed 120°C'),
 });
 
-const invalidPayload = (issues: z.ZodIssue[]) =>
+const invalidPayload = (issues: z.core.$ZodIssue[]) =>
   json(
     {
       success: false,

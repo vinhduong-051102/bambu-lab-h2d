@@ -10,21 +10,22 @@ const isTestEnv =
   process.env.VITEST === 'true' ||
   process.env.NEXT_PHASE === 'phase-production-build';
 
+/**
+ * A setting the gateway can't run without; tests get `testValue`. Zod returns a default without checking it,
+ * so outside tests there is no default at all and a missing value fails with `message`.
+ */
+const required = (message: string, testValue: string) =>
+  isTestEnv ? z.string().default(testValue) : z.string({ error: (issue) => (issue.input === undefined ? message : undefined) });
+
 const envSchema = z.object({
-  BAMBU_HOST: z.string({
-    required_error: 'BAMBU_HOST environment variable is required (e.g. 192.168.1.100)',
-  }).default(isTestEnv ? '127.0.0.1' : undefined as any),
+  BAMBU_HOST: required('BAMBU_HOST environment variable is required (e.g. 192.168.1.100)', '127.0.0.1'),
 
   BAMBU_PORT: z.coerce.number().default(8883),
   BAMBU_FTP_PORT: z.coerce.number().default(990),
 
-  BAMBU_SERIAL: z.string({
-    required_error: 'BAMBU_SERIAL environment variable is required (e.g. 01S00A123456789)',
-  }).default(isTestEnv ? 'TEST_SERIAL_123' : undefined as any),
+  BAMBU_SERIAL: required('BAMBU_SERIAL environment variable is required (e.g. 01S00A123456789)', 'TEST_SERIAL_123'),
 
-  BAMBU_ACCESS_CODE: z.string({
-    required_error: 'BAMBU_ACCESS_CODE environment variable is required',
-  }).default(isTestEnv ? 'TEST_ACCESS_CODE' : undefined as any),
+  BAMBU_ACCESS_CODE: required('BAMBU_ACCESS_CODE environment variable is required', 'TEST_ACCESS_CODE'),
 
   HTTP_HOST: z.string().default('0.0.0.0'),
   HTTP_PORT: z.coerce.number().default(3000),

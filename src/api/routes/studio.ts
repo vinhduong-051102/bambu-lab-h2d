@@ -225,7 +225,7 @@ export const listAiSessions = handler(async ({ request }) => {
 const sessionNotFound = () => json({ success: false, error: 'SESSION_NOT_FOUND', message: 'Không tìm thấy lần đề xuất AI này.' }, 404);
 
 /** A zod failure as the 400 response the session routes give */
-const invalidPayload = (error: { issues: { path: (string | number)[]; message: string }[] }) => {
+const invalidPayload = (error: { issues: { path: PropertyKey[]; message: string }[] }) => {
   const issue = error.issues[0];
   return json({ success: false, error: 'INVALID_PAYLOAD', message: `${issue.path.join('.') || '(gốc)'}: ${issue.message}` }, 400);
 };

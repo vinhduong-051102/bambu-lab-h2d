@@ -3,7 +3,7 @@ import { commandErrorResponse, handler, json, readJsonBody } from '../http';
 
 const fanSpeedSchema = z.object({
   speed: z
-    .number({ required_error: 'speed is required' })
+    .number({ error: (issue) => (issue.input === undefined ? 'speed is required' : undefined) })
     .finite('speed must be a finite number')
     .min(0, 'Speed percentage cannot be negative')
     .max(100, 'Speed percentage cannot exceed 100%'),

@@ -113,12 +113,12 @@ export const studioRequestSchema = z.object({
       used: z.boolean().optional(),
       // Extruder variants, in the order of the per-variant values ("Direct Drive Standard", ...)
       variants: z.array(z.string()).optional(),
-      settings: z.record(z.string()).optional(),
+      settings: z.record(z.string(), z.string()).optional(),
     })
   ),
-  settings: z.record(z.string()),
+  settings: z.record(z.string(), z.string()),
   process_variants: z.array(z.string()).optional(),
-  options: z.record(studioOptionSchema).optional(),
+  options: z.record(z.string(), studioOptionSchema).optional(),
   objects: z
     .array(
       z.object({

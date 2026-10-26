@@ -23,7 +23,7 @@ const sessionStore = () => sessionStoreOverride ?? new AiSessionStore(path.resol
 
 const notFound = () => json({ success: false, error: 'PRINT_NOT_FOUND', message: 'Không tìm thấy bản in này.' }, 404);
 
-const invalidPayload = (error: { issues: { path: (string | number)[]; message: string }[] }) => {
+const invalidPayload = (error: { issues: { path: PropertyKey[]; message: string }[] }) => {
   const issue = error.issues[0];
   return json({ success: false, error: 'INVALID_PAYLOAD', message: `${issue.path.join('.') || '(gốc)'}: ${issue.message}` }, 400);
 };
