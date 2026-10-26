@@ -5,16 +5,6 @@
 
 export const STATUS_LABELS = { printing: 'Đang in', finished: 'Hoàn thành', failed: 'Lỗi', unknown: 'Không rõ' };
 
-/** Escapes text from the API (job names, notes and preset names are typed by users) for innerHTML */
-export function escapeHtml(value) {
-  return String(value ?? '')
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&#39;');
-}
-
 /** "dd/mm HH:MM" in local time, "—" when missing or unparseable */
 export function formatPrintTime(iso) {
   if (!iso) return '—';

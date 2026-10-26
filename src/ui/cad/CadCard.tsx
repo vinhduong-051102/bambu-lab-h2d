@@ -1,0 +1,528 @@
+'use client';
+
+import { BuildOutlined, CloseOutlined, DeleteOutlined, PictureOutlined, PlusOutlined, ReloadOutlined, ThunderboltOutlined } from '@ant-design/icons';
+import {
+  AutoComplete,
+  Button,
+  Card,
+  Checkbox,
+  Collapse,
+  ColorPicker,
+  Empty,
+  Flex,
+  Input,
+  InputNumber,
+  Radio,
+  Select,
+  Space,
+  Spin,
+  Typography,
+  Upload,
+} from 'antd';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { useActions } from '../DashboardContext';
+import { HINTS, isBusy, PLACEHOLDERS } from '../cad';
+import { CadJobCard, type CadAction, type CadJob } from './CadJob';
+
+const BUSY_REFRESH_MS = 3000;
+const IDLE_REFRESH_MS = 30_000;
+const LIST_LIMIT = 30;
+
+type Kind = 'technical' | 'figure';
+type Palette = 'prefer' | 'auto' | 'ams' | 'bambu' | 'custom';
+
+interface Worker {
+  online: boolean;
+  claude: boolean;
+  loaded?: boolean;
+  error?: string;
+}
+
+interface CadConfig {
+  enabled: boolean;
+  models: { id: string; label: string }[];
+  default_model: string;
+  worker?: Worker | null;
+  mesh?: Worker | null;
+  bambu_materials?: { material: string; colours: number }[];
+  bambu_families?: { family: string; colours: number; materials: number }[];
+}
+
+interface Filament {
+  id: string;
+  name: string;
+  brand?: string;
+  material?: string;
+  hex: string;
+}
+
+const MATERIAL_SUGGESTIONS = ['PLA', 'PLA Matte', 'PLA Silk', 'PETG', 'ABS', 'ASA', 'TPU'].map((value) => ({ value }));
+
+async function api<T = any>(method: string, url: string, body?: unknown): Promise<T> {
+  const form = body instanceof FormData;
+  const res = await fetch(url, {
+    method,
+    headers: body === undefined || form ? undefined : { 'Content-Type': 'application/json' },
+    body: body === undefined || form ? (body as FormData | undefined) : JSON.stringify(body),
+  });
+  const data = await res.json().catch(() => null);
+  if (!res.ok || !data) throw new Error(data?.message || `Lỗi HTTP ${res.status}`);
+  return data;
+}
+
+const errorText = (err: unknown) => (err instanceof Error ? err.message : String(err));
+const swatch = (hex: string) => <i className="cad-swatch-dot" style={{ background: hex }} />;
+
+/** "Filament của tôi": other brands and colours Bambu doesn't make, saved for painting figures */
+function MyFilaments({ filaments, onChange }: { filaments: Filament[]; onChange: (next: Filament[]) => void }) {
+  const { showToast } = useActions();
+  const [hex, setHex] = useState('#C8783C');
+  const [name, setName] = useState('');
+  const [brand, setBrand] = useState('');
+  const [material, setMaterial] = useState('PLA');
+  const [saving, setSaving] = useState(false);
+
+  const save = async () => {
+    setSaving(true);
+    try {
+      const { filament } = await api<{ filament: Filament }>('POST', '/api/filaments/custom', { name, brand, material, hex });
+      onChange([...filaments, filament]);
+      setName('');
+      showToast(`Đã lưu filament ${filament.name}.`, 'success');
+    } catch (err) {
+      showToast(errorText(err), 'error');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const remove = async (id: string) => {
+    try {
+      await api('DELETE', `/api/filaments/custom/${encodeURIComponent(id)}`);
+      onChange(filaments.filter((f) => f.id !== id));
+    } catch (err) {
+      showToast(errorText(err), 'error');
+    }
+  };
+
+  return (
+    <Flex vertical gap={10}>
+      {filaments.length ? (
+        filaments.map((f) => (
+          <Flex key={f.id} justify="space-between" align="center">
+            <span className="cad-swatch">
+              {swatch(f.hex)}
+              {[f.brand, f.material, f.name].filter(Boolean).join(' ')} · {f.hex}
+            </span>
+            <Button size="small" type="text" danger icon={<DeleteOutlined />} title="Xóa" onClick={() => remove(f.id)} />
+          </Flex>
+        ))
+      ) : (
+        <Typography.Text type="secondary">Chưa có. Thêm filament hãng khác hoặc màu Bambu không có, để lần sau tô màu mô hình bằng chúng.</Typography.Text>
+      )}
+      <Flex wrap gap={8}>
+        <ColorPicker value={hex} disabledAlpha showText onChange={(c) => setHex(c.toHexString().toUpperCase())} />
+        <Input placeholder="Tên màu, ví dụ Cam đất" maxLength={60} value={name} onChange={(e) => setName(e.target.value)} style={{ width: 200 }} />
+        <Input placeholder="Hãng (không bắt buộc)" maxLength={40} value={brand} onChange={(e) => setBrand(e.target.value)} style={{ width: 170 }} />
+        <AutoComplete options={MATERIAL_SUGGESTIONS} value={material} onChange={setMaterial} placeholder="Loại nhựa" style={{ width: 130 }} />
+        <Button type="primary" icon={<PlusOutlined />} loading={saving} onClick={save}>
+          Lưu filament
+        </Button>
+      </Flex>
+    </Flex>
+  );
+}
+
+/**
+ * "Thiết kế mô hình bằng AI": technical parts (Claude writes build123d in the CAD container) and figures
+ * (Hunyuan3D-2 on the GPU) in one list, polled every 3s while one is being made. `onBusyChange` tells the tab
+ * whether something is being designed.
+ */
+export function CadCard({ onBusyChange }: { onBusyChange?: (busy: boolean) => void }) {
+  const { showToast, addLog } = useActions();
+  const [config, setConfig] = useState<CadConfig | null>(null);
+  const [jobs, setJobs] = useState<CadJob[] | null>(null);
+  const [listError, setListError] = useState<string | null>(null);
+  const [now, setNow] = useState(() => Date.now());
+  const [kind, setKind] = useState<Kind>('technical');
+  const [model, setModel] = useState<string>();
+  const [prompt, setPrompt] = useState('');
+  const [image, setImage] = useState<File | null>(null);
+  const [height, setHeight] = useState<number | null>(80);
+  const [base, setBase] = useState(true);
+  const [colour, setColour] = useState(false);
+  const [palette, setPalette] = useState<Palette>('prefer');
+  // '' = "theo nhựa trong AMS", only offered when preferring what is loaded
+  const [material, setMaterial] = useState('');
+  const [materialTouched, setMaterialTouched] = useState(false);
+  const [colours, setColours] = useState<number | null>(4);
+  const [filaments, setFilaments] = useState<Filament[]>([]);
+  // Filaments left unticked for painting; new ones start ticked
+  const [unticked, setUnticked] = useState<Set<string>>(new Set());
+  const [filamentsOpen, setFilamentsOpen] = useState(false);
+  const [creating, setCreating] = useState(false);
+  const jobsRef = useRef<CadJob[]>([]);
+  const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const refresh = useCallback(async () => {
+    if (timer.current) clearTimeout(timer.current);
+    let list = jobsRef.current;
+    try {
+      const before = new Map(list.map((job) => [job.id, job.state]));
+      list = (await api<{ jobs: CadJob[] }>('GET', `/api/cad/jobs?limit=${LIST_LIMIT}`)).jobs;
+      for (const job of list) {
+        if (before.get(job.id) === 'running' && job.state === 'done') {
+          showToast(`Đã thiết kế xong: ${job.title || job.prompt}`, 'success');
+          addLog(`AI đã thiết kế xong mô hình "${job.title || job.prompt}".`, 'success');
+        } else if (before.get(job.id) === 'running' && job.state === 'failed') {
+          showToast(`Thiết kế lỗi: ${job.error}`, 'error');
+        }
+      }
+      jobsRef.current = list;
+      setJobs(list);
+      setListError(null);
+    } catch (err) {
+      setListError(errorText(err));
+    }
+    setNow(Date.now());
+    timer.current = setTimeout(refresh, list.some(isBusy) ? BUSY_REFRESH_MS : IDLE_REFRESH_MS);
+  }, [showToast, addLog]);
+
+  useEffect(() => {
+    let cancelled = false;
+    api<CadConfig>('GET', '/api/cad')
+      .then((data) => {
+        if (cancelled || !data.enabled) return;
+        setConfig(data);
+        setModel(data.default_model);
+        // Both kinds set up: the user picks; otherwise the one there is
+        setKind(data.worker ? 'technical' : 'figure');
+        refresh();
+        api<{ filaments: Filament[] }>('GET', '/api/filaments/custom')
+          .then(({ filaments: list }) => !cancelled && setFilaments(list))
+          .catch(() => {});
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+      if (timer.current) clearTimeout(timer.current);
+    };
+  }, [refresh]);
+
+  const busy = jobs?.some(isBusy) ?? false;
+  useEffect(() => onBusyChange?.(busy), [busy, onBusyChange]);
+
+  const added = (job: CadJob) => {
+    jobsRef.current = [job, ...jobsRef.current.filter((j) => j.id !== job.id)];
+    setJobs(jobsRef.current);
+    refresh();
+  };
+
+  // ---------- Creating ----------
+
+  const figure = kind === 'figure';
+  const worker = figure ? config?.mesh : config?.worker;
+  const workerStatus = !worker?.online
+    ? `🔴 Container ${figure ? 'mesh3d' : 'CAD'} chưa chạy`
+    : !worker.claude
+      ? '🟡 Thiếu CLAUDE_CODE_OAUTH_TOKEN'
+      : figure && !worker.loaded
+        ? '🟢 Sẵn sàng (model chưa nạp vào GPU)'
+        : '🟢 Sẵn sàng';
+  // A figure from an uploaded picture needs no Claude
+  const canCreate = !!worker?.online && (figure || worker.claude);
+  const bambuPalette = !!config?.bambu_materials?.length;
+  const customPick = colour && (palette === 'custom' || palette === 'prefer');
+
+  const choosePalette = (next: Palette) => {
+    setPalette(next);
+    if (next === 'bambu' && !material) setMaterial('PLA Basic');
+    if (next === 'prefer' && !materialTouched) setMaterial('');
+    if ((next === 'custom' || next === 'prefer') && filaments.length < 2) setFilamentsOpen(true);
+  };
+
+  /** A figure from the form: the picture if one is chosen, the description, the height and the plinth */
+  const createFigure = async (text: string) => {
+    const body = new FormData();
+    body.append('prompt', text);
+    body.append('height_mm', String(height || 80));
+    body.append('base', base ? 'true' : 'false');
+    if (colour) {
+      body.append('colour', 'true');
+      body.append('palette', palette);
+      body.append('colours', String(colours || 4));
+      if (palette === 'bambu' || palette === 'prefer') body.append('material', material);
+      if (palette === 'custom' || palette === 'prefer') {
+        body.append('filaments', filaments.filter((f) => !unticked.has(f.id)).map((f) => f.id).join(','));
+      }
+    }
+    if (image) body.append('image', image);
+    const { job } = await api<{ job: CadJob }>('POST', '/api/cad/meshes', body);
+    added(job);
+    addLog(`Đã gửi dựng mô hình nhân vật${image ? ` từ ảnh ${image.name}` : ''}: ${text || job.prompt}`);
+  };
+
+  const create = async (text: string, parentId?: string) => {
+    const { job } = await api<{ job: CadJob }>('POST', '/api/cad/jobs', { prompt: text, model, ...(parentId && { parent_id: parentId }) });
+    added(job);
+    addLog(`Đã gửi Claude ${parentId ? 'sửa' : 'thiết kế'} mô hình: ${text}`);
+  };
+
+  const submit = async () => {
+    const text = prompt.trim();
+    if (figure ? text.length < 3 && !image : text.length < 3) {
+      showToast(figure ? 'Chọn ảnh hoặc mô tả mô hình trước đã.' : 'Mô tả mô hình cần in trước đã.', 'error');
+      return;
+    }
+    setCreating(true);
+    try {
+      if (figure) {
+        await createFigure(text);
+        setImage(null);
+      } else {
+        await create(text);
+      }
+      setPrompt('');
+    } catch (err) {
+      showToast(errorText(err), 'error');
+    } finally {
+      setCreating(false);
+    }
+  };
+
+  // ---------- A model's buttons ----------
+
+  const action = async (job: CadJob, act: CadAction) => {
+    try {
+      if (act === 'cancel') {
+        await api('POST', `/api/cad/jobs/${encodeURIComponent(job.id)}/cancel`, {});
+        showToast('Đã hủy.', 'info');
+      } else if (act === 'again') {
+        // Same picture or description, same size and plinth, coloured the same way, another seed
+        const params = Object.fromEntries((job.result?.parameters ?? []).map((p) => [p.name, p.value])) as Record<string, any>;
+        const asked = job.report?.colour_request;
+        const { job: next } = await api<{ job: CadJob }>('POST', '/api/cad/meshes', {
+          parent_id: job.id,
+          ...(params.height_mm && { height_mm: params.height_mm }),
+          base: Boolean(params.base),
+          ...(params.colours > 0 && { colour: true, colours: params.colours, ...(asked ?? {}) }),
+        });
+        added(next);
+        showToast('Đang dựng lại với số ngẫu nhiên khác.', 'info');
+      } else {
+        const sent = await api('POST', `/api/cad/jobs/${encodeURIComponent(job.id)}/studio`, { format: act === 'studio-3mf' ? '3mf' : 'stl' });
+        showToast(`Đã gửi ${sent.studioPath}. Trong Studio: File → Import.`, 'success');
+        addLog(`Đã gửi mô hình AI vào Bambu Studio: ${sent.studioPath}`, 'success');
+      }
+      await refresh();
+    } catch (err) {
+      showToast(errorText(err), 'error');
+    }
+  };
+
+  /** Revise a technical model, or have Claude review and fix a figure (words optional) */
+  const revise = async (job: CadJob, comment: string) => {
+    const fix = job.source === 'mesh';
+    if (fix ? comment.length > 0 && comment.length < 3 : comment.length < 3) {
+      showToast('Ghi cần sửa gì trước đã.', 'error');
+      return false;
+    }
+    try {
+      if (fix) {
+        const { job: next } = await api<{ job: CadJob }>('POST', `/api/cad/jobs/${encodeURIComponent(job.id)}/fix`, { prompt: comment, model });
+        added(next);
+        addLog(`Đã gửi Claude review và sửa mô hình nhân vật${comment ? `: ${comment}` : ''}`);
+      } else {
+        await create(comment, job.id);
+      }
+      return true;
+    } catch (err) {
+      showToast(errorText(err), 'error');
+      return false;
+    }
+  };
+
+  // Bambu's own colours: whole families first (more colours to choose from), then each material
+  const materialOptions = [
+    ...(palette === 'prefer' ? [{ value: '', label: 'Màu cần mua: theo nhựa trong AMS' }] : []),
+    ...(config?.bambu_families?.length
+      ? [
+          {
+            label: 'Cả dòng nhựa',
+            options: config.bambu_families.map((f) => ({ value: `family:${f.family}`, label: `Mọi dòng ${f.family} (${f.colours} màu, ${f.materials} loại)` })),
+          },
+        ]
+      : []),
+    { label: 'Một loại nhựa', options: (config?.bambu_materials ?? []).map((m) => ({ value: m.material, label: `${m.material} (${m.colours} màu)` })) },
+  ];
+
+  if (!config) return null;
+
+  return (
+    <Card
+      title={
+        <>
+          <BuildOutlined /> Thiết kế mô hình bằng AI
+        </>
+      }
+      extra={
+        <Space>
+          <Typography.Text type="secondary" title={worker?.error ?? ''}>
+            {workerStatus}
+          </Typography.Text>
+          <Button icon={<ReloadOutlined />} onClick={refresh}>
+            Làm mới
+          </Button>
+        </Space>
+      }
+    >
+      <Flex vertical gap={12}>
+        {config.worker && config.mesh && (
+          <Radio.Group
+            optionType="button"
+            buttonStyle="solid"
+            value={kind}
+            onChange={(e) => setKind(e.target.value)}
+            options={[
+              { value: 'technical', label: '🔧 Kỹ thuật' },
+              { value: 'figure', label: '🧸 Nhân vật / trang trí' },
+            ]}
+          />
+        )}
+        <Input.TextArea rows={3} maxLength={4000} placeholder={PLACEHOLDERS[kind]} value={prompt} onChange={(e) => setPrompt(e.target.value)} />
+        {figure && (
+          <Flex wrap gap={12} align="center">
+            <Upload
+              accept="image/png,image/jpeg,image/webp"
+              showUploadList={false}
+              beforeUpload={(file) => {
+                setImage(file);
+                return false;
+              }}
+            >
+              <Button icon={<PictureOutlined />}>Chọn ảnh</Button>
+            </Upload>
+            <Typography.Text type="secondary">{image ? image.name : 'Chưa chọn ảnh: AI sẽ vẽ ảnh từ mô tả'}</Typography.Text>
+            {image && <Button size="small" type="text" icon={<CloseOutlined />} title="Bỏ ảnh" onClick={() => setImage(null)} />}
+            <Space>
+              Cao
+              <InputNumber min={10} max={300} step={1} value={height} onChange={setHeight} suffix="mm" style={{ width: 110 }} />
+            </Space>
+            <Checkbox checked={base} onChange={(e) => setBase(e.target.checked)}>
+              Thêm đế
+            </Checkbox>
+            <Checkbox
+              checked={colour}
+              onChange={(e) => {
+                setColour(e.target.checked);
+                if (e.target.checked && (palette === 'custom' || palette === 'prefer') && filaments.length < 2) setFilamentsOpen(true);
+              }}
+            >
+              Tô màu
+            </Checkbox>
+            {colour && (
+              <>
+                <Select<Palette>
+                  value={palette}
+                  onChange={choosePalette}
+                  style={{ minWidth: 280 }}
+                  aria-label="Chọn màu"
+                  options={[
+                    { value: 'prefer', label: 'Ưu tiên màu có sẵn (AMS → của tôi → Bambu)' },
+                    { value: 'auto', label: 'Tự chọn màu theo ảnh' },
+                    { value: 'ams', label: 'Màu đang nạp trong AMS' },
+                    ...(bambuPalette ? [{ value: 'bambu' as const, label: 'Màu Bambu chính hãng' }] : []),
+                    { value: 'custom', label: 'Filament của tôi' },
+                  ]}
+                />
+                {bambuPalette && (palette === 'bambu' || palette === 'prefer') && (
+                  <Select
+                    value={material}
+                    onChange={(v) => {
+                      setMaterial(v);
+                      setMaterialTouched(true);
+                    }}
+                    style={{ minWidth: 240 }}
+                    aria-label="Loại nhựa Bambu"
+                    options={materialOptions}
+                  />
+                )}
+                {/* The AMS decides how many colours */}
+                {palette !== 'ams' && (
+                  <Space>
+                    Số màu
+                    <InputNumber min={2} max={8} step={1} value={colours} onChange={setColours} style={{ width: 70 }} />
+                  </Space>
+                )}
+              </>
+            )}
+          </Flex>
+        )}
+        {/* "Filament của tôi" to paint with: ticked ones only */}
+        {figure && customPick && (
+          <Flex wrap gap={10} align="center">
+            {filaments.length ? (
+              <>
+                <Typography.Text type="secondary">Tô bằng:</Typography.Text>
+                {filaments.map((f) => (
+                  <Checkbox
+                    key={f.id}
+                    checked={!unticked.has(f.id)}
+                    onChange={(e) =>
+                      setUnticked((prev) => {
+                        const next = new Set(prev);
+                        if (e.target.checked) next.delete(f.id);
+                        else next.add(f.id);
+                        return next;
+                      })
+                    }
+                  >
+                    {swatch(f.hex)}
+                    {f.name}
+                  </Checkbox>
+                ))}
+              </>
+            ) : (
+              <Typography.Text type="secondary">Chưa có filament nào: thêm ở mục 🎨 Filament của tôi bên dưới.</Typography.Text>
+            )}
+          </Flex>
+        )}
+        <Flex gap={8} wrap>
+          {!figure && (
+            <Select value={model} onChange={setModel} style={{ minWidth: 200 }} aria-label="Model Claude" options={config.models.map((m) => ({ value: m.id, label: m.label }))} />
+          )}
+          <Button type="primary" icon={<ThunderboltOutlined />} loading={creating} disabled={!canCreate} onClick={submit}>
+            Tạo mô hình
+          </Button>
+        </Flex>
+        <Typography.Text type="secondary">{HINTS[kind]}</Typography.Text>
+        <Collapse
+          activeKey={filamentsOpen ? ['filaments'] : []}
+          onChange={(keys) => setFilamentsOpen(keys.includes('filaments'))}
+          items={[
+            {
+              key: 'filaments',
+              label: `🎨 Filament của tôi (${filaments.length})`,
+              children: <MyFilaments filaments={filaments} onChange={setFilaments} />,
+            },
+          ]}
+        />
+        {!jobs ? (
+          listError ? (
+            <Empty description={`❌ ${listError}`} />
+          ) : (
+            <Spin />
+          )
+        ) : jobs.length === 0 ? (
+          <Empty description="Chưa có mô hình nào. Mô tả mô hình ở trên rồi bấm ✨ Tạo mô hình." />
+        ) : (
+          <Flex vertical gap={10}>
+            {jobs.map((job) => (
+              <CadJobCard key={job.id} job={job} now={now} onAction={(act) => action(job, act)} onRevise={(comment) => revise(job, comment)} />
+            ))}
+          </Flex>
+        )}
+      </Flex>
+    </Card>
+  );
+}

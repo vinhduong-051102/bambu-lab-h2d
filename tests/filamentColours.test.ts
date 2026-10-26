@@ -13,7 +13,11 @@ import { PrinterStateStore } from '../src/domain/PrinterStateStore';
 import { CapabilityRegistry } from '../src/domain/capabilities/CapabilityRegistry';
 import { PrinterCommandService } from '../src/domain/commands/PrinterCommandService';
 import { PrinterService } from '../src/domain/PrinterService';
-import { renderPaletteEntry } from '../src/ui/cad.js';
+import { createElement } from 'react';
+import { renderToStaticMarkup } from 'react-dom/server';
+import { PaletteRow } from '../src/ui/cad/CadJob';
+
+const renderPaletteEntry = (entry: any) => renderToStaticMarkup(createElement(PaletteRow, { entry }));
 import { createTestApp, type TestApp } from './helpers/testApp';
 
 const single = (code: string, id: string, type: string, name: string, hex: string) => ({

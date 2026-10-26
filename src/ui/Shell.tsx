@@ -4,7 +4,7 @@ import { ApiOutlined, AppstoreOutlined, CaretRightOutlined, EyeOutlined, PauseOu
 import { Badge, Button, Card, Col, Flex, Layout, Row, Space, Switch, Tabs, Tag, Typography } from 'antd';
 import { useEffect, useState, type ReactNode } from 'react';
 import { useActions, useCommand, useLive, type WsStatus } from './DashboardContext';
-import { LegacyCadCard } from './legacy/LegacyCards';
+import { CadCard } from './cad/CadCard';
 import { pageFromHash } from './pages';
 import { AmsCard } from './printer/AmsCard';
 import { CameraCard } from './printer/CameraCard';
@@ -168,6 +168,7 @@ export function Shell() {
   const [page, go] = usePage(available);
   const [apiOpen, setApiOpen] = useState(false);
   const [capOpen, setCapOpen] = useState(false);
+  const [cadBusy, setCadBusy] = useState(false);
 
   const pages = [
     {
@@ -184,14 +185,14 @@ export function Shell() {
     features.studio && { key: 'studio', label: '🧩 Bambu Studio', children: <StudioCard /> },
     features.cad && {
       key: 'cad',
+      // Seen from the other pages: a dot while a model is being designed
       label: (
-        <>
+        <Badge dot={cadBusy} offset={[6, 0]}>
           ✨ Thiết kế AI
-          <span className="page-tab-dot" id="cadTabDot" hidden />
-        </>
+        </Badge>
       ),
       forceRender: true,
-      children: <LegacyCadCard />,
+      children: <CadCard onBusyChange={setCadBusy} />,
     },
     { key: 'prints', label: '🕘 Lịch sử in', children: <PrintHistoryCard /> },
     { key: 'system', label: '🛠️ Hệ thống', children: grid([<ConsoleCard key="console" />, {}], [<DiagnosticsCard key="diag" />, {}]) },

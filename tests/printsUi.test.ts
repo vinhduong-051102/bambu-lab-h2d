@@ -1,17 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
-import { diffSettings, escapeHtml, formatPrintTime, listSettings, orderSettingKeys, printSettings } from '../src/ui/prints.js';
+import { diffSettings, formatPrintTime, listSettings, orderSettingKeys, printSettings } from '../src/ui/prints.js';
 import { PrintRow } from '../src/ui/prints/rows';
 
 const labels = { layer_height: 'Chiều cao lớp', sparse_infill_density: 'Mật độ infill' };
 
 describe('print history UI helpers', () => {
-  it('escapes HTML from user-typed text', () => {
-    expect(escapeHtml(`<img src=x onerror="a('b')">&`)).toBe('&lt;img src=x onerror=&quot;a(&#39;b&#39;)&quot;&gt;&amp;');
-    expect(escapeHtml(null)).toBe('');
-  });
-
   it('formats times as dd/mm HH:MM in local time', () => {
     const d = new Date(2026, 9, 5, 7, 3);
     expect(formatPrintTime(d.toISOString())).toBe('05/10 07:03');
