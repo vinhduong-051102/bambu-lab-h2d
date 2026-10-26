@@ -20,6 +20,7 @@ import {
 import { AiSessionStore, appliedSchema, feedbackSchema, PRINT_ISSUE_LABELS, PRINT_OUTCOME_LABELS } from '../../domain/studio/aiSessions';
 import { safeFileName, saveStudioImport, STUDIO_FILE_RE, type StudioImport } from '../../domain/studio/studioImports';
 import { handler, json, readJsonBody } from '../http';
+import { partsSection } from './parts';
 
 const MAX_IMPORT_BYTES = 1024 * 1024 * 1024;
 
@@ -161,7 +162,8 @@ export const aiOptimize = handler(async ({ request, printerService }) => {
       printerService.stateStore.getState(),
       source,
       await loadFollowUp(parsed),
-      await sessionStore().pastPrints(parsed)
+      await sessionStore().pastPrints(parsed),
+      await partsSection(parsed)
     );
   } catch (err) {
     if (err instanceof AiOptimizeError) {
@@ -191,7 +193,8 @@ export const aiOptimizePrompt = handler(async ({ request, printerService }) => {
     parsed,
     printerService.stateStore.getState(),
     await loadFollowUp(parsed),
-    await sessionStore().pastPrints(parsed)
+    await sessionStore().pastPrints(parsed),
+    await partsSection(parsed)
   );
   return json({ success: true, system: prompts.system + PROGRESS_NOTES_PROMPT, user: prompts.user, schema: PROPOSAL_JSON_SCHEMA });
 });

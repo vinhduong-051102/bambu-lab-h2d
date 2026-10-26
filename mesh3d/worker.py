@@ -52,10 +52,17 @@ PAINT_SUBFOLDER = os.environ.get("MESH_PAINT_SUBFOLDER", "hunyuan3d-paint-v2-0-t
 # colours then go onto the printable mesh
 PAINT_FACES = 40000
 JOB_ID_RE = re.compile(r"^[a-z0-9][a-z0-9-]{5,63}$")
+# "Thành phần của mẫu" (analyze.py): models from Studio's import folder, renders into the gateway's analyses folder
+IMPORTS_DIR = Path(os.environ.get("IMPORTS_DIR", "/imports"))
+ANALYSES_DIR = Path(os.environ.get("ANALYSES_DIR", "/analyses"))
+ANALYSIS_KEY_RE = re.compile(r"^[a-f0-9]{16,64}$")
+# Measuring is CPU work next to the GPU queue: two at a time at most
+analysing = threading.Semaphore(2)
 
 # The CAD worker's preview renderer, so both kinds of models look the same on the dashboard
 sys.path.insert(0, os.environ.get("CAD_DIR", "/opt/cad"))
 
+import analyze  # noqa: E402 - the parts of a model, for Studio's "AI tối ưu"
 import review  # noqa: E402 - Claude's review of a finished figure
 
 PROMPT_SCHEMA = {
@@ -703,7 +710,27 @@ class Handler(BaseHTTPRequestHandler):
                                     "running": ids + review.ids(), "loaded": models["shape"] is not None})
         self.reply(404, {"ok": False, "error": "NOT_FOUND"})
 
+    def analyse(self):
+        """POST /analyze {file, key, target}: the parts of /imports/<file> placed as Studio's `target` describes it"""
+        body = self.body()
+        name = str(body.get("file") or "")
+        key = str(body.get("key") or "")
+        if not ANALYSIS_KEY_RE.match(key) or not name or Path(name).name != name or name.startswith("."):
+            return self.reply(400, {"ok": False, "error": "BAD_REQUEST", "message": "Tên file hoặc khóa không hợp lệ."})
+        path = IMPORTS_DIR / name
+        if not path.is_file():
+            return self.reply(404, {"ok": False, "error": "FILE_NOT_FOUND", "message": f"Không có /imports/{name}."})
+        with analysing:
+            try:
+                result = analyze.analyse(path, body.get("target"), ANALYSES_DIR / key)
+            except Exception as err:  # noqa: BLE001 - a broken mesh is the caller's answer, not a crash
+                traceback.print_exc()
+                return self.reply(422, {"ok": False, "error": "ANALYSIS_FAILED", "message": str(err)[:500]})
+        self.reply(200, {"ok": True, **result})
+
     def do_POST(self):
+        if self.path == "/analyze":
+            return self.analyse()
         match = re.fullmatch(r"/jobs/([^/]+)/(generate|fix|cancel)", self.path)
         if not match or not JOB_ID_RE.match(match.group(1)):
             return self.reply(404, {"ok": False, "error": "NOT_FOUND"})

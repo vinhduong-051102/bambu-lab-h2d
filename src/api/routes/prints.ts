@@ -5,6 +5,7 @@ import { AI_SETTINGS } from '../../domain/studio/aiOptimize';
 import { PHOTO_TYPES, PrintJournal, printSetupSchema, summarizePrint } from '../../domain/prints/PrintJournal';
 import { AiSessionStore, feedbackSchema, PRINT_ISSUE_LABELS, PRINT_OUTCOME_LABELS } from '../../domain/studio/aiSessions';
 import { handler, json, readJsonBody } from '../http';
+import { analyzeInBackground } from './parts';
 
 const MAX_PHOTO_BYTES = 20 * 1024 * 1024;
 const MAX_PRINT_LIST = 200;
@@ -53,6 +54,8 @@ export const savePrintSetup = handler(async ({ request }) => {
   const body = printSetupSchema.safeParse(await readJsonBody(request));
   if (!body.success) return invalidPayload(body.error);
   await journal().savePendingSetup({ ...body.data, received_at: new Date().toISOString() });
+  // Measured now, so the parts of what this print was are ready when its report comes in
+  analyzeInBackground(body.data.objects);
   return json({ success: true });
 });
 

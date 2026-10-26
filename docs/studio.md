@@ -43,6 +43,28 @@ Every proposal, the changes applied from it and re-ask comments are kept as JSON
 
 The AI also learns from how earlier prints came out. Each request includes up to five earlier proposals that were applied and then reported on in **Báo cáo in**, picked from the 300 newest. Only plates with a filament type in common and the same nozzle diameters count. They are ranked by same process preset, same goal, similar height and similar share of overhanging surface, newest first on a tie. The prompt shows what was changed (value before → after), the outcome, the ticked problems and the note. The AI is told to keep changes that printed well, not to repeat ones that came with a problem, and to treat a single failure with caution.
 
+#### Thành phần của mẫu (parts of a model)
+
+The AI also compares the plate's models with earlier prints part by part: a thin wall like this one printed well with these settings, a bridge like that one sagged. Studio only sends numbers about each object (size, volume, surface, base and overhang area, after its turn and scale on the plate), so the gateway finds the mesh by the object's name in Studio's import folder (`Plate03_fixed(1).stl` → `Plate03.stl`; STL first). The mesh worker (`mesh3d/analyze.py`, `POST /analyze` in the mesh3d container) turns and scales the mesh until it gives Studio's numbers, so it is sure to measure the right mesh standing the right way, or says it couldn't match it. It then measures:
+
+| Kind | What it is |
+|---|---|
+| Đế | What stands on the bed: contact area, its share of the footprint, height against width |
+| Thành mỏng / Tấm mỏng | Upright walls and flat plates thinner than about two lines |
+| Phần nhô | Downward faces steeper than the support angle, with their height and the gap below |
+| Mặt dưới phẳng | Flat ceilings and bridges, with their span |
+| Lỗ | Upright and sideways holes, diameter and depth |
+| Trụ mảnh | Thin tall pillars |
+| Mặt trên phẳng | Flat top surfaces |
+
+Alike parts are kept as one with a count (four wheels, six screw holes). The worker renders the model from six sides twice, plain and with each part in its own colour, and Claude looks at both renders and the list of parts and names them ("vành mâm", "ngàm cài"), says what the model is for and what is likely to fail on each part. Measuring takes about 7 seconds, naming up to a minute or so. `PARTS_AI_MODEL` (default `claude-opus-5-5`) picks the model, through `claude -p` like the timelapse review.
+
+An analysis is kept per file content and placement in `MODEL_ANALYSIS_DIR` (default `./data/studio/analyses`): `<key>.json`, and the renders in `<key>/views.png` and `<key>/parts.png`. The gateway measures a print's objects in the background as soon as Studio sends the print. On **AI tối ưu**, the prompt gets a section on the plate's parts (its first six objects, up to 12 parts): each part with its name and numbers, and up to three alike parts from earlier reported prints (similarity at least 45 %), with how they came out (the outcome, and only the reported problems that belong to that kind of part) and the settings that shape that kind of part when they were printed. The section waits at most 120 seconds (90 for Claude's names; the names are still saved when they come later), so the answer stays within Studio's wait; without it the AI answers as before.
+
+On the dashboard, a print's detail window has a **Thành phần** section: the coloured render, the six views, Claude's names with the measured parts under each, and the parts it didn't name. **Phân tích** measures and names the print's objects (and asks Claude again when it failed last time). **Phân tích bản in cũ** on the **Lịch sử in** card does it for every object of every print sent from Studio (200 newest), one after another, with its progress; hover it for the last run's errors.
+
+Setup: the mesh3d container (`MESH_WORKER_URL`, see [cad.md](cad.md)) with Studio's import folder mounted read-only at `/imports` and `MODEL_ANALYSIS_DIR` at `/analyses` (`docker-compose.mesh3d.yml`; recreate the container after changing them), and `STUDIO_IMPORT_DIR` set. Without them the section isn't added and the dashboard says so. Objects sent in some other way than through the import folder (dragged onto the stream into another folder, or renamed in Studio) can't be found.
+
 ### Print history
 
 The gateway records every print, so a later print can be compared with earlier ones:
@@ -159,6 +181,11 @@ STUDIO_ALT_URLS=https://<machine>.<tailnet>.ts.net:8443/
 | POST | `/api/prints/:id/feedback` | `{ outcome, issues, note }`: the report on the print, also saved on its AI proposal |
 | POST | `/api/prints/:id/photos` | `multipart/form-data` field `file`: a JPEG, PNG or WebP photo up to 20 MB |
 | GET / DELETE | `/api/prints/:id/photos/:name` | The photo, or remove it |
+| GET | `/api/prints/:id/parts` | The parts measured so far on the print's objects: `{ enabled, objects: [{ name, status: missing \| pending \| done, analysis }] }`; `analysis` has `matched`, `features` (`id`, `kind`, `count`, `metrics`, `where`, `colour`, `text`), and once Claude answered `description`, `purpose`, `components: [{ name, role, features, risk }]` or `naming_error` |
+| POST | `/api/prints/:id/parts` | Measures the print's objects and has Claude name their parts (again when it failed); same answer, takes up to a minute or two. 501 without the mesh worker |
+| GET | `/api/studio/parts/backfill` | How far measuring the earlier prints has got: `{ enabled, running, total, done, failed, started_at, finished_at }` |
+| POST | `/api/studio/parts/backfill` | Measures every object of the prints sent from Studio, one after another (202, then poll GET) |
+| GET | `/api/studio/parts/:key/:image` | A render of an analysis: `views.png` or `parts.png` |
 | GET | `/api/timelapse?refresh=1` | Timelapse videos on the printer, newest first: `{ name, size, ended_at, name_time, has_thumbnail, print }`, where `print` is the paired print or null. `refresh=1` skips the 30-second listing cache |
 | GET | `/api/timelapse/:name` | The video, copied from the printer on first view. Answers `Range` requests (206) |
 | GET | `/api/timelapse/:name/thumbnail` | The printer's thumbnail of the video (JPEG) |

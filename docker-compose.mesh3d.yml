@@ -10,6 +10,8 @@ services:
     restart: unless-stopped
     environment:
       - JOBS_DIR=/jobs
+      - IMPORTS_DIR=/imports
+      - ANALYSES_DIR=/analyses
       # Claude turns a description into the picture brief and reviews figures, on your Claude subscription
       - CLAUDE_CODE_OAUTH_TOKEN=${CLAUDE_CODE_OAUTH_TOKEN:-}
       # Optional Hugging Face read token: model downloads without one are rate limited and slow
@@ -26,6 +28,9 @@ services:
       # The worker, and the CAD worker's preview renderer
       - ./mesh3d:/opt/mesh3d:ro
       - ./cad:/opt/cad:ro
+      # "Thành phần của mẫu" (analyze.py): Studio's import folder, read only, and the renders of each analysis
+      - ${STUDIO_IMPORT_DIR:-./data/studio/imports}:/imports:ro
+      - ${MODEL_ANALYSIS_DIR:-./data/studio/analyses}:/analyses
     ports:
       - "127.0.0.1:3103:8000"
     gpus: all

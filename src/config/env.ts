@@ -59,6 +59,10 @@ const envSchema = z.object({
   // Claude model behind Studio's "AI tối ưu" button (POST /api/studio/ai-optimize); the key is ANTHROPIC_API_KEY
   STUDIO_AI_MODEL: z.preprocess((val) => (typeof val === 'string' && val.trim() === '' ? undefined : val), z.string().default('claude-opus-5-5')),
   // Where each "AI tối ưu" answer, the changes applied from it and the user's print report are kept
+  // "Thành phần của mẫu": each model's measured parts and renders (mounted at /analyses in the mesh3d container)
+  MODEL_ANALYSIS_DIR: z.preprocess((val) => (typeof val === 'string' && val.trim() === '' ? undefined : val), z.string().default('./data/studio/analyses')),
+  // Claude model that names a model's parts from its renders (claude -p on this machine, like the timelapse review)
+  PARTS_AI_MODEL: z.preprocess((val) => (typeof val === 'string' && val.trim() === '' ? undefined : val), z.string().default('claude-opus-5-5')),
   STUDIO_AI_DATA_DIR: z.preprocess((val) => (typeof val === 'string' && val.trim() === '' ? undefined : val), z.string().default('./data/studio/ai')),
   // Print history: each print's camera photo when it ended, uploaded photos, the settings Studio sent and the report
   PRINT_HISTORY_DIR: z.preprocess((val) => (typeof val === 'string' && val.trim() === '' ? undefined : val), z.string().default('./data/prints')),

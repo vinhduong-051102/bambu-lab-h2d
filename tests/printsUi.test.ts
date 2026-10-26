@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { diffSettings, formatPrintTime, listSettings, orderSettingKeys, printSettings } from '../src/ui/prints.js';
+import { ObjectCard } from '../src/ui/prints/ModelParts';
 import { PrintRow } from '../src/ui/prints/rows';
 
 const labels = { layer_height: 'Chiều cao lớp', sparse_infill_density: 'Mật độ infill' };
@@ -83,5 +84,38 @@ describe('print history UI helpers', () => {
     expect(html).toContain('Hoàn thành');
     expect(html).toContain('Có lỗi nhưng dùng được');
     expect(html).toContain('>AI<');
+  });
+});
+
+describe("parts of a print's objects", () => {
+  const feature = (id: string, text: string) => ({ id, kind: 'thin_wall', count: 1, colour: '#e6194b', text });
+  const html = (object: Parameters<typeof ObjectCard>[0]['object']) => renderToStaticMarkup(createElement(ObjectCard, { object }));
+
+  it('shows the renders, the named parts with their measures, and the parts left unnamed', () => {
+    const out = html({
+      name: 'Plate07.stl',
+      status: 'done',
+      analysis: {
+        key: 'a'.repeat(32),
+        file: 'Plate07.stl',
+        matched: true,
+        features: [feature('F1', 'Thành mỏng: dày 0.6 mm'), feature('F2', 'Lỗ: Ø3 mm đứng')],
+        description: 'Bốn mâm bánh xe.',
+        components: [{ name: 'vành mâm', role: 'vành ngoài', features: ['F1'], risk: 'dễ tách lớp' }],
+        named_by: 'claude-opus-5-5',
+      },
+    });
+    expect(out).toContain(`/api/studio/parts/${'a'.repeat(32)}/parts.png`);
+    expect(out).toContain('vành mâm');
+    expect(out).toContain('Thành mỏng: dày 0.6 mm');
+    expect(out).toContain('dễ tách lớp');
+    expect(out).toContain('Thành phần khác');
+    expect(out).toContain('Lỗ: Ø3 mm đứng');
+  });
+
+  it('says why there are no parts', () => {
+    expect(html({ name: 'X.stl', status: 'missing', analysis: null })).toContain('Không thấy file lưới');
+    expect(html({ name: 'X.stl', status: 'pending', analysis: null })).toContain('Chưa đo');
+    expect(html({ name: 'X.stl', status: 'done', analysis: { key: 'b', file: 'X.stl', matched: false, reason: 'lệch', features: [] } })).toContain('Không khớp được hướng đặt');
   });
 });

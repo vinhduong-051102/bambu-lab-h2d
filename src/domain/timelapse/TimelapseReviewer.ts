@@ -136,10 +136,10 @@ export interface FrameSource {
 export interface VisionModel {
   readonly name: string;
   /**
-   * The model's answer, held to `schema`. The images reach it as files named frame-1.jpg, frame-2.jpg… in
-   * the folder it works in, so `prompt(files)` names them.
+   * The model's answer, held to `schema`. The images reach it as files named frame-1.jpg, frame-2.jpg… (or with
+   * `extension`) in the folder it works in, so `prompt(files)` names them.
    */
-  review(system: string, prompt: (files: string[]) => string, images: Buffer[], schema: object): Promise<unknown>;
+  review(system: string, prompt: (files: string[]) => string, images: Buffer[], schema: object, extension?: string): Promise<unknown>;
 }
 
 /** Frames cut with ffmpeg (the gateway's own, from @ffmpeg-installer) */
@@ -205,10 +205,11 @@ export class ClaudeCodeVision implements VisionModel {
     private readonly timeoutMs = 10 * 60 * 1000
   ) {}
 
-  async review(system: string, prompt: (files: string[]) => string, images: Buffer[], schema: object): Promise<unknown> {
+  /** `extension` names the images' type for Claude's Read tool (JPEG frames by default, PNG renders) */
+  async review(system: string, prompt: (files: string[]) => string, images: Buffer[], schema: object, extension = 'jpg'): Promise<unknown> {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'timelapse-review-'));
     try {
-      const files = images.map((_, i) => `frame-${i + 1}.jpg`);
+      const files = images.map((_, i) => `frame-${i + 1}.${extension}`);
       await Promise.all(images.map((image, i) => fs.writeFile(path.join(dir, files[i]), image)));
       const args = [
         '-p',

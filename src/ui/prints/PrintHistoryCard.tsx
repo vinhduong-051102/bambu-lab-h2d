@@ -5,6 +5,7 @@ import { Alert, Button, Card, Col, Empty, Row, Space, Spin, Typography } from 'a
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useActions } from '../DashboardContext';
 import { historyItems } from '../prints';
+import { PartsBackfillButton } from './ModelParts';
 import { CompareModal, PrintDetailModal, printsApi, TimelapsePlayer, type Labels } from './PrintModals';
 import { PrintRow, VideoRow, type PrintSummary } from './rows';
 import type { Video } from './TimelapseReview';
@@ -108,6 +109,7 @@ export function PrintHistoryCard() {
       }
       extra={
         <Space wrap>
+          <PartsBackfillButton />
           <Button
             type="primary"
             icon={<SwapOutlined />}

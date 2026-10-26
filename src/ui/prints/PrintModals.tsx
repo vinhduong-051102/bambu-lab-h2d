@@ -28,6 +28,7 @@ import { useActions } from '../DashboardContext';
 import { diffSettings, formatPrintTime, listSettings, photoUrl, printSettings } from '../prints';
 import { formatSize, videoUrl } from '../timelapse';
 import { labelOf, OutcomeTag, StatusTag, type Label } from './badges';
+import { PrintParts } from './ModelParts';
 import { ReviewResult, TimelapseReview, type Review, type Video } from './TimelapseReview';
 
 const NO_SETUP_TEXT = 'Không có setting (bản in không gửi từ Studio)';
@@ -268,8 +269,8 @@ function FeedbackForm({ print, labels, onSaved, onCancel }: { print: PrintDetail
 }
 
 /**
- * One print: photos (add and delete), its timelapse with the AI review, the setup Studio sent, the user's report
- * and every setting. `videos` is the history's video listing, or null when it hasn't been read.
+ * One print: photos (add and delete), its timelapse with the AI review, the setup Studio sent, the parts measured on
+ * its models, the user's report and every setting. `videos` is the history's video listing, or null when it hasn't been read.
  */
 export function PrintDetailModal(props: {
   id: string | null;
@@ -432,6 +433,11 @@ export function PrintDetailModal(props: {
           <Divider style={{ margin: '8px 0' }} />
           <Section title="Thiết lập khi in">
             <SetupView setup={print.setup} />
+          </Section>
+
+          <Divider style={{ margin: '8px 0' }} />
+          <Section title="Thành phần">
+            <PrintParts printId={print.id} hasSetup={!!print.setup} />
           </Section>
 
           <Divider style={{ margin: '8px 0' }} />

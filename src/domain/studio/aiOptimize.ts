@@ -606,6 +606,7 @@ Bạn nhận mô tả plate đang mở: preset máy, preset quá trình in, fila
 - Khe hở Z support lớn hơn thì dễ gỡ nhưng mặt dưới xấu hơn. Bù kích thước XY chỉ dùng cho chi tiết lắp ghép, giá trị nhỏ (vài phần trăm mm).
 - Thông tin hình học là ước lượng từ lưới tam giác, không phải kết quả slice.
 - Nếu có kết quả in thực tế của các plate tương tự trên chính máy này, coi đó là bằng chứng mạnh hơn quy tắc chung: giữ những thay đổi đã cho bản in tốt, không lặp lại thay đổi đi kèm lỗi, và sửa đúng lỗi người dùng đã báo. Một lần in có thể hỏng vì lý do ngoài setting (bàn bẩn, filament ẩm), nên chỉ kết luận chắc khi lỗi lặp lại. Khi một thay đổi dựa vào lịch sử in, nói rõ trong lý do.
+- Nếu có phần "Thành phần của plate này": mỗi thành phần đi kèm các lần in phần giống nó trên máy này, kết quả và setting lúc in. Với thành phần đã in tốt, giữ hoặc đưa setting liên quan về như lần in tốt; với thành phần từng lỗi, tránh setting của lần lỗi và sửa đúng lỗi đó. Giống càng cao (%) càng đáng tin. Khi một thay đổi dựa vào thành phần, lý do nêu id thành phần và bản in tham chiếu (ví dụ "F3 giống vành mâm của Plate07 in tốt với 3 vòng tường").
 - Nhận xét timelapse mà người dùng đã chọn dùng cho lần in sau là yêu cầu của người dùng: áp dụng các đề xuất của nó như yêu cầu rõ ở trên, không coi là một bằng chứng để cân với các bản in thành công.
 - Mỗi lý do viết bằng tiếng Việt, một câu ngắn, nêu dựa vào đâu. Phần summary bằng tiếng Việt, tối đa ba câu (tối đa năm câu khi phải nói đề xuất nào của nhận xét timelapse đã bỏ qua).`;
 
@@ -751,11 +752,13 @@ function describeChosenReviews(pastPrints: PastPrint[]): string[] {
   ];
 }
 
+/** `parts` is the section on the plate's parts and alike parts printed before (modelParts.describeParts) */
 export function buildUserPrompt(
   request: StudioRequest,
   printerState: PrinterState | null,
   followUp: FollowUp | null = null,
-  pastPrints: PastPrint[] = []
+  pastPrints: PastPrint[] = [],
+  parts: string[] = []
 ): string {
   return [
     `Mục tiêu: ${GOALS[request.goal]}`,
@@ -782,6 +785,7 @@ export function buildUserPrompt(
     '',
     'Vật thể trên plate:',
     JSON.stringify(request.objects, null, 1),
+    ...parts,
     ...(pastPrints.length ? describePastPrints(pastPrints) : []),
     ...(followUp ? describeFollowUp(followUp) : []),
   ].join('\n');
@@ -824,16 +828,17 @@ export function claudeProposalSource(model: string, client = new Anthropic()): P
  */
 export const PROGRESS_NOTES_PROMPT = `
 
-Trước khi trả lời theo schema, viết phần phân tích ngắn để người dùng theo dõi trong lúc chờ: tiếng Việt, mỗi ý một dòng bắt đầu bằng "• ", mỗi dòng dưới 15 chữ, tối đa 12 dòng, theo thứ tự: hình dạng và phần nhô của vật thể, vật liệu và đầu phun, kết quả in trước (nếu có), rồi từng nhóm setting sẽ đổi và vì sao. Không viết gì khác ngoài các dòng đó.`;
+Trước khi trả lời theo schema, viết phần phân tích ngắn để người dùng theo dõi trong lúc chờ: tiếng Việt, mỗi ý một dòng bắt đầu bằng "• ", mỗi dòng dưới 15 chữ, tối đa 12 dòng, theo thứ tự: hình dạng và các thành phần của vật thể (và thành phần giống đã in trước, nếu có), vật liệu và đầu phun, kết quả in trước (nếu có), rồi từng nhóm setting sẽ đổi và vì sao. Không viết gì khác ngoài các dòng đó.`;
 
 /** The system and user prompts for a plate, for callers that ask Claude themselves */
 export function buildPrompts(
   request: StudioRequest,
   printerState: PrinterState | null,
   followUp: FollowUp | null = null,
-  pastPrints: PastPrint[] = []
+  pastPrints: PastPrint[] = [],
+  parts: string[] = []
 ): { system: string; user: string } {
-  return { system: SYSTEM_PROMPT, user: buildUserPrompt(request, printerState, followUp, pastPrints) };
+  return { system: SYSTEM_PROMPT, user: buildUserPrompt(request, printerState, followUp, pastPrints, parts) };
 }
 
 export async function optimizeSettings(
@@ -841,9 +846,10 @@ export async function optimizeSettings(
   printerState: PrinterState | null,
   source: ProposalSource,
   followUp: FollowUp | null = null,
-  pastPrints: PastPrint[] = []
+  pastPrints: PastPrint[] = [],
+  parts: string[] = []
 ): Promise<AiOptimizeResult> {
-  const { system, user } = buildPrompts(request, printerState, followUp, pastPrints);
+  const { system, user } = buildPrompts(request, printerState, followUp, pastPrints, parts);
   const proposal = await source(system, user);
   return checkProposal(proposal, request);
 }
