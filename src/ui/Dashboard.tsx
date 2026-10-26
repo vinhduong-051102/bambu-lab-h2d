@@ -1,8 +1,12 @@
 'use client';
 
-import { FormEvent, useEffect, useState } from 'react';
-import { DashboardMarkup } from './DashboardMarkup';
-import { initDashboard } from './dashboardController';
+import { LockOutlined } from '@ant-design/icons';
+import { Alert, App, ConfigProvider, Form, Input, Modal, Spin } from 'antd';
+import viVN from 'antd/locale/vi_VN';
+import { useEffect, useState } from 'react';
+import { DashboardProvider } from './DashboardContext';
+import { Shell } from './Shell';
+import { dashboardTheme } from './theme';
 
 type AuthState = 'checking' | 'required' | 'ready';
 
@@ -17,25 +21,29 @@ export function Dashboard() {
       .catch(() => setAuth('ready'));
   }, []);
 
-  useEffect(() => {
-    if (auth === 'ready') return initDashboard();
-  }, [auth]);
-
   return (
-    <>
-      <DashboardMarkup />
-      {auth === 'required' && <LoginModal onSuccess={() => setAuth('ready')} />}
-    </>
+    <ConfigProvider theme={dashboardTheme} locale={viVN}>
+      <App>
+        {auth === 'ready' ? (
+          <DashboardProvider>
+            <Shell />
+          </DashboardProvider>
+        ) : auth === 'required' ? (
+          <LoginModal onSuccess={() => setAuth('ready')} />
+        ) : (
+          <Spin fullscreen />
+        )}
+      </App>
+    </ConfigProvider>
   );
 }
 
 function LoginModal({ onSuccess }: { onSuccess: () => void }) {
-  const [key, setKey] = useState('');
+  const [form] = Form.useForm<{ key: string }>();
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
 
-  const submit = async (event: FormEvent) => {
-    event.preventDefault();
+  const submit = async ({ key }: { key: string }) => {
     setSubmitting(true);
     setError(null);
     try {
@@ -57,29 +65,28 @@ function LoginModal({ onSuccess }: { onSuccess: () => void }) {
   };
 
   return (
-    <div className="modal-backdrop open">
-      <form className="modal-content" style={{ maxWidth: 420 }} onSubmit={submit}>
-        <div className="modal-header">
-          <h3>
-            <span className="modal-icon">🔒</span>
-            {' Đăng nhập Gateway'}
-          </h3>
-        </div>
-        <p className="modal-desc">Gateway đang bật GATEWAY_API_KEY. Nhập key để mở dashboard.</p>
-        <input
-          type="password"
-          autoFocus
-          autoComplete="current-password"
-          placeholder="GATEWAY_API_KEY"
-          value={key}
-          onChange={(e) => setKey(e.target.value)}
-          className="temp-input"
-        />
-        {error && <p style={{ color: '#ef4444', margin: 0 }}>{error}</p>}
-        <button type="submit" className="btn-cap-modal" disabled={submitting || !key}>
-          {submitting ? '⏳ Đang kiểm tra...' : 'Đăng nhập'}
-        </button>
-      </form>
-    </div>
+    <Modal
+      open
+      title={
+        <>
+          <LockOutlined /> Đăng nhập Gateway
+        </>
+      }
+      closable={false}
+      mask={{ closable: false }}
+      keyboard={false}
+      okText="Đăng nhập"
+      cancelButtonProps={{ hidden: true }}
+      okButtonProps={{ loading: submitting, htmlType: 'submit', form: 'gatewayLogin' }}
+      width={420}
+    >
+      <p>Gateway đang bật GATEWAY_API_KEY. Nhập key để mở dashboard.</p>
+      <Form id="gatewayLogin" form={form} onFinish={submit}>
+        <Form.Item name="key" rules={[{ required: true, message: 'Nhập GATEWAY_API_KEY' }]}>
+          <Input.Password autoFocus autoComplete="current-password" placeholder="GATEWAY_API_KEY" />
+        </Form.Item>
+      </Form>
+      {error && <Alert type="error" title={error} showIcon />}
+    </Modal>
   );
 }

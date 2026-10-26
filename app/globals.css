@@ -3114,3 +3114,59 @@ button.is-loading::after,
   background: rgba(16, 185, 129, 0.12);
   color: #34d399;
 }
+
+/* ---------- antd dashboard ---------- */
+
+.dashboard {
+  max-width: 1400px;
+  margin: 0 auto;
+}
+
+.logo-mark {
+  width: 44px;
+  height: 44px;
+  border-radius: 12px;
+  display: grid;
+  place-items: center;
+  font-size: 22px;
+  color: #fff;
+  background: linear-gradient(135deg, #2563eb, #1d4ed8);
+  box-shadow: 0 0 18px rgba(59, 130, 246, 0.35);
+}
+
+.ams-tray-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(130px, 1fr));
+  gap: 10px;
+}
+
+.console-log {
+  height: 420px;
+  overflow-y: auto;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.6;
+  background: rgba(0, 0, 0, 0.35);
+  border-radius: 8px;
+  padding: 10px 12px;
+}
+
+.raw-json {
+  max-height: 420px;
+  overflow: auto;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  background: rgba(0, 0, 0, 0.35);
+  border-radius: 8px;
+  padding: 12px;
+  margin: 0;
+}
+
+.raw-json-full {
+  max-height: calc(100vh - 260px);
+}
+
+.raw-json mark {
+  background: #f59e0b;
+  color: #111;
+}
