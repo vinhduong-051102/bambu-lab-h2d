@@ -158,6 +158,8 @@ export interface PastPrint {
   note: string;
   /** What Claude saw in the print's timelapse; only through the printer's camera, so weighed below the user's report */
   video_review?: string;
+  /** That review's advice, in full: the user chose it for later prints, so the prompt asks for each to be followed */
+  review_suggestions?: string[];
 }
 
 /**
@@ -604,7 +606,8 @@ Bạn nhận mô tả plate đang mở: preset máy, preset quá trình in, fila
 - Khe hở Z support lớn hơn thì dễ gỡ nhưng mặt dưới xấu hơn. Bù kích thước XY chỉ dùng cho chi tiết lắp ghép, giá trị nhỏ (vài phần trăm mm).
 - Thông tin hình học là ước lượng từ lưới tam giác, không phải kết quả slice.
 - Nếu có kết quả in thực tế của các plate tương tự trên chính máy này, coi đó là bằng chứng mạnh hơn quy tắc chung: giữ những thay đổi đã cho bản in tốt, không lặp lại thay đổi đi kèm lỗi, và sửa đúng lỗi người dùng đã báo. Một lần in có thể hỏng vì lý do ngoài setting (bàn bẩn, filament ẩm), nên chỉ kết luận chắc khi lỗi lặp lại. Khi một thay đổi dựa vào lịch sử in, nói rõ trong lý do.
-- Mỗi lý do viết bằng tiếng Việt, một câu ngắn, nêu dựa vào đâu. Phần summary bằng tiếng Việt, tối đa ba câu.`;
+- Nhận xét timelapse mà người dùng đã chọn dùng cho lần in sau là yêu cầu của người dùng: áp dụng các đề xuất của nó như yêu cầu rõ ở trên, không coi là một bằng chứng để cân với các bản in thành công.
+- Mỗi lý do viết bằng tiếng Việt, một câu ngắn, nêu dựa vào đâu. Phần summary bằng tiếng Việt, tối đa ba câu (tối đa năm câu khi phải nói đề xuất nào của nhận xét timelapse đã bỏ qua).`;
 
 function describeSettings(request: StudioRequest): string {
   return AI_SETTING_KEYS.map((key) => {
@@ -726,6 +729,25 @@ function describePastPrints(pastPrints: PastPrint[]): string[] {
         ? [`   Claude xem timelapse (chỉ qua camera ở xa, có thể nhầm; người dùng báo khác thì tin người dùng): ${JSON.stringify(p.video_review)}`]
         : []),
     ]),
+    ...describeChosenReviews(pastPrints),
+  ];
+}
+
+/**
+ * The advice of the timelapse reviews the user chose "Dùng cho lần in sau" for: a request to follow it, not one more
+ * piece of history to weigh against the prints that went well
+ */
+function describeChosenReviews(pastPrints: PastPrint[]): string[] {
+  const chosen = pastPrints.map((p, i) => ({ p, n: i + 1 })).filter(({ p }) => p.review_suggestions?.length);
+  if (chosen.length === 0) return [];
+  return [
+    '',
+    'Người dùng đã chọn "Dùng cho lần in sau" cho nhận xét timelapse của các bản in sau, nghĩa là họ muốn các đề xuất này được áp dụng:',
+    ...chosen.flatMap(({ p, n }) => [
+      `Bản in số ${n} ở trên (${p.created_at.slice(0, 10)}, ${p.objects.join('; ')}):`,
+      ...p.review_suggestions!.map((s, i) => `   ${n}.${i + 1}. ${s}`),
+    ]),
+    'Với từng đề xuất: nếu làm được bằng các key được liệt kê thì đổi theo, trừ khi giá trị hiện tại đã đúng như đề xuất. Các bản in khác thành công không phải lý do để bỏ qua. Chỉ bỏ qua đề xuất không làm được bằng setting (sấy nhựa, hiệu chỉnh máy...), đã có sẵn, hoặc trái với yêu cầu của người dùng. Lý do của mỗi thay đổi nêu số đề xuất (ví dụ "theo nhận xét timelapse 4.3"). Summary liệt kê ngắn các đề xuất đã bỏ qua và vì sao.',
   ];
 }
 

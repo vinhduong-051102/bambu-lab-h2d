@@ -217,8 +217,9 @@ export class AiSessionStore {
 
   /**
    * Earlier prints of plates like `request`, for the prompt: only sessions the user applied and then
-   * reported on (or whose timelapse the local AI reviewed), so the changes are known to have been printed.
-   * Most similar first, newest on a tie.
+   * reported on (or whose timelapse review the user chose to use), so the changes are known to have been printed.
+   * Prints with a chosen review first (the user asked for its advice to be followed), then the most similar,
+   * newest on a tie.
    */
   async pastPrints(request: StudioRequest, limit = PAST_PRINT_LIMIT): Promise<PastPrint[]> {
     const plate = plateOf(request);
@@ -227,7 +228,7 @@ export class AiSessionStore {
       .map((s) => ({ session: s, score: similarity(plate, plateOf(s), request, s) }))
       .filter((c): c is { session: AiSession; score: number } => c.score !== null)
       // Stable sort over the newest-first list keeps newer sessions first on a tie
-      .sort((a, b) => b.score - a.score)
+      .sort((a, b) => Number(!!b.session.video_review) - Number(!!a.session.video_review) || b.score - a.score)
       .slice(0, limit)
       .map(({ session: s }) => toPastPrint(s));
   }
@@ -341,6 +342,8 @@ function toPastPrint(s: AiSession): PastPrint {
     outcome: feedback ? PRINT_OUTCOME_LABELS[feedback.outcome] : 'người dùng chưa báo',
     issues: feedback?.issues.map((i) => PRINT_ISSUE_LABELS[i]) ?? [],
     note: note.length > NOTE_LIMIT ? `${note.slice(0, NOTE_LIMIT)}…` : note,
-    ...(s.video_review ? { video_review: videoReviewLine(s.video_review) } : {}),
+    ...(s.video_review
+      ? { video_review: videoReviewLine(s.video_review), review_suggestions: s.video_review.suggestions.map((t) => t.trim()).filter(Boolean) }
+      : {}),
   };
 }

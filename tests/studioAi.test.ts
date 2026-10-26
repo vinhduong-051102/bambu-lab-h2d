@@ -571,6 +571,40 @@ describe('AI sessions: past prints in the prompt', () => {
     expect(buildUserPrompt(studioRequest, null, null, [past])).toContain('Claude xem timelapse');
   });
 
+  it('puts a print whose review the user chose first, and asks for its advice to be followed', async () => {
+    // Less alike than the newer print, but its review was chosen for later prints
+    const reviewed = await printed({ ...studioRequest, goal: 'speed', process_preset: '0.28mm Extra Draft @BBL H2D' }, 1, {
+      feedback: { outcome: 'usable', issues: ['weak'], note: '' },
+    });
+    await store.saveVideoReview(reviewed.id, {
+      video: 'video_2026-10-12_00-32-49.mp4',
+      model: 'claude-opus-5-5',
+      at: '2026-10-01T12:00:00.000Z',
+      print_id: null,
+      frames_at: [0, 50, 100],
+      summary: 'Thành bên tách lớp.',
+      outcome_guess: 'usable',
+      issues: ['weak'],
+      observations: [],
+      suggestions: ['Giảm Part cooling fan cho PETG', ' Sấy filament trước khi in '],
+      used: { at: '2026-10-01T12:05:00.000Z', print_id: '20261001-120000-abcdef' },
+    });
+    await printed(studioRequest, 2);
+
+    const past = await store.pastPrints(studioRequest);
+    expect(past.map((p) => p.created_at)[0]).toBe(reviewed.created_at);
+    expect(past[0].review_suggestions).toEqual(['Giảm Part cooling fan cho PETG', 'Sấy filament trước khi in']);
+    expect(past[1].review_suggestions).toBeUndefined();
+
+    const prompt = buildUserPrompt(studioRequest, null, null, past);
+    expect(prompt).toContain('Người dùng đã chọn "Dùng cho lần in sau" cho nhận xét timelapse');
+    expect(prompt).toContain('   1.1. Giảm Part cooling fan cho PETG');
+    expect(prompt).toContain('   1.2. Sấy filament trước khi in');
+    expect(prompt).toContain('Các bản in khác thành công không phải lý do để bỏ qua');
+    // No chosen review: no such request
+    expect(buildUserPrompt(studioRequest, null, null, past.slice(1))).not.toContain('Dùng cho lần in sau');
+  });
+
   it('sends past prints to the AI through the API', async () => {
     const session = await printed(studioRequest, 1);
     setAiSessionStore(store);
