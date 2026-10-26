@@ -1,7 +1,6 @@
 import ffmpegInstaller from '@ffmpeg-installer/ffmpeg';
-import { createReadStream, promises as fs } from 'fs';
+import { promises as fs } from 'fs';
 import path from 'path';
-import { Readable } from 'stream';
 import { z } from 'zod';
 import { env } from '../../config/env';
 import { printerStorage } from '../../bambu/printerStorage';
@@ -72,13 +71,42 @@ export const listTimelapses = handler(async ({ request }) => {
   });
 });
 
+/**
+ * Bytes start..end (inclusive) of the file, read only when the consumer asks for more. Not Readable.toWeb:
+ * that keeps pushing chunks after the client aborts (video players abort on every seek) and throws an
+ * uncaught "Controller is already closed".
+ */
+function fileStream(file: string, start: number, end: number): ReadableStream<Uint8Array> {
+  let handle: fs.FileHandle | undefined;
+  let position = start;
+  return new ReadableStream<Uint8Array>({
+    async pull(controller) {
+      handle ??= await fs.open(file, 'r');
+      const length = Math.min(64 * 1024, end + 1 - position);
+      const { bytesRead, buffer } = length > 0
+        ? await handle.read(new Uint8Array(length), 0, length, position)
+        : { bytesRead: 0, buffer: new Uint8Array(0) };
+      if (bytesRead === 0) {
+        await handle.close();
+        controller.close();
+        return;
+      }
+      position += bytesRead;
+      controller.enqueue(buffer.subarray(0, bytesRead));
+    },
+    async cancel() {
+      await handle?.close();
+    },
+  });
+}
+
 /** The file, whole or the byte range the browser asks for (video players seek with Range requests) */
 async function serveFile(request: Request, file: string, type: string, cache: string): Promise<Response> {
   const { size } = await fs.stat(file);
   const headers: Record<string, string> = { 'Content-Type': type, 'Accept-Ranges': 'bytes', 'Cache-Control': cache };
   const range = request.headers.get('range')?.match(/^bytes=(\d*)-(\d*)$/);
   if (!range || (range[1] === '' && range[2] === '')) {
-    return new Response(Readable.toWeb(createReadStream(file)) as ReadableStream, {
+    return new Response(fileStream(file, 0, size - 1), {
       headers: { ...headers, 'Content-Length': String(size) },
     });
   }
@@ -88,7 +116,7 @@ async function serveFile(request: Request, file: string, type: string, cache: st
   if (start >= size || start > end) {
     return new Response(null, { status: 416, headers: { ...headers, 'Content-Range': `bytes */${size}` } });
   }
-  return new Response(Readable.toWeb(createReadStream(file, { start, end })) as ReadableStream, {
+  return new Response(fileStream(file, start, end), {
     status: 206,
     headers: { ...headers, 'Content-Range': `bytes ${start}-${end}/${size}`, 'Content-Length': String(end - start + 1) },
   });
