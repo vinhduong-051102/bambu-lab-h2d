@@ -2682,6 +2682,7 @@ button.is-loading::after,
 .print-badge.outcome-usable { background: rgba(245, 158, 11, 0.2); color: #fbbf24; }
 .print-badge.outcome-failed { background: rgba(239, 68, 68, 0.2); color: #f87171; }
 .print-badge.ai { background: rgba(236, 72, 153, 0.18); color: #f472b6; }
+.print-badge.video { background: rgba(14, 165, 233, 0.18); color: #38bdf8; }
 
 /* Detail / compare modal */
 .prints-modal {
@@ -3018,72 +3019,15 @@ button.is-loading::after,
   }
 }
 
-/* ---------- Timelapse (src/ui/timelapse.js) ---------- */
-.timelapse-card {
-  grid-column: span 12;
+/* ---------- Timelapse (src/ui/timelapse.js), in the print history ---------- */
+/* A video row has no compare checkbox: an empty box of the same width keeps the rows aligned */
+.print-select-spacer {
+  display: block;
+  width: 16px;
 }
 
-.timelapse-list {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
-  gap: 10px;
-  max-height: 560px;
-  overflow-y: auto;
-  padding-right: 4px;
-}
-
-.timelapse-tile {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  min-width: 0;
-  padding: 8px;
-  text-align: left;
-  color: inherit;
-  font: inherit;
-  cursor: pointer;
-  background: rgba(255, 255, 255, 0.03);
-  border: 1px solid var(--card-border);
-  border-radius: var(--radius-md);
-  transition: var(--transition-fast);
-}
-
-.timelapse-tile:hover,
-.timelapse-tile:focus-visible {
-  border-color: rgba(59, 130, 246, 0.5);
-}
-
-.timelapse-thumb {
-  width: 100%;
-  aspect-ratio: 16 / 9;
-  object-fit: cover;
-  border-radius: var(--radius-sm, 6px);
-  background: rgba(0, 0, 0, 0.3);
-}
-
-.timelapse-thumb-empty {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 1.8rem;
-}
-
-.timelapse-meta {
-  display: flex;
-  justify-content: space-between;
-  gap: 8px;
-}
-
-.timelapse-time {
-  font-weight: 600;
-  font-size: 0.85rem;
-}
-
-.timelapse-print {
-  font-size: 0.8rem;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+.prints-list-note {
+  grid-column: 1 / -1;
 }
 
 .timelapse-video {
@@ -3169,10 +3113,4 @@ button.is-loading::after,
   border-radius: var(--radius-sm);
   background: rgba(16, 185, 129, 0.12);
   color: #34d399;
-}
-
-@media (max-width: 640px) {
-  .timelapse-list {
-    grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
-  }
 }

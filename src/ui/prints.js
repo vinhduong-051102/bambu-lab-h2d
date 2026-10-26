@@ -1,12 +1,17 @@
 /**
  * Print history ("Lịch sử in"): the prints the gateway recorded (GET /api/prints), each with the settings
- * Studio sliced it with, its photos and the user's report. A print opens in a detail modal (photos, setup,
- * report form, settings); two ticked prints open side by side with only the settings that differ.
+ * Studio sliced it with, its photos and the user's report, and the printer's timelapse videos
+ * (GET /api/timelapse) in the same list. A print opens in a detail modal (photos, timelapse, setup, report
+ * form, settings); two ticked prints open side by side with only the settings that differ; a video with no
+ * print in the list plays on its own.
  */
 import { confirmDialog } from './confirmDialog';
+import { openTimelapsePlayer, renderVideoRow, thumbnailUrl } from './timelapse';
 import { mountReview, renderReview } from './timelapseReview';
 
 const REFRESH_MS = 60_000;
+// The printer's video listing is read over FTPS: reloaded less often than the history, and on "Làm mới"
+const VIDEOS_REFRESH_MS = 5 * 60_000;
 const LIST_LIMIT = 50;
 const NO_SETUP_TEXT = 'Không có setting (bản in không gửi từ Studio)';
 
@@ -102,17 +107,39 @@ function outcomeBadge(outcome, outcomes) {
   return `<span class="print-badge outcome-${escapeHtml(outcome)}">${escapeHtml(labelOf(outcomes, outcome))}</span>`;
 }
 
-/** One row of the list: options { outcomes, selected, selectDisabled } (the last two drive the compare checkbox) */
+/**
+ * The history's rows, newest first: each print with its video (or null), and the videos whose print isn't
+ * in the list, placed by when they ended. A print still printing counts as now.
+ */
+export function historyItems(prints, videos = [], now = Date.now()) {
+  const ids = new Set(prints.map((p) => p.id));
+  const byPrint = new Map(videos.filter((v) => v.print && ids.has(v.print.id)).map((v) => [v.print.id, v]));
+  const time = (iso) => Date.parse(iso ?? '') || 0;
+  const printTime = (p) => (p.ended_at ? time(p.ended_at) : p.status === 'printing' ? now : time(p.started_at));
+  const items = [
+    ...prints.map((print) => ({ print, video: byPrint.get(print.id) ?? null, at: printTime(print) })),
+    ...videos.filter((v) => !v.print || !ids.has(v.print.id)).map((video) => ({ print: null, video, at: time(video.ended_at) })),
+  ];
+  return items.sort((a, b) => b.at - a.at).map(({ print, video }) => ({ print, video }));
+}
+
+/**
+ * One row of the list: options { outcomes, selected, selectDisabled, video } (selected and selectDisabled
+ * drive the compare checkbox, video is the print's timelapse)
+ */
 export function renderPrintRow(print, options = {}) {
-  const { outcomes = [], selected = false, selectDisabled = false } = options;
+  const { outcomes = [], selected = false, selectDisabled = false, video = null } = options;
   const photo = print.photos?.[0];
   const thumb = photo
     ? `<img src="${escapeHtml(photoUrl(print.id, photo.name))}" alt="" loading="lazy" />`
-    : '<span class="print-thumb-empty" aria-hidden="true">🖨️</span>';
+    : video?.has_thumbnail
+      ? `<img src="${escapeHtml(thumbnailUrl(video.name))}" alt="" loading="lazy" />`
+      : '<span class="print-thumb-empty" aria-hidden="true">🖨️</span>';
   const meta = [
     statusBadge(print.status),
     outcomeBadge(print.feedback_outcome, outcomes),
     print.ai_session_id ? '<span class="print-badge ai" title="Có dùng đề xuất AI">AI</span>' : '',
+    video ? '<span class="print-badge video" title="Có timelapse: mở bản in để xem">🎬 Video</span>' : '',
   ].join('');
   const preset = print.process_preset ? `<span class="print-row-preset">${escapeHtml(print.process_preset)}</span>` : '';
   return `
@@ -148,6 +175,10 @@ export function initPrintHistory({ showToast, addLog }) {
 
   let disposed = false;
   let prints = [];
+  /** The printer's timelapse videos, when they were last read (0 = never) and why the last read failed */
+  let videos = [];
+  let videosAt = 0;
+  let videosError = null;
   let outcomes = [];
   let issues = [];
   let settingLabels = {};
@@ -176,17 +207,27 @@ export function initPrintHistory({ showToast, addLog }) {
   // ---------- List ----------
 
   function renderList() {
-    if (prints.length === 0) {
-      list.innerHTML = `
+    const note = videosError
+      ? `<div class="prints-muted prints-list-note">Không đọc được timelapse trên máy in: ${escapeHtml(videosError)}</div>`
+      : '';
+    if (prints.length === 0 && videos.length === 0) {
+      list.innerHTML = `${note}
         <div class="prints-empty">
           Chưa có bản in nào. Mỗi lần Bambu Studio gửi lệnh in, bản in được ghi lại tự động kèm preset và setting;
           khi in xong, gateway chụp một ảnh từ camera. Bạn có thể thêm ảnh và báo cáo kết quả cho từng bản in.
+          Bật <b>Timelapse</b> trong hộp gửi lệnh in của Studio để máy in quay video bản in.
         </div>`;
     } else {
       const full = selected.length >= 2;
-      list.innerHTML = prints
-        .map((p) => renderPrintRow(p, { outcomes, selected: selected.includes(p.id), selectDisabled: full }))
-        .join('');
+      list.innerHTML =
+        note +
+        historyItems(prints, videos)
+          .map(({ print, video }) =>
+            print
+              ? renderPrintRow(print, { outcomes, selected: selected.includes(print.id), selectDisabled: full, video })
+              : renderVideoRow(video)
+          )
+          .join('');
     }
     updateCompareButton();
   }
@@ -203,7 +244,23 @@ export function initPrintHistory({ showToast, addLog }) {
     loading = true;
     btnRefresh.classList.add('is-loading');
     try {
-      const data = await fetchJson(`/api/prints?limit=${LIST_LIMIT}`);
+      const readVideos = manual || Date.now() - videosAt >= VIDEOS_REFRESH_MS;
+      const [data] = await Promise.all([
+        fetchJson(`/api/prints?limit=${LIST_LIMIT}`),
+        readVideos &&
+          fetchJson(`/api/timelapse${manual ? '?refresh=1' : ''}`).then(
+            (d) => {
+              videos = d.videos ?? [];
+              videosAt = Date.now();
+              videosError = null;
+            },
+            (err) => {
+              if (isAbort(err)) throw err;
+              // The history still shows without the printer; read again on the next refresh
+              videosError = err.message;
+            }
+          ),
+      ]);
       if (disposed) return;
       prints = data.prints ?? [];
       outcomes = data.outcomes ?? [];
@@ -234,7 +291,12 @@ export function initPrintHistory({ showToast, addLog }) {
 
   list.addEventListener('click', (e) => {
     const open = e.target.closest?.('.print-row-open');
-    if (open) openDetail(open.dataset.id);
+    if (!open) return;
+    if (!open.dataset.name) return void openDetail(open.dataset.id);
+    const video = videos.find((v) => v.name === open.dataset.name);
+    if (!video) return;
+    closeModal?.();
+    closeModal = openTimelapsePlayer(video, { showToast, addLog });
   });
 
   btnRefresh.addEventListener('click', () => loadList(true));
@@ -492,7 +554,7 @@ export function initPrintHistory({ showToast, addLog }) {
 
       // Timelapse: the printer's video of this print, when there is one (GET /api/timelapse pairs them)
       const timelapseBox = body.querySelector('.print-timelapse');
-      fetchJson('/api/timelapse')
+      (videosAt ? Promise.resolve({ videos }) : fetchJson('/api/timelapse'))
         .then(({ videos }) => {
           const video = videos.find((v) => v.print?.id === print.id);
           if (!video || !modal.isOpen() || !timelapseBox.isConnected) return;
