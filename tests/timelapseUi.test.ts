@@ -36,15 +36,14 @@ describe('timelapse helpers', () => {
     expect(html).not.toContain('<b>Plate</b>');
   });
 
-  it('says when a video has no print yet', () => {
-    const html = renderVideoRow({ ...video('v.mp4', null), has_thumbnail: false });
-    expect(html).toContain('Chưa ghép với bản in nào');
+  it('shows a placeholder when the video has no thumbnail', () => {
+    const html = renderVideoRow({ ...video('v.mp4', null, { id: 'x', job_name: 'x' }), has_thumbnail: false });
     expect(html).toContain('print-thumb-empty');
   });
 });
 
 describe('print history with the videos', () => {
-  it('puts each video on its print, and the others by when they ended', () => {
+  it('puts each video on its print, the ones of older prints by when they ended, and hides the unpaired', () => {
     const prints = [
       print('now', { started_at: '2026-10-20T10:00:00Z' }, 'printing'),
       print('b', { started_at: '2026-10-15T06:00:00Z', ended_at: '2026-10-15T08:40:00Z' }),
@@ -57,7 +56,7 @@ describe('print history with the videos', () => {
       video('v-old.mp4', '2026-09-01T00:00:00Z', { id: 'gone', job_name: 'gone' }),
     ];
     const rows = historyItems(prints, videos, Date.parse('2026-10-20T11:00:00Z'));
-    expect(rows.map((r) => r.print?.id ?? r.video?.name)).toEqual(['now', 'b', 'v-lone.mp4', 'a', 'v-old.mp4']);
+    expect(rows.map((r) => r.print?.id ?? r.video?.name)).toEqual(['now', 'b', 'a', 'v-old.mp4']);
     expect(rows[1].video?.name).toBe('v-b.mp4');
     expect(rows[0].video).toBeNull();
   });

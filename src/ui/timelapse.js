@@ -1,8 +1,8 @@
 /**
  * Timelapse videos the printer recorded (GET /api/timelapse), shown in the print history ("Lịch sử in"):
- * a video paired with a print marks its row, a video with no print in the list gets a row of its own. A
- * video plays in a modal; the gateway copies it from the printer the first time, so the first play of a
- * video takes a few seconds.
+ * a video paired with a print marks its row, a video whose print is older than the list gets a row of its
+ * own, and a video paired with no print isn't shown. A video plays in a modal; the gateway copies it from
+ * the printer the first time, so the first play of a video takes a few seconds.
  */
 import { escapeHtml, formatPrintTime } from './prints';
 import { mountReview } from './timelapseReview';
@@ -17,14 +17,11 @@ export function formatSize(bytes) {
   return `${(bytes / 1024 / 1024).toLocaleString('vi-VN', { maximumFractionDigits: 1 })} MB`;
 }
 
-/** A row of the print history for a video whose print isn't in the list (none paired, or an older one) */
+/** A row of the print history for a video whose print is older than the list */
 export function renderVideoRow(video) {
   const thumb = video.has_thumbnail
     ? `<img src="${escapeHtml(thumbnailUrl(video.name))}" alt="" loading="lazy" />`
     : '<span class="print-thumb-empty" aria-hidden="true">🎬</span>';
-  const print = video.print
-    ? `<span class="print-row-preset" title="Bản in trong lịch sử">🖨️ ${escapeHtml(video.print.job_name)}</span>`
-    : '<span class="print-row-preset">Chưa ghép với bản in nào</span>';
   return `
     <div class="print-row is-video" data-name="${escapeHtml(video.name)}">
       <span class="print-select" aria-hidden="true"><span class="print-select-spacer"></span></span>
@@ -36,7 +33,7 @@ export function renderVideoRow(video) {
             <span class="print-row-time">${escapeHtml(formatPrintTime(video.ended_at))}</span>
             <span class="prints-muted">${escapeHtml(formatSize(video.size))}</span>
           </span>
-          ${print}
+          <span class="print-row-preset" title="Bản in trong lịch sử">🖨️ ${escapeHtml(video.print.job_name)}</span>
         </span>
       </button>
     </div>`;

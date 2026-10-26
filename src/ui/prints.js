@@ -2,8 +2,8 @@
  * Print history ("Lịch sử in"): the prints the gateway recorded (GET /api/prints), each with the settings
  * Studio sliced it with, its photos and the user's report, and the printer's timelapse videos
  * (GET /api/timelapse) in the same list. A print opens in a detail modal (photos, timelapse, setup, report
- * form, settings); two ticked prints open side by side with only the settings that differ; a video with no
- * print in the list plays on its own.
+ * form, settings); two ticked prints open side by side with only the settings that differ; a video whose
+ * print is older than the list plays on its own. Videos paired with no print aren't shown.
  */
 import { confirmDialog } from './confirmDialog';
 import { openTimelapsePlayer, renderVideoRow, thumbnailUrl } from './timelapse';
@@ -109,7 +109,8 @@ function outcomeBadge(outcome, outcomes) {
 
 /**
  * The history's rows, newest first: each print with its video (or null), and the videos whose print isn't
- * in the list, placed by when they ended. A print still printing counts as now.
+ * in the list, placed by when they ended. Videos paired with no print are left out. A print still printing
+ * counts as now.
  */
 export function historyItems(prints, videos = [], now = Date.now()) {
   const ids = new Set(prints.map((p) => p.id));
@@ -118,7 +119,7 @@ export function historyItems(prints, videos = [], now = Date.now()) {
   const printTime = (p) => (p.ended_at ? time(p.ended_at) : p.status === 'printing' ? now : time(p.started_at));
   const items = [
     ...prints.map((print) => ({ print, video: byPrint.get(print.id) ?? null, at: printTime(print) })),
-    ...videos.filter((v) => !v.print || !ids.has(v.print.id)).map((video) => ({ print: null, video, at: time(video.ended_at) })),
+    ...videos.filter((v) => v.print && !ids.has(v.print.id)).map((video) => ({ print: null, video, at: time(video.ended_at) })),
   ];
   return items.sort((a, b) => b.at - a.at).map(({ print, video }) => ({ print, video }));
 }
@@ -210,7 +211,8 @@ export function initPrintHistory({ showToast, addLog }) {
     const note = videosError
       ? `<div class="prints-muted prints-list-note">Không đọc được timelapse trên máy in: ${escapeHtml(videosError)}</div>`
       : '';
-    if (prints.length === 0 && videos.length === 0) {
+    const items = historyItems(prints, videos);
+    if (items.length === 0) {
       list.innerHTML = `${note}
         <div class="prints-empty">
           Chưa có bản in nào. Mỗi lần Bambu Studio gửi lệnh in, bản in được ghi lại tự động kèm preset và setting;
@@ -221,7 +223,7 @@ export function initPrintHistory({ showToast, addLog }) {
       const full = selected.length >= 2;
       list.innerHTML =
         note +
-        historyItems(prints, videos)
+        items
           .map(({ print, video }) =>
             print
               ? renderPrintRow(print, { outcomes, selected: selected.includes(print.id), selectDisabled: full, video })
