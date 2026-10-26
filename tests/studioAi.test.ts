@@ -554,7 +554,7 @@ describe('AI sessions: past prints in the prompt', () => {
     const session = await printed(studioRequest, 1, { feedback: null });
     await store.saveVideoReview(session.id, {
       video: 'video_2026-10-12_00-32-49.mp4',
-      model: 'qwen3-vl:8b',
+      model: 'claude-opus-5-5',
       at: '2026-10-01T12:00:00.000Z',
       print_id: null,
       frames_at: [0, 50, 100],
@@ -568,7 +568,7 @@ describe('AI sessions: past prints in the prompt', () => {
     const [past] = await store.pastPrints(studioRequest);
     expect(past).toMatchObject({ outcome: 'người dùng chưa báo', issues: [], note: '' });
     expect(past.video_review).toBe('Góc trái bong khỏi bàn từ giữa bản in. Lỗi thấy: Cong vênh, bong khỏi bàn. Đề xuất: Thêm brim 5 mm');
-    expect(buildUserPrompt(studioRequest, null, null, [past])).toContain('AI cục bộ xem timelapse');
+    expect(buildUserPrompt(studioRequest, null, null, [past])).toContain('Claude xem timelapse');
   });
 
   it('sends past prints to the AI through the API', async () => {

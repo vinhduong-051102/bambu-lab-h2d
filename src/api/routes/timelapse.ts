@@ -8,7 +8,7 @@ import { printerStorage } from '../../bambu/printerStorage';
 import { isPrintId, PrintJournal } from '../../domain/prints/PrintJournal';
 import { AiSessionStore, PRINT_ISSUE_LABELS, PRINT_OUTCOME_LABELS } from '../../domain/studio/aiSessions';
 import { isVideoName, matchPrint, TimelapseLibrary } from '../../domain/timelapse/TimelapseLibrary';
-import { FfmpegFrames, OllamaVision, TimelapseReviewer, type TimelapseReview } from '../../domain/timelapse/TimelapseReviewer';
+import { ClaudeCodeVision, FfmpegFrames, TimelapseReviewer, type TimelapseReview } from '../../domain/timelapse/TimelapseReviewer';
 import { handler, json, readJsonBody } from '../http';
 
 let library: TimelapseLibrary | null = null;
@@ -23,7 +23,7 @@ const reviews = () =>
   (reviewer ??= new TimelapseReviewer(
     path.resolve(env.TIMELAPSE_CACHE_DIR, 'reviews'),
     new FfmpegFrames(ffmpegInstaller.path),
-    new OllamaVision(env.OLLAMA_URL, env.TIMELAPSE_AI_MODEL)
+    new ClaudeCodeVision(env.TIMELAPSE_AI_MODEL)
   ));
 const journal = () => journalOverride ?? new PrintJournal(path.resolve(env.PRINT_HISTORY_DIR));
 const sessionStore = () => sessionStoreOverride ?? new AiSessionStore(path.resolve(env.STUDIO_AI_DATA_DIR));
@@ -144,7 +144,7 @@ const invalidPayload = (error: z.ZodError) => {
   return json({ success: false, error: 'INVALID_PAYLOAD', message: `${issue.path.join('.') || '(gốc)'}: ${issue.message}` }, 400);
 };
 
-// POST /api/timelapse/:name/review {print_id?} - Has the local vision model (Ollama) review the video. The
+// POST /api/timelapse/:name/review {print_id?} - Has Claude (claude -p on this machine) review the video. The
 // review is only shown: POST .../review/use puts it to use for later prints
 export const startTimelapseReview = handler<{ name: string }>(async ({ request, params }) => {
   if (!isVideoName(params.name)) return notFound();

@@ -7,31 +7,44 @@ import type { PrintRecord } from '../prints/PrintJournal';
 import { PRINT_ISSUE_LABELS, PRINT_OUTCOME_LABELS } from '../studio/aiSessions';
 
 /**
- * "AI nhận xét" on a timelapse: a vision model running locally in Ollama looks at frames of the printer's
- * timelapse and says what went wrong and what to change next time. The review is kept beside the cached
- * video; only when the user chooses to use it is it copied to the print and that print's AI proposal, where
- * "AI tối ưu" reads it with the past prints.
+ * "AI nhận xét" on a timelapse: Claude looks at frames of the printer's timelapse and says what is wrong with
+ * the print and what to change next time. The review is kept beside the cached video; only when the user
+ * chooses to use it is it copied to the print and that print's AI proposal, where "AI tối ưu" reads it with
+ * the past prints.
  *
- * The H2D records one frame per layer with the toolhead parked, so frames spread evenly through the video
- * are the print at evenly spaced heights; the last frame is the finished plate.
+ * The H2D records one frame per layer with the toolhead parked, so frames spread through the video are the
+ * print at increasing heights and the last frame is the finished plate. The print takes a small part of the
+ * camera's view, so the last frame goes at the camera's full resolution: shrunk, its surface defects
+ * disappear. (Local models in Ollama were tried first, Qwen3-VL 8B and 30B: they could not tell a print with
+ * wavy walls and a rough top from a clean one, and answered differently each run.)
  */
 
 const ISSUES = Object.keys(PRINT_ISSUE_LABELS) as [keyof typeof PRINT_ISSUE_LABELS, ...(keyof typeof PRINT_ISSUE_LABELS)[]];
 const OUTCOMES = Object.keys(PRINT_OUTCOME_LABELS) as [keyof typeof PRINT_OUTCOME_LABELS, ...(keyof typeof PRINT_OUTCOME_LABELS)[]];
 
+/** Where the frames are taken (0-100 % of the video): three while printing, then the finished print */
+export const FRAME_PLACES = [25, 50, 75, 100];
+/** The frames while printing are this wide; the finished print keeps the camera's resolution */
+const PROGRESS_WIDTH = 1024;
+
+/** A text field of the answer: a model that says too much is cut short rather than refused */
+const text = (max: number) => z.string().transform((s) => (s.length > max ? `${s.slice(0, max)}…` : s));
+
 /** What the model answers, checked as it comes back */
 export const reviewAnswerSchema = z.object({
-  summary: z.string().max(2000),
+  // Asked for first, so the model looks at the finished print before it judges it
+  final_check: text(3000),
+  summary: text(2000),
   outcome_guess: z.enum(OUTCOMES),
-  issues: z.array(z.enum(ISSUES)).max(ISSUES.length),
-  observations: z
-    .array(z.object({ frame: z.number().int(), problem: z.string().max(500) }))
-    .max(20),
-  suggestions: z.array(z.string().max(500)).max(10),
+  issues: z.array(z.enum(ISSUES)).transform((issues) => [...new Set(issues)]),
+  observations: z.array(z.object({ frame: z.number().int(), problem: text(500) })).transform((list) => list.slice(0, 20)),
+  suggestions: z.array(text(500)).transform((list) => list.slice(0, 10)),
 });
 export type ReviewAnswer = z.infer<typeof reviewAnswerSchema>;
 
-export interface TimelapseReview extends ReviewAnswer {
+export interface TimelapseReview extends Omit<ReviewAnswer, 'final_check'> {
+  /** Missing in reviews made before the model was asked to look at the finished print first */
+  final_check?: string;
   video: string;
   model: string;
   at: string;
@@ -49,10 +62,11 @@ export type ReviewState =
   | { status: 'failed'; error: string; at: string }
   | { status: 'done'; review: TimelapseReview };
 
-/** JSON schema Ollama constrains the answer to */
-const ANSWER_FORMAT = {
+/** JSON schema the answer is held to */
+const ANSWER_SCHEMA = {
   type: 'object',
   properties: {
+    final_check: { type: 'string' },
     summary: { type: 'string' },
     outcome_guess: { type: 'string', enum: OUTCOMES },
     issues: { type: 'array', items: { type: 'string', enum: ISSUES } },
@@ -66,20 +80,20 @@ const ANSWER_FORMAT = {
     },
     suggestions: { type: 'array', items: { type: 'string' } },
   },
-  required: ['summary', 'outcome_guess', 'issues', 'observations', 'suggestions'],
+  required: ['final_check', 'summary', 'outcome_guess', 'issues', 'observations', 'suggestions'],
 };
 
 const SYSTEM_PROMPT = [
-  'Bạn là kỹ thuật viên in 3D FDM lâu năm, đang xem timelapse của một bản in trên máy Bambu Lab H2D (2 đầu phun, buồng kín).',
-  'Các ảnh là khung hình của timelapse theo thứ tự thời gian: mỗi khung chụp khi đầu in đã đỗ sang bên, nên vật in ở các độ cao tăng dần; ảnh cuối là bản in đã xong.',
-  'Nhiệm vụ: tìm lỗi THẤY ĐƯỢC trong ảnh và đề xuất cách chỉnh cho lần in sau.',
-  'Quy tắc:',
-  '- Chỉ nêu lỗi thấy rõ: vật bong/cong góc khỏi bàn, rối sợi (spaghetti), lệch lớp, thiếu phần, support đổ, kéo sợi rõ, phần nhô xệ, vật bị đầu in xô lệch. Không đoán lỗi không nhìn thấy.',
-  '- Ảnh có độ phân giải thấp: đừng chấm bề mặt mịn hay sai kích thước nhỏ trừ khi lỗi rõ ràng.',
-  '- Không thấy lỗi thì issues và observations để trống, outcome_guess là "success". Đừng bịa lỗi cho có.',
-  '- observations: số khung (bắt đầu từ 1) và lỗi thấy ở khung đó.',
-  '- suggestions: việc cụ thể cho lần in sau (tên cài đặt Bambu Studio và hướng chỉnh, cách đặt vật, support, brim, keo bàn...), gắn với lỗi đã thấy. Không có lỗi thì có thể để trống.',
-  '- Viết bằng tiếng Việt, ngắn gọn.',
+  'Bạn là kỹ thuật viên kiểm tra chất lượng in 3D FDM lâu năm, đang xem timelapse của một bản in trên máy Bambu Lab H2D (2 đầu phun, buồng kín).',
+  'Mỗi khung timelapse chụp khi đầu in đã đỗ sang bên, từ camera góc rộng của máy; khung cuối là bản in đã xong, ở độ phân giải gốc của camera.',
+  'Nhiệm vụ: đánh giá chất lượng bản in và đề xuất hướng chỉnh cho lần in sau.',
+  'Cách làm:',
+  '- final_check: xem kỹ khung cuối và tả lần lượt (1) thành bên: các lớp có đều, thẳng, mịn không, có gợn sóng, lồi lõm, lệch lớp, hở lớp không; (2) mặt trên: phẳng mịn hay sần, gợn sóng, lỗ, thiếu nhựa, phồng; (3) đế và brim: có bong, cong góc, lởm chởm không. Tả cả cái tốt lẫn cái xấu; hình dạng cố ý của mô hình (hoa văn, thành gợn) không phải lỗi.',
+  '- observations: lỗi thấy ở từng khung (số khung bắt đầu từ 1), để biết lỗi bắt đầu từ lúc nào: bong khỏi bàn, rối sợi, lệch lớp, support đổ, phần nhô xệ, thành bắt đầu gợn.',
+  '- summary: kết luận ngắn, có mức độ (tốt / lỗi nhỏ / lỗi rõ / hỏng). Bản in tốt thì nói tốt, có lỗi thì đừng bỏ qua. Camera ở xa: điều không chắc thì nói là cần kiểm tra lại bằng mắt.',
+  '- issues: mã các lỗi thấy rõ. outcome_guess: "success" khi không có lỗi đáng kể, "usable" khi có lỗi nhưng vẫn dùng được, "failed" khi hỏng.',
+  '- suggestions: hướng chỉnh cho lần sau gắn với lỗi đã thấy: tên cài đặt trong Bambu Studio và tăng hay giảm. Không đưa con số cụ thể: "AI tối ưu" sẽ chọn con số dựa trên cài đặt thật.',
+  '- Viết bằng tiếng Việt.',
 ].join('\n');
 
 /** What the history knows about the print, so the model knows the material and what the user saw */
@@ -102,36 +116,35 @@ export function describePrint(print: PrintRecord | null): string[] {
   return lines;
 }
 
-export function buildReviewPrompt(print: PrintRecord | null, framesAt: number[]): string {
+/** `files`: the frames' names, in order, as the model reads them */
+export function buildReviewPrompt(print: PrintRecord | null, files: string[], framesAt: number[]): string {
   return [
+    `Đọc ${files.length} ảnh trong thư mục này: ${files.map((f, i) => `${f} (khung ${i + 1}, ${framesAt[i]}% timelapse)`).join(', ')}.`,
+    '',
     ...describePrint(print),
     '',
-    `Có ${framesAt.length} khung hình, ở các vị trí ${framesAt.map((p, i) => `#${i + 1} ${p}%`).join(', ')} của timelapse.`,
     `Mã lỗi dùng cho issues: ${ISSUES.map((i) => `${i} (${PRINT_ISSUE_LABELS[i]})`).join('; ')}.`,
     `outcome_guess: success (${PRINT_OUTCOME_LABELS.success}), usable (${PRINT_OUTCOME_LABELS.usable}), failed (${PRINT_OUTCOME_LABELS.failed}).`,
-    'Trả lời bằng JSON theo schema.',
   ].join('\n');
 }
 
-/** Places (0-100 %) of `count` frames spread over the video, the last one at the very end */
-export function framePlaces(count: number): number[] {
-  if (count <= 1) return [100];
-  return Array.from({ length: count }, (_, i) => Math.round((i * 100) / (count - 1)));
-}
-
 export interface FrameSource {
-  /** JPEG frames at these places (0-100 %) of the video */
-  frames(video: string, places: number[]): Promise<Buffer[]>;
+  /** JPEG frames at these places (0-100 %) of the video, at most `width` wide (null: the camera's own width) */
+  frames(video: string, places: number[], width: number | null): Promise<Buffer[]>;
 }
 
 export interface VisionModel {
   readonly name: string;
-  review(system: string, prompt: string, images: Buffer[]): Promise<unknown>;
+  /**
+   * The model's answer, held to `schema`. The images reach it as files named frame-1.jpg, frame-2.jpg… in
+   * the folder it works in, so `prompt(files)` names them.
+   */
+  review(system: string, prompt: (files: string[]) => string, images: Buffer[], schema: object): Promise<unknown>;
 }
 
 /** Frames cut with ffmpeg (the gateway's own, from @ffmpeg-installer) */
 export class FfmpegFrames implements FrameSource {
-  constructor(private readonly ffmpeg: string, private readonly width = 1024) {}
+  constructor(private readonly ffmpeg: string) {}
 
   private run(args: string[]): Promise<{ code: number | null; stderr: string }> {
     return new Promise((resolve, reject) => {
@@ -150,7 +163,7 @@ export class FfmpegFrames implements FrameSource {
     return Number(match[1]) * 3600 + Number(match[2]) * 60 + Number(match[3]);
   }
 
-  async frames(video: string, places: number[]): Promise<Buffer[]> {
+  async frames(video: string, places: number[], width: number | null): Promise<Buffer[]> {
     const seconds = await this.duration(video);
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'timelapse-frames-'));
     try {
@@ -159,9 +172,8 @@ export class FfmpegFrames implements FrameSource {
         const out = path.join(dir, `${i}.jpg`);
         // The very end has no frame to seek to: the last one is read from just before it
         const at = place >= 100 ? ['-sseof', '-0.3'] : ['-ss', ((seconds * place) / 100).toFixed(3)];
-        const { code, stderr } = await this.run([
-          '-v', 'error', '-y', ...at, '-i', video, '-frames:v', '1', '-vf', `scale=${this.width}:-2`, '-q:v', '3', out,
-        ]);
+        const scale = width ? ['-vf', `scale='min(${width},iw)':-2`] : [];
+        const { code, stderr } = await this.run(['-v', 'error', '-y', ...at, '-i', video, '-frames:v', '1', ...scale, '-q:v', '2', out]);
         if (code !== 0) throw new Error(`ffmpeg không cắt được khung hình: ${stderr.trim().split('\n').pop() ?? code}`);
         frames.push(await fs.readFile(out));
       }
@@ -172,68 +184,92 @@ export class FfmpegFrames implements FrameSource {
   }
 }
 
-/** A vision model in Ollama, its answer held to ANSWER_FORMAT */
-export class OllamaVision implements VisionModel {
+/** What went wrong with a `claude -p` run, in words the dashboard can show */
+export function claudeError(detail: string): string {
+  const lowered = detail.toLowerCase();
+  if (detail.includes('401') || /authenticat|oauth|token|log ?in/.test(lowered)) {
+    return `Claude chưa đăng nhập được: đặt CLAUDE_CODE_OAUTH_TOKEN (claude setup-token) trong .env của gateway rồi khởi động lại. (${detail})`;
+  }
+  if (lowered.includes('limit')) return `Đã hết lượt dùng Claude của gói hiện tại, thử lại sau. (${detail})`;
+  return `Claude không trả về nhận xét: ${detail}`;
+}
+
+/**
+ * Claude, through Claude Code (`claude -p`) on the gateway's machine, on the Claude subscription in
+ * CLAUDE_CODE_OAUTH_TOKEN. It may only read: the frames are files in a folder of their own.
+ */
+export class ClaudeCodeVision implements VisionModel {
   constructor(
-    private readonly baseUrl: string,
     readonly name: string,
+    private readonly command = 'claude',
     private readonly timeoutMs = 10 * 60 * 1000
   ) {}
 
-  async review(system: string, prompt: string, images: Buffer[]): Promise<unknown> {
-    let res: Response;
+  async review(system: string, prompt: (files: string[]) => string, images: Buffer[], schema: object): Promise<unknown> {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'timelapse-review-'));
     try {
-      res = await fetch(new URL('/api/chat', this.baseUrl), {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          model: this.name,
-          messages: [
-            { role: 'system', content: system },
-            { role: 'user', content: prompt, images: images.map((img) => img.toString('base64')) },
-          ],
-          format: ANSWER_FORMAT,
-          // Streamed, so a long answer never trips the HTTP client's wait for the response headers
-          stream: true,
-          options: { temperature: 0.2, num_ctx: 16384 },
-        }),
-        signal: AbortSignal.timeout(this.timeoutMs),
+      const files = images.map((_, i) => `frame-${i + 1}.jpg`);
+      await Promise.all(images.map((image, i) => fs.writeFile(path.join(dir, files[i]), image)));
+      const args = [
+        '-p',
+        '--model', this.name,
+        '--tools', 'Read',
+        '--allowedTools', 'Read',
+        // The user's own settings, hooks and sessions stay out of it
+        '--setting-sources', '',
+        '--no-session-persistence',
+        '--max-turns', '12',
+        '--append-system-prompt', system,
+        '--json-schema', JSON.stringify(schema),
+        '--output-format', 'json',
+      ];
+      const { code, stdout, stderr } = await this.run(args, dir, prompt(files));
+      let result: { is_error?: boolean; result?: string; structured_output?: unknown } | null = null;
+      try {
+        result = JSON.parse(stdout);
+      } catch {
+        // Reported below
+      }
+      if (!result || result.is_error || !result.structured_output) {
+        throw new Error(claudeError(result?.result || stderr.trim().slice(-500) || `claude thoát với mã ${code}`));
+      }
+      return result.structured_output;
+    } finally {
+      await fs.rm(dir, { recursive: true, force: true });
+    }
+  }
+
+  private run(args: string[], cwd: string, input: string): Promise<{ code: number | null; stdout: string; stderr: string }> {
+    return new Promise((resolve, reject) => {
+      const child = spawn(this.command, args, { cwd, stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true });
+      let stdout = '';
+      let stderr = '';
+      const timer = setTimeout(() => {
+        child.kill();
+        reject(new Error(`Claude chưa xong sau ${Math.round(this.timeoutMs / 60000)} phút, đã dừng.`));
+      }, this.timeoutMs);
+      child.stdout.on('data', (chunk) => (stdout += chunk));
+      child.stderr.on('data', (chunk) => (stderr = (stderr + chunk).slice(-8000)));
+      child.on('error', (err: NodeJS.ErrnoException) => {
+        clearTimeout(timer);
+        reject(
+          err.code === 'ENOENT'
+            ? new Error('Không tìm thấy lệnh claude (Claude Code) trên máy chạy gateway: cài Claude Code rồi khởi động lại gateway.')
+            : err
+        );
       });
-    } catch (err) {
-      throw new Error(`Không gọi được Ollama ở ${this.baseUrl} (đã chạy Ollama chưa?): ${err instanceof Error ? err.message : err}`);
-    }
-    if (!res.ok || !res.body) {
-      const detail = await res.text().catch(() => '');
-      if (res.status === 404) throw new Error(`Ollama chưa có model ${this.name}: chạy "ollama pull ${this.name}"`);
-      throw new Error(`Ollama trả lỗi ${res.status}: ${detail.slice(0, 300)}`);
-    }
-    let content = '';
-    let pending = '';
-    const decoder = new TextDecoder();
-    const take = (line: string) => {
-      if (!line.trim()) return;
-      const chunk = JSON.parse(line) as { message?: { content?: string }; error?: string };
-      if (chunk.error) throw new Error(`Ollama: ${chunk.error}`);
-      content += chunk.message?.content ?? '';
-    };
-    for await (const part of res.body as unknown as AsyncIterable<Uint8Array>) {
-      pending += decoder.decode(part, { stream: true });
-      const lines = pending.split('\n');
-      pending = lines.pop() ?? '';
-      lines.forEach(take);
-    }
-    take(pending);
-    try {
-      return JSON.parse(content);
-    } catch {
-      throw new Error(`Model trả lời không phải JSON: ${content.slice(0, 200)}`);
-    }
+      child.on('close', (code) => {
+        clearTimeout(timer);
+        resolve({ code, stdout, stderr });
+      });
+      child.stdin.end(input);
+    });
   }
 }
 
 /**
- * Runs reviews one at a time (the GPU holds one vision model) and keeps each in <dir>/<video>.json.
- * A failed run is remembered until the next try, so the dashboard can say why.
+ * Runs reviews one at a time and keeps each in <dir>/<video>.json. A failed run is remembered until the next
+ * try, so the dashboard can say why.
  */
 export class TimelapseReviewer {
   private running = new Map<string, string>();
@@ -244,7 +280,6 @@ export class TimelapseReviewer {
     private readonly dir: string,
     private readonly frameSource: FrameSource,
     private readonly model: VisionModel,
-    private readonly frameCount = 10,
     private readonly now: () => Date = () => new Date()
   ) {}
 
@@ -290,19 +325,25 @@ export class TimelapseReviewer {
     this.failed.delete(video);
     const job = this.queue.then(async () => {
       try {
-        const places = framePlaces(this.frameCount);
-        const frames = await this.frameSource.frames(await localFile(), places);
-        const raw = await this.model.review(SYSTEM_PROMPT, buildReviewPrompt(print, places), frames);
+        const file = await localFile();
+        const progress = await this.frameSource.frames(file, FRAME_PLACES.slice(0, -1), PROGRESS_WIDTH);
+        const finished = await this.frameSource.frames(file, FRAME_PLACES.slice(-1), null);
+        const raw = await this.model.review(
+          SYSTEM_PROMPT,
+          (files) => buildReviewPrompt(print, files, FRAME_PLACES),
+          [...progress, ...finished],
+          ANSWER_SCHEMA
+        );
         const answer = reviewAnswerSchema.parse(raw);
         const review: TimelapseReview = {
           video,
           model: this.model.name,
           at: this.now().toISOString(),
           print_id: print?.id ?? null,
-          frames_at: places,
+          frames_at: FRAME_PLACES,
           ...answer,
           // Frames the model made up are dropped
-          observations: answer.observations.filter((o) => o.frame >= 1 && o.frame <= places.length),
+          observations: answer.observations.filter((o) => o.frame >= 1 && o.frame <= FRAME_PLACES.length),
           used: null,
         };
         await this.write(review);

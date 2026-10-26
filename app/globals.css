@@ -3125,6 +3125,10 @@ button.is-loading::after,
   color: var(--text-muted);
 }
 
+.review-text {
+  white-space: pre-wrap;
+}
+
 .review-list {
   padding-left: 18px;
   display: flex;

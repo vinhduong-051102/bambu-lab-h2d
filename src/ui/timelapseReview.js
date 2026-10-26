@@ -1,5 +1,5 @@
 /**
- * "AI nhận xét" on a timelapse: a vision model in Ollama on the gateway's machine looks at frames of the
+ * "AI nhận xét" on a timelapse: Claude, run by the gateway (`claude -p`), looks at frames of the
  * video (POST /api/timelapse/:name/review) and says what went wrong and what to change next time. The review
  * is only shown until the user presses "Dùng cho lần in sau" (POST .../review/use): then it is saved on the
  * print, where "AI tối ưu" in Studio reads it with the past prints.
@@ -22,11 +22,13 @@ export function renderReview(review, labels = {}) {
   const issueList = review.issues.length
     ? `<ul class="print-issues">${review.issues.map((i) => `<li>${escapeHtml(labelOf(issues, i))}</li>`).join('')}</ul>`
     : '';
-  const observations = review.observations.length
+  const observations = review.observations?.length
     ? `<h5>Thấy trong video</h5><ul class="review-list">${review.observations
-        .map((o) => `<li><span class="prints-muted">${escapeHtml(review.frames_at[o.frame - 1] ?? '?')}%</span> ${escapeHtml(o.problem)}</li>`)
+        .map((o) => `<li><span class="prints-muted">${escapeHtml(review.frames_at?.[o.frame - 1] ?? '?')}%</span> ${escapeHtml(o.problem)}</li>`)
         .join('')}</ul>`
     : '';
+  // Missing in reviews made before the model was asked to look at the finished print first
+  const finalCheck = review.final_check ? `<h5>Bản in lúc xong</h5><div class="review-text">${escapeHtml(review.final_check)}</div>` : '';
   const suggestions = review.suggestions.length
     ? `<h5>Lần in sau</h5><ul class="review-list">${review.suggestions.map((s) => `<li>${escapeHtml(s)}</li>`).join('')}</ul>`
     : '';
@@ -34,7 +36,7 @@ export function renderReview(review, labels = {}) {
     <div class="timelapse-review-result">
       <div>${outcome} <span class="prints-muted">${escapeHtml(review.model)} · ${escapeHtml(formatPrintTime(review.at))}</span></div>
       <div class="print-note">${escapeHtml(review.summary)}</div>
-      ${issueList}${observations}${suggestions}
+      ${issueList}${finalCheck}${observations}${suggestions}
     </div>`;
 }
 
@@ -119,8 +121,8 @@ export function mountReview(box, video, { showToast, addLog, printId = null }) {
         : state.status === 'failed'
           ? `<div class="prints-empty">❌ ${escapeHtml(state.error)}</div>`
           : running
-            ? `<div class="prints-muted">⏳ ${escapeHtml(state.model ?? 'AI')} đang xem video (thường 1-2 phút)...</div>`
-            : `<div class="prints-muted">AI chạy trên máy này (${escapeHtml(state.model ?? 'Ollama')}) xem các khung hình của timelapse, chỉ ra lỗi và cách chỉnh cho lần in sau.</div>`;
+            ? `<div class="prints-muted">⏳ ${escapeHtml(state.model ?? 'Claude')} đang xem video (thường dưới 1 phút)...</div>`
+            : `<div class="prints-muted">Claude (${escapeHtml(state.model ?? 'claude')}) xem các khung hình của timelapse, chỉ ra lỗi và cách chỉnh cho lần in sau.</div>`;
     box.innerHTML = `
       <div class="print-section-head">
         <h4>🤖 AI nhận xét</h4>

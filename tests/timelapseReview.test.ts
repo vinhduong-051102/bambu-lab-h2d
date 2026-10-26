@@ -12,7 +12,9 @@ import { AiSessionStore } from '../src/domain/studio/aiSessions';
 import { TimelapseLibrary } from '../src/domain/timelapse/TimelapseLibrary';
 import {
   buildReviewPrompt,
-  framePlaces,
+  ClaudeCodeVision,
+  claudeError,
+  FRAME_PLACES,
   TimelapseReviewer,
   type FrameSource,
   type VisionModel,
@@ -25,31 +27,32 @@ const VIDEO_NAME = 'video_2026-10-13_02-33-28.mp4';
 const NOW = new Date('2026-10-25T08:00:00.000Z');
 
 const ANSWER = {
+  final_check: 'Thành bên đều; mặt trên phẳng; góc trái của đế cong lên khỏi bàn.',
   summary: 'Góc trái bong khỏi bàn từ giữa bản in.',
   outcome_guess: 'usable',
-  issues: ['warping'],
+  issues: ['warping', 'warping'],
   observations: [
     { frame: 2, problem: 'Góc trái cong lên' },
     { frame: 9, problem: 'Khung không có' },
   ],
-  suggestions: ['Thêm brim 5 mm'],
+  suggestions: ['Thêm brim', 'Tăng nhiệt độ bàn', 'Giảm quạt lớp đầu', 'Dán keo', 'Đặt vật giữa bàn', 'In chậm lớp đầu', 'Lau bàn', 'Sấy nhựa', 'Kiểm tra bàn', 'Dùng mouse ears', 'Bật buồng nóng'],
 };
 
 class FakeFrames implements FrameSource {
-  asked: { video: string; places: number[] }[] = [];
-  async frames(video: string, places: number[]) {
-    this.asked.push({ video, places });
+  asked: { video: string; places: number[]; width: number | null }[] = [];
+  async frames(video: string, places: number[], width: number | null) {
+    this.asked.push({ video, places, width });
     return places.map(() => Buffer.from([0xff, 0xd8, 0xff, 0xd9]));
   }
 }
 
 class FakeModel implements VisionModel {
-  readonly name = 'fake-vl';
+  readonly name = 'fake-claude';
   prompts: string[] = [];
   images: number[] = [];
   constructor(private answer: unknown = ANSWER) {}
-  async review(_system: string, prompt: string, images: Buffer[]) {
-    this.prompts.push(prompt);
+  async review(_system: string, prompt: (files: string[]) => string, images: Buffer[]) {
+    this.prompts.push(prompt(images.map((_, i) => `frame-${i + 1}.jpg`)));
     this.images.push(images.length);
     return this.answer;
   }
@@ -75,16 +78,16 @@ describe('TimelapseReviewer', () => {
   beforeEach(() => (dir = mkdtempSync(path.join(os.tmpdir(), 'reviews-'))));
   afterEach(() => rmSync(dir, { recursive: true, force: true }));
 
-  it('spreads frames over the video, the last one at the end', () => {
-    expect(framePlaces(5)).toEqual([0, 25, 50, 75, 100]);
-    expect(framePlaces(1)).toEqual([100]);
-    expect(buildReviewPrompt(null, [0, 50, 100])).toContain('#2 50%');
+  it('names the frames and what the history knows about the print', () => {
+    const prompt = buildReviewPrompt(null, ['frame-1.jpg', 'frame-2.jpg'], [50, 100]);
+    expect(prompt).toContain('frame-2.jpg (khung 2, 100% timelapse)');
+    expect(prompt).toContain('Không có thông tin về bản in này');
   });
 
-  it('keeps the review, dropping observations of frames it was not shown', async () => {
+  it('reviews frames while printing and the finished print at full resolution, and keeps the review', async () => {
     const frames = new FakeFrames();
     const model = new FakeModel();
-    const reviewer = new TimelapseReviewer(dir, frames, model, 3, () => NOW);
+    const reviewer = new TimelapseReviewer(dir, frames, model, () => NOW);
     expect(await reviewer.state(VIDEO_NAME)).toEqual({ status: 'none' });
 
     const run = reviewer.start(VIDEO_NAME, async () => '/cache/v.mp4', null);
@@ -92,19 +95,37 @@ describe('TimelapseReviewer', () => {
     await run;
 
     const state = await reviewer.state(VIDEO_NAME);
-    expect(state).toMatchObject({ status: 'done', review: { video: VIDEO_NAME, model: 'fake-vl', frames_at: [0, 50, 100], issues: ['warping'] } });
+    expect(state).toMatchObject({ status: 'done', review: { video: VIDEO_NAME, model: 'fake-claude', frames_at: FRAME_PLACES, issues: ['warping'] } });
     if (state.status !== 'done') throw new Error('not done');
+    // Frames the model made up are dropped, and a model that says too much is cut short, not refused
     expect(state.review.observations).toEqual([{ frame: 2, problem: 'Góc trái cong lên' }]);
+    expect(state.review.suggestions).toHaveLength(10);
+    expect(state.review.final_check).toBe(ANSWER.final_check);
     // Only a review until the user uses it
     expect(state.review.used).toBeNull();
-    expect(frames.asked).toEqual([{ video: '/cache/v.mp4', places: [0, 50, 100] }]);
-    expect(model.images).toEqual([3]);
+    expect(frames.asked).toEqual([
+      { video: '/cache/v.mp4', places: [25, 50, 75], width: 1024 },
+      { video: '/cache/v.mp4', places: [100], width: null },
+    ]);
+    expect(model.images).toEqual([4]);
+    expect(model.prompts[0]).toContain('frame-4.jpg (khung 4, 100% timelapse)');
   });
 
   it('says why a review failed, until the next try', async () => {
-    const reviewer = new TimelapseReviewer(dir, new FakeFrames(), new FakeModel({ summary: 'thiếu trường' }), 3, () => NOW);
+    const reviewer = new TimelapseReviewer(dir, new FakeFrames(), new FakeModel({ summary: 'thiếu trường' }), () => NOW);
     await reviewer.start(VIDEO_NAME, async () => '/cache/v.mp4', null);
     expect(await reviewer.state(VIDEO_NAME)).toMatchObject({ status: 'failed' });
+  });
+});
+
+describe('Claude through claude -p', () => {
+  it('explains a missing Claude Code, a bad token and a used-up plan', async () => {
+    const vision = new ClaudeCodeVision('claude-opus-5-5', 'no-such-claude-command');
+    await expect(vision.review('', () => '', [Buffer.from('x')], {})).rejects.toThrow('Không tìm thấy lệnh claude');
+    expect(claudeError('Invalid API key · Please run /login')).toContain('CLAUDE_CODE_OAUTH_TOKEN');
+    expect(claudeError('401 OAuth token has expired')).toContain('CLAUDE_CODE_OAUTH_TOKEN');
+    expect(claudeError('Claude usage limit reached')).toContain('hết lượt dùng');
+    expect(claudeError('something else')).toBe('Claude không trả về nhận xét: something else');
   });
 });
 
@@ -124,7 +145,7 @@ describe('Timelapse review API', () => {
     setTimelapseStores(
       new TimelapseLibrary(() => printer, dirs[0], () => NOW),
       journal,
-      new TimelapseReviewer(path.join(dirs[0], 'reviews'), new FakeFrames(), model, 3, () => NOW),
+      new TimelapseReviewer(path.join(dirs[0], 'reviews'), new FakeFrames(), model, () => NOW),
       sessions
     );
     stateStore = new PrinterStateStore('TEST_SERIAL_REVIEW');
@@ -170,13 +191,13 @@ describe('Timelapse review API', () => {
     });
 
     const none = (await app.inject({ method: 'GET', url: `/api/timelapse/${VIDEO_NAME}/review` })).json();
-    expect(none).toMatchObject({ status: 'none', model: 'qwen3-vl:8b' });
+    expect(none).toMatchObject({ status: 'none', model: 'claude-opus-5-5' });
     expect(none.issues.find((i: { id: string }) => i.id === 'warping').label).toBe('Cong vênh, bong khỏi bàn');
 
     const res = await app.inject({ method: 'POST', url: `/api/timelapse/${VIDEO_NAME}/review`, payload: { print_id: print.id } });
     expect(res.statusCode).toBe(202);
     const done = await waitDone();
-    expect(done).toMatchObject({ status: 'done', review: { print_id: print.id, model: 'fake-vl' } });
+    expect(done).toMatchObject({ status: 'done', review: { print_id: print.id, model: 'fake-claude' } });
     expect(model.prompts[0]).toContain('Filament: Bambu PETG HF @BBL H2D (PETG)');
     expect(done.review.used).toBeNull();
     expect((await journal.get(print.id))?.video_review).toBeUndefined();
@@ -236,6 +257,6 @@ describe('review rendering', () => {
     expect(html).toContain('AI đoán: Có lỗi nhưng dùng được');
     expect(html).toContain('<li>Cong vênh</li>');
     expect(html).toContain('50%</span> &lt;b&gt;cong&lt;/b&gt;');
-    expect(html).toContain('Thêm brim 5 mm');
+    expect(html).toContain('<li>Thêm brim</li>');
   });
 });
