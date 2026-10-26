@@ -5,7 +5,6 @@
 import { memo, useEffect } from 'react';
 import { initCad } from '../cad';
 import { initPrintHistory } from '../prints';
-import { initStudio } from '../studio';
 import { useActions } from '../DashboardContext';
 
 type Init = (deps: { showToast: (message: string, type?: string) => void; addLog: (message: string, type?: string) => void }) => () => void;
@@ -14,42 +13,6 @@ function useLegacy(init: Init) {
   const { showToast, addLog } = useActions();
   useEffect(() => init({ showToast, addLog } as Parameters<Init>[0]), [init, showToast, addLog]);
 }
-
-export const LegacyStudioCard = memo(function LegacyStudioCard() {
-  useLegacy(initStudio as Init);
-  return (
-      <section data-page="studio" className="card studio-card" id="studioCard" hidden>
-        <div className="card-header">
-          <div className="header-title">
-            <svg className="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-              <rect x="2" y="3" width="20" height="14" rx="2" />
-              <path d="M8 21h8M12 17v4" />
-            </svg>
-            <h2>Bambu Studio</h2>
-          </div>
-          <div className="studio-toolbar">
-            <label className="btn-ams-action studio-import-btn" id="studioImportLabel" hidden>
-              <input type="file" id="studioImportInput" accept=".3mf,.stl,.obj,.step,.stp" multiple hidden />
-              📤 Gửi file vào Studio
-            </label>
-            <button type="button" className="btn-ams-action" id="btnStudioToggle">▶ Mở Studio</button>
-            <button type="button" className="btn-ams-action" id="btnStudioFullscreen" hidden>⛶ Toàn màn hình</button>
-            <a className="btn-ams-action" id="studioNewTab" target="_blank" rel="noopener noreferrer">↗ Tab mới</a>
-          </div>
-        </div>
-
-        <div className="studio-frame-wrap" id="studioFrameWrap" hidden>
-          <iframe id="studioFrame" className="studio-frame" title="Bambu Studio" allow="clipboard-read; clipboard-write; fullscreen" />
-        </div>
-        <div className="studio-note studio-import-status" id="studioImportStatus" hidden />
-        <div className="studio-note" id="studioIdle">
-          Bambu Studio chạy trong container riêng nên không thấy ổ đĩa máy bạn. Bấm <b>📤 Gửi file vào Studio</b>, rồi trong
-          Studio mở <b>File → Import</b> và chọn thư mục <code>/imports</code>. Slice và in trực tiếp từ Studio
-          (<b>Print plate</b>); Studio cần được kết nối với máy in.
-        </div>
-      </section>
-  );
-});
 
 export const LegacyCadCard = memo(function LegacyCadCard() {
   useLegacy(initCad as Init);

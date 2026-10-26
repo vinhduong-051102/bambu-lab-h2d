@@ -4,13 +4,14 @@ import { ApiOutlined, AppstoreOutlined, CaretRightOutlined, EyeOutlined, PauseOu
 import { Badge, Button, Card, Col, Flex, Layout, Row, Space, Switch, Tabs, Tag, Typography } from 'antd';
 import { useEffect, useState, type ReactNode } from 'react';
 import { useActions, useCommand, useLive, type WsStatus } from './DashboardContext';
-import { LegacyCadCard, LegacyPrintsCard, LegacyStudioCard } from './legacy/LegacyCards';
+import { LegacyCadCard, LegacyPrintsCard } from './legacy/LegacyCards';
 import { pageFromHash } from './pages';
 import { AmsCard } from './printer/AmsCard';
 import { CameraCard } from './printer/CameraCard';
 import { FanCard } from './printer/FanCard';
 import { JobCard } from './printer/JobCard';
 import { TemperatureCard } from './printer/TemperatureCard';
+import { StudioCard } from './studio/StudioCard';
 import { ConsoleCard } from './system/ConsoleCard';
 import { DiagnosticsCard } from './system/DiagnosticsCard';
 import { ApiModal, CapabilitiesModal } from './system/InfoModals';
@@ -179,7 +180,7 @@ export function Shell() {
         [<AmsCard key="ams" />, {}]
       ),
     },
-    features.studio && { key: 'studio', label: '🧩 Bambu Studio', forceRender: true, children: <LegacyStudioCard /> },
+    features.studio && { key: 'studio', label: '🧩 Bambu Studio', children: <StudioCard /> },
     features.cad && {
       key: 'cad',
       label: (
