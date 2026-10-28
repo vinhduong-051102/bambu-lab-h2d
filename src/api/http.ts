@@ -2,7 +2,8 @@ import type { PrinterService } from '../domain/PrinterService';
 import type { PrinterManager } from '../domain/PrinterManager';
 import { getRuntime } from '../runtime/runtime';
 
-type Params = Record<string, string>;
+// A catch-all segment ([...path]) is the list of its segments
+type Params = Record<string, string | string[]>;
 
 export interface RouteContext<P extends Params = Params> {
   params: Promise<P>;

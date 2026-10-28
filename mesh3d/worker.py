@@ -34,6 +34,11 @@ Mechanism simulation (sim/, docs/mechanical-simulation.md): Project Chrono in it
                                         "width", "height"}
   GET  /sim/runs/<id>/files/<name>      A result file (CSV, JSON, log, .blend, MP4, PNG)
   GET  /sim/guide                       The mechanism format and rules, for the agent (sim/guide.md)
+
+Engineering analysis of printed parts (eng/, docs/engineering-analysis.md): one POST per MCP tool, JSON in and out
+  POST /eng/inspect · /validate · /assembly · /clearance · /motion/configure · /motion/run · /fea/configure ·
+       /fea/run · /printability · /report · /visualize
+  GET  /eng/models[/<id>] · /eng/analyses[?model_id=&kind=] · /eng/analyses/<id> · /eng/analyses/<id>/files/<path>
 """
 
 import json
@@ -62,6 +67,14 @@ import analyze  # noqa: E402 - the parts of a model, for Studio's "AI tối ưu"
 import review  # noqa: E402 - Claude making and fixing figures
 import shape  # noqa: E402 - Hunyuan3D-2 shaping figures from pictures
 from sim import runs as sim  # noqa: E402 - mechanism simulation with Project Chrono
+from eng import service as eng  # noqa: E402 - engineering analysis of printed parts
+from eng.schema import InputError  # noqa: E402
+from eng.store import EngError  # noqa: E402
+
+ENG_POST = {"inspect": eng.inspect_model, "validate": eng.validate_mesh, "assembly": eng.analyze_assembly,
+            "clearance": eng.check_clearance, "motion/configure": eng.configure_motion, "motion/run": eng.run_motion,
+            "fea/configure": eng.configure_fea, "fea/run": eng.run_fea, "printability": eng.analyze_printability,
+            "report": eng.generate_report, "visualize": eng.visualize_results}
 
 
 def claude_ready():
@@ -92,10 +105,45 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         if self.path == "/health":
             return self.reply(200, {"ok": True, "claude": claude_ready(), "running": shape.ids() + review.ids(),
-                                    "loaded": shape.loaded(), "chrono": sim.ready()})
+                                    "loaded": shape.loaded(), "chrono": sim.ready(), "fea": eng.health()["fea"]})
         if self.path.startswith("/sim/"):
             return self.simulation("GET")
+        if self.path.startswith("/eng/"):
+            return self.engineering("GET")
         self.reply(404, {"ok": False, "error": "NOT_FOUND"})
+
+    def engineering(self, method):
+        """The /eng routes: EngError and InputError answer with their status, other errors are the worker's (500)"""
+        from urllib.parse import parse_qs, urlsplit
+
+        url = urlsplit(self.path)
+        route, query = url.path[len("/eng/"):].strip("/"), {k: v[0] for k, v in parse_qs(url.query).items()}
+        try:
+            if method == "POST":
+                handler = ENG_POST.get(route)
+                if handler is None:
+                    raise EngError(404, "NOT_FOUND", f"Không có POST /eng/{route}.")
+                return self.reply(200, {"ok": True, **handler(self.body())})
+            parts = route.split("/")
+            if parts == ["models"]:
+                return self.reply(200, {"ok": True, **eng.models()})
+            if len(parts) == 2 and parts[0] == "models":
+                return self.reply(200, {"ok": True, **eng.get_model(parts[1], query.get("version"))})
+            if parts == ["analyses"]:
+                return self.reply(200, {"ok": True, **eng.analyses(query.get("model_id"), query.get("kind"))})
+            if len(parts) == 2 and parts[0] == "analyses":
+                return self.reply(200, {"ok": True, **eng.get_analysis(parts[1])})
+            if len(parts) >= 4 and parts[0] == "analyses" and parts[2] == "files":
+                return self.send_file(*eng.analysis_file(parts[1], "/".join(parts[3:])))
+            raise EngError(404, "NOT_FOUND", f"Không có GET /eng/{route}.")
+        except EngError as err:
+            return self.reply(err.status, {"ok": False, "error": err.code, "message": err.message,
+                                           **({"details": err.details} if err.details is not None else {})})
+        except InputError as err:
+            return self.reply(422, {"ok": False, "error": "INVALID_INPUT", "message": str(err), "details": err.errors})
+        except Exception as err:  # noqa: BLE001 - the worker keeps serving; no result is made up
+            traceback.print_exc()
+            return self.reply(500, {"ok": False, "error": "ENG_ERROR", "message": f"{type(err).__name__}: {str(err)[:500]}"})
 
     def simulation(self, method):
         """The /sim routes: SimError answers with its status, other errors are the worker's (500)"""
@@ -196,6 +244,8 @@ class Handler(BaseHTTPRequestHandler):
     def do_POST(self):
         if self.path.startswith("/sim/"):
             return self.simulation("POST")
+        if self.path.startswith("/eng/"):
+            return self.engineering("POST")
         if self.path == "/analyze":
             return self.analyse()
         if self.path == "/generate":
@@ -244,5 +294,6 @@ if __name__ == "__main__":
     JOBS_DIR.mkdir(parents=True, exist_ok=True)
     shape.start()
     sim.start()
+    eng.start()
     print(f"[mesh-worker] listening on :{PORT}, jobs in {JOBS_DIR}", flush=True)
     ThreadingHTTPServer(("0.0.0.0", PORT), Handler).serve_forever()

@@ -3,7 +3,7 @@ import type { PrinterManager } from '../../src/domain/PrinterManager';
 import { setRuntime } from '../../src/runtime/runtime';
 
 type RouteModule = Record<string, unknown>;
-type RouteHandler = (request: Request, context: { params: Promise<Record<string, string>> }) => Promise<Response> | Response;
+type RouteHandler = (request: Request, context: { params: Promise<Record<string, string | string[]>> }) => Promise<Response> | Response;
 
 interface CompiledRoute {
   pattern: RegExp;
@@ -21,6 +21,12 @@ const routes: CompiledRoute[] = Object.entries(routeModules)
     const paramNames: string[] = [];
     const source = segments
       .map((segment) => {
+        // A catch-all [...name] takes the rest of the path; its param is the list of segments
+        const catchAll = segment.match(/^\[\.\.\.(.+)\]$/);
+        if (catchAll) {
+          paramNames.push(`...${catchAll[1]}`);
+          return '(.+)';
+        }
         const dynamic = segment.match(/^\[(.+)\]$/);
         if (dynamic) {
           paramNames.push(dynamic[1]);
@@ -79,7 +85,13 @@ export function createTestApp(printerService: PrinterService, printerManager?: P
           break;
         }
 
-        const params = Object.fromEntries(route.paramNames.map((name, i) => [name, decodeURIComponent(match[i + 1])]));
+        const params = Object.fromEntries(
+          route.paramNames.map((name, i) =>
+            name.startsWith('...')
+              ? [name.slice(3), match[i + 1].split('/').map(decodeURIComponent)]
+              : [name, decodeURIComponent(match[i + 1])]
+          )
+        );
         const request = new Request(new URL(url, 'http://localhost'), {
           method,
           headers: { ...(payload !== undefined && { 'Content-Type': 'application/json' }), ...headers },

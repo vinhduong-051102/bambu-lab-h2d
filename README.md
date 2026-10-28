@@ -149,6 +149,7 @@ Detailed documentation is available in `docs/`:
 - [`docs/studio.md`](docs/studio.md) — Bambu Studio embedded in the dashboard (slicing & printing)
 - [`docs/cad.md`](docs/cad.md) — AI model design (Claude: technical parts in build123d; figures from Hunyuan3D-2, finished by Claude in Blender through MCP for Blender; Antigravity) for printing
 - [`docs/mechanical-simulation.md`](docs/mechanical-simulation.md) — Mechanism simulation: Project Chrono (PyChrono) on this computer, played back in Blender, driven by an agent through MCP
+- [`docs/engineering-analysis.md`](docs/engineering-analysis.md) — Engineering checks of printed parts: mesh, assembly, fits, motion (Chrono), FEA (gmsh + CalculiX), printability, reports, through MCP
 
 ---
 

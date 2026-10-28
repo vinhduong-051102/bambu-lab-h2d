@@ -75,6 +75,16 @@ RUN curl -fsSL "https://micro.mamba.pm/api/micromamba/linux-64/${MICROMAMBA_VERS
  && rm -rf /tmp/mamba \
  && /opt/chrono/bin/python -c "import pychrono; pychrono.ChSystemNSC(); print('pychrono ok')"
 
+# Engineering FEA (eng/, docs/engineering-analysis.md): gmsh meshes, CalculiX solves, in their own environment /opt/fea
+# (the two engines FreeCAD's FEM workbench drives, without FreeCAD). CPU only
+ARG CALCULIX_VERSION=2.23
+ARG GMSH_VERSION=4.15.2
+RUN MAMBA_ROOT_PREFIX=/tmp/mamba micromamba create -y -p /opt/fea -c conda-forge \
+      "calculix=${CALCULIX_VERSION}" "gmsh=${GMSH_VERSION}" "python-gmsh=${GMSH_VERSION}" python=3.12 numpy scipy \
+ && rm -rf /tmp/mamba \
+ && /opt/fea/bin/python -c "import gmsh, scipy; gmsh.initialize(); gmsh.finalize(); print('gmsh ok')" \
+ && { /opt/fea/bin/ccx -v || true; } | grep -q "Version ${CALCULIX_VERSION}"
+
 RUN useradd --create-home --uid 1000 mesh
 USER mesh
 # Model weights download here on first use (~25 GB): a volume (MESH_MODELS_DIR), so they survive rebuilds
