@@ -1,10 +1,23 @@
 'use client';
 
-import { ExperimentOutlined, FileTextOutlined, DownloadOutlined } from '@ant-design/icons';
-import { Alert, App, Button, Checkbox, Col, Collapse, Divider, Empty, Flex, Form, Image, Input, List, Modal, Row, Space, Spin, Tag, Typography } from 'antd';
+import { DownloadOutlined, ExperimentOutlined, FileTextOutlined, PrinterOutlined } from '@ant-design/icons';
+import { Alert, App, AutoComplete, Button, Checkbox, Col, Collapse, Divider, Empty, Flex, Form, Image, Input, List, Modal, Row, Select, Space, Spin, Tag, Typography } from 'antd';
+import type { FormInstance } from 'antd';
 import { useEffect, useState } from 'react';
-import { ENG_STATUS, engFileUrl, missingData, PRINT_FIELDS, printConfig, sortedChecks, statusCounts } from '../eng';
+import {
+  CALIBRATION_BUILD,
+  ENG_STATUS,
+  engFileUrl,
+  missingData,
+  PRINT_FIELDS,
+  PRINT_GROUPS,
+  PRINT_PRESETS,
+  printConfig,
+  sortedChecks,
+  statusCounts,
+} from '../eng';
 import type { CadJob } from './CadJob';
+import { PrintIllustration } from './PrintIllustration';
 
 /**
  * "Kiểm tra kỹ thuật" of a finished design job (docs/engineering-analysis.md): its model.stl checked by the mesh
@@ -138,6 +151,112 @@ function Results({ data }: { data: CheckResponse }) {
   );
 }
 
+type PrintField = (typeof PRINT_FIELDS)[number] & { placeholder?: string; typical?: string; options?: string[]; unit?: string };
+
+/** One setting: its picture, what it means in plain words, the usual value, and a box with values to pick from */
+function SettingCard({ field }: { field: PrintField }) {
+  return (
+    <div className="print-setting">
+      <div className="print-setting-pic">
+        <PrintIllustration name={field.picture} />
+      </div>
+      <Flex vertical gap={2} style={{ minWidth: 0, flex: 1 }}>
+        <Typography.Text strong>{field.label}</Typography.Text>
+        <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+          {field.help}
+        </Typography.Text>
+        {field.typical && (
+          <Typography.Text style={{ fontSize: 12, color: '#60a5fa' }}>
+            {field.typical}
+          </Typography.Text>
+        )}
+        <Form.Item name={field.key} style={{ margin: '4px 0 0' }}>
+          <AutoComplete
+            options={(field.options ?? []).map((value) => ({ value }))}
+            placeholder={field.placeholder ?? (field.calibration ? 'chưa đo: để trống' : 'chưa biết: để trống')}
+            allowClear
+            style={{ width: '100%' }}
+          >
+            <Input suffix={field.unit} inputMode={field.type === 'number' ? 'decimal' : undefined} />
+          </AutoComplete>
+        </Form.Item>
+      </Flex>
+    </div>
+  );
+}
+
+/** The print setup, grouped: machine and material, the slicer settings (with Bambu Studio's standard profiles one
+ * click away), and the printer's own accuracy, measured on the calibration print this button builds */
+function PrintSetup({ form, measured, onMeasured }: { form: FormInstance; measured: boolean; onMeasured: (on: boolean) => void }) {
+  const { message } = App.useApp();
+  const [building, setBuilding] = useState(false);
+
+  const buildCalibration = async () => {
+    setBuilding(true);
+    try {
+      const res = await fetch('/api/cad/builds', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(CALIBRATION_BUILD),
+      });
+      const body = await res.json().catch(() => null);
+      if (!res.ok) throw new Error(body?.message || `HTTP ${res.status}`);
+      message.success('Đã tạo mẫu in hiệu chuẩn: nó nằm trong danh sách mô hình, bấm “Gửi sang Studio” để in.', 8);
+    } catch (err) {
+      message.error(`Không tạo được mẫu in: ${err instanceof Error ? err.message : String(err)}`);
+    } finally {
+      setBuilding(false);
+    }
+  };
+
+  return (
+    <Flex vertical gap={14}>
+      {PRINT_GROUPS.map((group) => (
+        <section key={group.key} className="print-group">
+          <Flex justify="space-between" align="center" wrap gap={8}>
+            <Typography.Title level={5} style={{ margin: 0 }}>
+              {group.title}
+            </Typography.Title>
+            {group.key === 'settings' && (
+              <Select
+                size="small"
+                placeholder="Dùng hồ sơ chuẩn…"
+                style={{ minWidth: 300 }}
+                value={null}
+                options={PRINT_PRESETS.map((p) => ({ value: p.key, label: p.label }))}
+                onChange={(key) => {
+                  const preset = PRINT_PRESETS.find((p) => p.key === key);
+                  if (preset) form.setFieldsValue(preset.values);
+                }}
+              />
+            )}
+            {group.key === 'calibration' && (
+              <Button size="small" icon={<PrinterOutlined />} loading={building} onClick={buildCalibration}>
+                Tạo mẫu in hiệu chuẩn
+              </Button>
+            )}
+          </Flex>
+          <Typography.Paragraph type="secondary" style={{ fontSize: 12, margin: '4px 0 8px' }}>
+            {group.help}
+          </Typography.Paragraph>
+          <div className="print-settings">
+            {(PRINT_FIELDS as PrintField[])
+              .filter((f) => f.group === group.key)
+              .map((f) => (
+                <SettingCard key={f.key} field={f} />
+              ))}
+          </div>
+          {group.key === 'calibration' && (
+            <Checkbox checked={measured} onChange={(e) => onMeasured(e.target.checked)} style={{ marginTop: 8 }}>
+              Các số trên đo từ mẫu in thử, in cùng máy, cùng nhựa và cùng thông số với chi tiết thật
+            </Checkbox>
+          )}
+        </section>
+      ))}
+    </Flex>
+  );
+}
+
 export function EngCheckButton({ job }: { job: CadJob }) {
   const { message } = App.useApp();
   const [open, setOpen] = useState(false);
@@ -203,23 +322,11 @@ export function EngCheckButton({ job }: { job: CadJob }) {
       >
         <Flex vertical gap={12}>
           <Typography.Paragraph type="secondary" style={{ marginBottom: 0 }}>
-            Kiểm tra lưới, độ dày thành và khả năng in của model.stl theo thông số in dưới đây. Ô để trống là chưa biết:
-            mục cần nó sẽ là “chưa đánh giá”, không đoán. Sai số lấy từ mẫu in hiệu chuẩn (docs/cad.md). Độ bền (FEA) và
-            chuyển động cần tải, chỗ ngàm và khớp: nhờ Claude qua MCP.
+            Máy sẽ xem mô hình có lỗi không, chỗ nào quá mỏng, chỗ nào cần support, lỗ có vừa không, rồi viết báo cáo.
+            Điền những gì bạn biết; <b>ô để trống là “chưa biết”</b>, mục cần nó sẽ ghi “chưa đánh giá” chứ không đoán.
           </Typography.Paragraph>
           <Form form={form} layout="vertical" size="small">
-            <Row gutter={12}>
-              {PRINT_FIELDS.map((f) => (
-                <Col key={f.key} xs={12} md={6}>
-                  <Form.Item name={f.key} label={f.label} style={{ marginBottom: 8 }}>
-                    <Input placeholder={f.placeholder ?? (f.calibration ? 'đo bằng mẫu in' : '')} suffix={f.unit} inputMode={f.type === 'number' ? 'decimal' : undefined} />
-                  </Form.Item>
-                </Col>
-              ))}
-            </Row>
-            <Checkbox checked={measured} onChange={(e) => setMeasured(e.target.checked)}>
-              Sai số đã đo bằng mẫu in hiệu chuẩn trên máy, vật liệu và thông số này
-            </Checkbox>
+            <PrintSetup form={form} measured={measured} onMeasured={setMeasured} />
           </Form>
           <Space>
             <Button type="primary" icon={<ExperimentOutlined />} loading={running} onClick={run}>
