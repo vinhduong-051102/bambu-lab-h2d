@@ -7,6 +7,12 @@ describe('design tab engineering check helpers', () => {
     expect(config).toEqual({ printer: 'Bambu Lab H2D', nozzle_mm: 0.4, walls: 3 });
   });
 
+  it('counts the gap engraved on the calibration slot on both sides', () => {
+    // The slot is marked 0.2 (each side): a diametral clearance of 0.4
+    expect(printConfig({ min_clearance_mm: '0.2' }).min_clearance_mm).toBe(0.4);
+    expect(printConfig({ hole_shrink_mm: '0.15' }).hole_shrink_mm).toBe(0.15);
+  });
+
   it('says where the tolerances come from only when some are given', () => {
     expect(printConfig({ hole_shrink_mm: '0.15' })).toEqual({ hole_shrink_mm: 0.15, tolerance_source: 'user' });
     expect(printConfig({ hole_shrink_mm: '0.15' }, true).tolerance_source).toBe('calibration');

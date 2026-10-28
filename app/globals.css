@@ -488,3 +488,35 @@ body {
 .sim-row-picked > td {
   background: rgba(59, 130, 246, 0.12) !important;
 }
+
+/* ---------- Engineering check: print settings with pictures ---------- */
+.print-group {
+  border: 1px solid var(--card-border);
+  border-radius: var(--radius-md);
+  padding: 12px;
+}
+.print-settings {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+  gap: 10px;
+}
+.print-setting {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  padding: 8px;
+  border-radius: var(--radius-sm);
+  background: rgba(255, 255, 255, 0.03);
+}
+.print-setting-pic {
+  flex: 0 0 auto;
+  color: var(--text-muted);
+}
+.print-pic {
+  display: block;
+}
+@media (max-width: 480px) {
+  .print-setting-pic {
+    display: none;
+  }
+}
