@@ -30,6 +30,7 @@ import trimesh
 
 TMP = Path(tempfile.mkdtemp(prefix="eng-test-"))
 os.environ.setdefault("ENG_DIR", str(TMP / "eng"))
+os.environ["JOBS_DIR"] = str(TMP / "jobs")
 
 from eng import assembly, clearance, fea, geometry, printability, report, schema  # noqa: E402
 from eng.store import ENG_DIR  # noqa: E402
@@ -385,6 +386,38 @@ class Visual(unittest.TestCase):
         self.assertTrue(np.all(rgb[on_plate, 0] > rgb[on_plate, 2]))
         wall_side = (coloured.face_normals[:, 0] > 0.99) & (np.abs(coloured.triangles_center[:, 0] - 5) < 1e-6)
         self.assertTrue(np.all(rgb[wall_side, 2] > rgb[wall_side, 0]))
+
+
+class JobCheck(unittest.TestCase):
+    def test_design_job_check(self):
+        from eng import service
+
+        # A design job's out/model.stl: a plate with a 1 mm fin
+        out = Path(os.environ["JOBS_DIR"]) / "20261028-120000-ab12" / "out"
+        out.mkdir(parents=True)
+        part = trimesh.boolean.union([box((40, 30, 4), (20, 15, 2)), box((1, 30, 10), (20, 15, 9))], engine="manifold")
+        part.export(out / "model.stl")
+        body = {"job_id": "20261028-120000-ab12", "print": {"nozzle_mm": 0.4, "walls": 2}, "render": False}
+        first = service.check_job(body)
+        self.assertEqual(first["model"]["model_id"], "job-20261028-120000-ab12")
+        self.assertEqual(sorted(first["results"]), ["clearance", "inspect", "printability", "validate"])
+        # The 1 mm fin: wider than a 0.4 mm line, thinner than 2 × 2 walls × 0.4 mm: walls only, no infill
+        walls = next(c for c in first["results"]["clearance"]["checks"] if c["id"] == "model.wall")
+        self.assertEqual(walls["status"], "WARNING")
+        self.assertAlmostEqual(walls["value"], 1.0, delta=0.01)
+        # FEA and motion were not run: never a pass
+        sections = {s["title"][:2]: s["status"] for s in first["report"]["data"]["sections"]}
+        self.assertEqual(sections["6."], "NOT_EVALUATED")
+        self.assertEqual(sections["7."], "NOT_EVALUATED")
+        # Each check is a new version of the job's model; the latest is read back
+        second = service.check_job(body)
+        self.assertEqual(second["model"]["version"], first["model"]["version"] + 1)
+        last = service.last_job_check("20261028-120000-ab12")
+        self.assertEqual(last["report"]["analysis_id"], second["report"]["analysis_id"])
+        self.assertEqual(sorted(last["results"]), ["clearance", "inspect", "printability", "validate"])
+        self.assertEqual(service.last_job_check("20261028-120000-ffff")["report"], None)
+        with self.assertRaises(Exception):
+            service.check_job({"job_id": "../etc"})
 
 
 class Report(unittest.TestCase):

@@ -85,6 +85,12 @@ RUN MAMBA_ROOT_PREFIX=/tmp/mamba micromamba create -y -p /opt/fea -c conda-forge
  && /opt/fea/bin/python -c "import gmsh, scipy; gmsh.initialize(); gmsh.finalize(); print('gmsh ok')" \
  && { /opt/fea/bin/ccx -v || true; } | grep -q "Version ${CALCULIX_VERSION}"
 
+# Embree ray casting for trimesh: wall thickness and overhang rays on a 250k-face figure take under a second
+# instead of minutes (eng/clearance.py, eng/printability.py)
+ARG EMBREEX_VERSION=2.17.7.post6
+RUN pip install --no-cache-dir "embreex==${EMBREEX_VERSION}" \
+ && python -c "import trimesh; assert trimesh.ray.has_embree; print('embree ok')"
+
 RUN useradd --create-home --uid 1000 mesh
 USER mesh
 # Model weights download here on first use (~25 GB): a volume (MESH_MODELS_DIR), so they survive rebuilds

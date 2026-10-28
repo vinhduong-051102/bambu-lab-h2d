@@ -37,8 +37,9 @@ Mechanism simulation (sim/, docs/mechanical-simulation.md): Project Chrono in it
 
 Engineering analysis of printed parts (eng/, docs/engineering-analysis.md): one POST per MCP tool, JSON in and out
   POST /eng/inspect · /validate · /assembly · /clearance · /motion/configure · /motion/run · /fea/configure ·
-       /fea/run · /printability · /report · /visualize
-  GET  /eng/models[/<id>] · /eng/analyses[?model_id=&kind=] · /eng/analyses/<id> · /eng/analyses/<id>/files/<path>
+       /fea/run · /printability · /report · /visualize · /check (a design job: mesh, walls, printability, report)
+  GET  /eng/models[/<id>] · /eng/analyses[?model_id=&kind=] · /eng/analyses/<id> · /eng/analyses/<id>/files/<path> ·
+       /eng/checks/<job id> (the latest check of a design job)
 """
 
 import json
@@ -74,7 +75,7 @@ from eng.store import EngError  # noqa: E402
 ENG_POST = {"inspect": eng.inspect_model, "validate": eng.validate_mesh, "assembly": eng.analyze_assembly,
             "clearance": eng.check_clearance, "motion/configure": eng.configure_motion, "motion/run": eng.run_motion,
             "fea/configure": eng.configure_fea, "fea/run": eng.run_fea, "printability": eng.analyze_printability,
-            "report": eng.generate_report, "visualize": eng.visualize_results}
+            "report": eng.generate_report, "visualize": eng.visualize_results, "check": eng.check_job}
 
 
 def claude_ready():
@@ -131,6 +132,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self.reply(200, {"ok": True, **eng.get_model(parts[1], query.get("version"))})
             if parts == ["analyses"]:
                 return self.reply(200, {"ok": True, **eng.analyses(query.get("model_id"), query.get("kind"))})
+            if len(parts) == 2 and parts[0] == "checks":
+                return self.reply(200, {"ok": True, **eng.last_job_check(parts[1])})
             if len(parts) == 2 and parts[0] == "analyses":
                 return self.reply(200, {"ok": True, **eng.get_analysis(parts[1])})
             if len(parts) >= 4 and parts[0] == "analyses" and parts[2] == "files":
