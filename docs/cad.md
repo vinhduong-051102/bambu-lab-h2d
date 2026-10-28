@@ -172,6 +172,36 @@ MESH_MODELS_DIR=F:/bambu-lab-h2d/mesh3d-models
 Hunyuan3D-2, HunyuanDiT and MV-Adapter's SDXL are under their makers' licences (Tencent's restricts commercial
 use); MCP for Blender is MIT.
 
+## STEP/IGES sang STL
+
+The mesh container has no CAD kernel; the CAD container has OpenCascade (through build123d), so it turns STEP and
+IGES files into meshes: `POST /api/cad/convert` (the worker's `POST /convert`, `cad/convert.py`).
+
+- Send the file as JSON `{"data_base64", "filename"}` (optionally `job_id`, to put it in that job's folder), as a
+  multipart upload `file`, or name one already in the jobs folder: `{"file": "<job id>/<name>.step"}`. `.step`,
+  `.stp`, `.iges`, `.igs`, up to 100 MB.
+- Each solid becomes its own STL in `<job>/out/` (`01-box.stl`, `02-cylinder.stl`: named after the part in the
+  file), in mm whatever unit the file used, tessellated to `tolerance_mm` (default 0.01 mm) and
+  `angular_tolerance_deg` (default 0.5°). A smaller tolerance follows curves closer and makes larger files.
+- The answer lists each solid with its name, its volume as OpenCascade computes it from the exact geometry
+  (`volume_mm3`), its bounding box, its number of faces, whether its STL is watertight, and the STL's `url`; and
+  the file's own unit (`units`: `millimetre`, `inch`, …). The same is in `<job>/out/convert.json`.
+- A file of surfaces only, as IGES often is, is sewn: every closed shell becomes a solid (a warning says so);
+  open surfaces are left out.
+- A file that can't be read answers 422 `CONVERT_FAILED` with the reason, and leaves no STL. Converting again
+  into the same folder replaces the previous conversion's STLs.
+- An uploaded file is kept as `<job>/input/<name>`. The folder has no `job.json`, so it is not listed on the card.
+
+```bash
+curl -s localhost:3000/api/cad/convert -F file=@bracket.step -F tolerance_mm=0.02
+```
+
+The worker's Python tests (`cad/tests/`) run in the image, on the scripts of a checkout:
+
+```bash
+docker run --rm -v "$PWD/cad:/opt/cad:ro" -e PYTHONDONTWRITEBYTECODE=1 -w /opt/cad bambu-lab-h2d/cad:latest   python -m unittest discover -s tests -t .
+```
+
 ## Antigravity (MCP)
 
 `cad/mcp/server.mjs` is an MCP server (stdio, no dependencies) that gives an agent the same tools. In Antigravity, the agent writes the build123d code itself, on Antigravity's own plan, and the gateway builds it:
@@ -217,6 +247,8 @@ Set `GATEWAY_API_KEY` when the gateway has one. Then ask the agent, for example:
 | POST | `/api/cad/jobs/:id/fix` | `{prompt?, model?}`: Claude reviews the finished figure `:id` and fixes it, as a new job. 202 with the job; 409 `MODEL_NOT_READY` before the figure is done |
 | POST | `/api/cad/meshes` | Multipart with `image` (and its other sides `image_left`, `image_back`, `image_right`) and/or the fields `prompt`, `height_mm` (default 80), `base`, `model` (the Claude model), `seed`, `multiview`, `parent_id` (make that figure again), `colour` with `colours` (2–8, default 4) and `palette`: `auto`, `ams`, `bambu` with `material` (a material or `family:PLA`), or `custom` with `filaments` (saved ids, comma-separated), or the same as JSON without a picture: a figure. 202 with the job; 409 `AMS_TOO_FEW_COLOURS` when the AMS holds fewer than two filaments |
 | POST | `/api/cad/builds` | `{code, title?, prompt?, parent_id?}`: builds ready-made code now. 201 with the job |
+| POST | `/api/cad/convert` | STEP/IGES to one STL per solid ([STEP/IGES sang STL](#stepiges-sang-stl)): `{file}` or `{data_base64, filename, job_id?}` or multipart `file`, with `tolerance_mm`, `angular_tolerance_deg`. 200 with `job_id`, `units`, `solids`; 422 `CONVERT_FAILED` |
+| GET | `/api/cad/convert/:id/:name` | A conversion's STL (`01-box.stl`) or `convert.json`; `?download=1` as an attachment |
 | GET | `/api/cad/jobs/:id` | One job: `state` (queued, running, done, failed, cancelled), `step`, `notes`, `result`, `report`, `files`, `sent` |
 | POST | `/api/cad/jobs/:id/cancel` | Stops Claude, or drops a figure from the GPU queue (one being shaped stops at its next step) |
 | POST | `/api/cad/jobs/:id/studio` | `{format?: "stl" \| "step" \| "3mf"}`: into Studio's `/imports`, named after the model's title (`3mf`: a coloured figure, painted) |

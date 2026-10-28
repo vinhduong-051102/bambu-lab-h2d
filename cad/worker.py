@@ -8,6 +8,10 @@ request.md, this worker writes model.py (through Claude), out/ (through build.py
                                in the background; status.json follows its progress. 202, or 409 when running
   POST /jobs/<id>/build        Builds the job's model.py now and answers with build.py's report
   POST /jobs/<id>/cancel       Stops the job's Claude run
+  POST /convert                {"file": "<path in JOBS_DIR>"} or {"data_base64", "filename", "job_id"?}, with
+                               "tolerance_mm"? and "angular_tolerance_deg"?: each solid of a STEP/IGES file as an STL
+                               in <job>/out/ (convert.py), answered with convert.json. The job is the folder the file
+                               is in, else job_id, else a new one; the upload is kept as <job>/input/<filename>
 
 status.json: {"state": "running" | "done" | "failed" | "cancelled", "step": "starting" | "reading" | "writing" |
 "building" | "reviewing" | "finishing", "steps": [every step so far: {id, started_at, finished_at, detail}; a
@@ -15,9 +19,12 @@ build's detail is its outcome], "notes": ["• ..."], "builds": n, "started_at",
 {summary, ...the output schema}, "report": <last out/report.json>}
 """
 
+import base64
+import binascii
 import json
 import os
 import re
+import secrets
 import signal
 import subprocess
 import sys
@@ -35,6 +42,9 @@ DEFAULT_MODEL = os.environ.get("CAD_AI_MODEL") or "claude-opus-5-5"
 CLAUDE_TIMEOUT_S = int(os.environ.get("CAD_AI_TIMEOUT_S", "1200"))
 BUILD_TIMEOUT_S = 180
 MAX_TURNS = 60
+CONVERT_TIMEOUT_S = 300
+MAX_CONVERT_BYTES = 100 * 1024 * 1024
+CONVERT_SUFFIXES = (".step", ".stp", ".iges", ".igs")
 JOB_ID_RE = re.compile(r"^[a-z0-9][a-z0-9-]{5,63}$")
 
 RESULT_SCHEMA = {
@@ -63,6 +73,7 @@ RESULT_SCHEMA = {
 
 lock = threading.Lock()
 running = {}  # job id → Popen of its Claude run
+converting = set()  # job ids with a STEP/IGES conversion under way
 cancelled = set()  # job ids stopped from the dashboard, whose status says so already
 
 
@@ -96,6 +107,68 @@ def run_build(directory):
     except subprocess.TimeoutExpired:
         return {"ok": False, "error": f"Dựng mô hình quá {BUILD_TIMEOUT_S} giây."}
     return read_json(directory / "out" / "report.json") or {"ok": False, "error": "build.py không ghi report.json."}
+
+
+def new_job_id():
+    """Like the gateway's newJobId: "20261023-091502-a1b2", sorting by creation time"""
+    return datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S") + "-" + secrets.token_hex(2)
+
+
+def convert_source(body):
+    """(job id, the STEP/IGES file) for a /convert request, or raises ValueError with what is wrong. A file named
+    by path must be in a job folder; an uploaded one is written to <job>/input/"""
+    if body.get("file"):
+        path = Path(str(body["file"]))
+        path = (path if path.is_absolute() else JOBS_DIR / path).resolve()
+        try:
+            job_id = path.relative_to(JOBS_DIR.resolve()).parts[0]
+        except (ValueError, IndexError):
+            raise ValueError(f"file phải nằm trong {JOBS_DIR}.") from None
+        if not JOB_ID_RE.match(job_id) or len(path.relative_to(JOBS_DIR.resolve()).parts) < 2:
+            raise ValueError("file phải nằm trong thư mục của một job.")
+        if not path.is_file():
+            raise ValueError(f"Không có file {body['file']}.")
+        if not path.name.lower().endswith(CONVERT_SUFFIXES):
+            raise ValueError("Chỉ nhận file .step, .stp, .iges, .igs.")
+        return job_id, path
+    if not body.get("data_base64") or not body.get("filename"):
+        raise ValueError('Cần "file" (đường dẫn trong thư mục jobs) hoặc "data_base64" cùng "filename".')
+    name = re.sub(r"[^A-Za-z0-9._-]+", "_", Path(str(body["filename"])).name).lstrip(".") or "model"
+    if not name.lower().endswith(CONVERT_SUFFIXES):
+        raise ValueError("Chỉ nhận file .step, .stp, .iges, .igs.")
+    try:
+        data = base64.b64decode(str(body["data_base64"]), validate=True)
+    except (binascii.Error, ValueError):
+        raise ValueError("data_base64 không phải base64 hợp lệ.") from None
+    if not data:
+        raise ValueError("File rỗng.")
+    if len(data) > MAX_CONVERT_BYTES:
+        raise ValueError(f"File lớn quá {MAX_CONVERT_BYTES // 1024 // 1024} MB.")
+    job_id = str(body.get("job_id") or new_job_id())
+    if not JOB_ID_RE.match(job_id):
+        raise ValueError("job_id không hợp lệ.")
+    inputs = job_dir(job_id) / "input"
+    inputs.mkdir(parents=True, exist_ok=True)
+    (inputs / name).write_bytes(data)
+    return job_id, inputs / name
+
+
+def run_convert(source, out, tolerance, angular):
+    """convert.py on a STEP/IGES file in its own process (OpenCascade may crash on a broken file); its report"""
+    out.mkdir(parents=True, exist_ok=True)
+    try:
+        subprocess.run([sys.executable, str(HERE / "convert.py"), str(source), str(out), repr(tolerance), repr(angular)],
+                       capture_output=True, timeout=CONVERT_TIMEOUT_S, check=False)
+    except subprocess.TimeoutExpired:
+        return {"ok": False, "error": f"Chuyển đổi quá {CONVERT_TIMEOUT_S} giây."}
+    return read_json(out / "convert.json") or {"ok": False, "error": "convert.py không ghi convert.json (có thể đã bị crash)."}
+
+
+def tolerance_of(body, key, default, low, high):
+    value = body.get(key, default)
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or not low <= value <= high:
+        raise ValueError(f"{key} phải là số từ {low} đến {high}.")
+    return float(value)
 
 
 def step_of(tool_name, tool_input):
@@ -342,6 +415,8 @@ class Handler(BaseHTTPRequestHandler):
         self.reply(404, {"ok": False, "error": "NOT_FOUND"})
 
     def do_POST(self):
+        if self.path == "/convert":
+            return self.convert(self.body())
         match = re.fullmatch(r"/jobs/([^/]+)/(generate|build|cancel)", self.path)
         if not match or not JOB_ID_RE.match(match.group(1)):
             return self.reply(404, {"ok": False, "error": "NOT_FOUND"})
@@ -385,6 +460,29 @@ class Handler(BaseHTTPRequestHandler):
         write_json(directory / "status.json", status)
         kill(proc)
         return self.reply(200, {"ok": True})
+
+
+    def convert(self, body):
+        try:
+            tolerance = tolerance_of(body, "tolerance_mm", 0.01, 0.0005, 1)
+            angular = tolerance_of(body, "angular_tolerance_deg", 0.5, 0.05, 30)
+            job_id, source = convert_source(body)
+        except ValueError as err:
+            return self.reply(400, {"ok": False, "error": "INVALID_CONVERT", "message": str(err)})
+        with lock:
+            if job_id in running or job_id in converting:
+                return self.reply(409, {"ok": False, "error": "JOB_RUNNING", "message": "Job đang chạy."})
+            converting.add(job_id)
+        try:
+            report = run_convert(source, job_dir(job_id) / "out", tolerance, angular)
+        finally:
+            with lock:
+                converting.discard(job_id)
+        report.pop("traceback", None)
+        if not report.get("ok"):
+            return self.reply(422, {"ok": False, "error": "CONVERT_FAILED", "job_id": job_id,
+                                    "message": report.get("error") or "Không chuyển được file."})
+        return self.reply(200, {**report, "job_id": job_id})
 
 
 def generate_safely(job_id, model):
