@@ -50,7 +50,7 @@ function studioUrlFor(request: Request): string | null {
   }
   const alt = env.STUDIO_ALT_URLS.find((url) => new URL(url).hostname === requestHost);
   if (alt) return alt;
-  if (!requestHost || requestHost === studio.hostname || !isThisMachine(studio.hostname)) return env.STUDIO_URL;
+  if (!requestHost || requestHost === studio.hostname || !(env.STUDIO_ON_GATEWAY_HOST || isThisMachine(studio.hostname))) return env.STUDIO_URL;
   studio.hostname = requestHost;
   return studio.toString();
 }

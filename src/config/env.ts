@@ -29,6 +29,16 @@ const envSchema = z.object({
 
   HTTP_HOST: z.string().default('0.0.0.0'),
   HTTP_PORT: z.coerce.number().default(3000),
+  // HTTPS next to HTTP (unset turns it off): browsers only allow some features on secure pages away from localhost
+  HTTPS_PORT: z.preprocess((val) => (typeof val === 'string' && val.trim() === '' ? undefined : val), z.coerce.number().optional()),
+  // A certificate of your own, or a self-signed one made here on first start for HTTPS_HOSTNAMES
+  HTTPS_CERT_FILE: z.preprocess((val) => (typeof val === 'string' && val.trim() === '' ? undefined : val), z.string().default('./data/certs/gateway.crt')),
+  HTTPS_KEY_FILE: z.preprocess((val) => (typeof val === 'string' && val.trim() === '' ? undefined : val), z.string().default('./data/certs/gateway.key')),
+  // Names and IPs the dashboard is opened with (comma-separated): LAN IP, Tailscale IP or name
+  HTTPS_HOSTNAMES: z.preprocess(
+    (val) => (typeof val === 'string' ? val.split(',').map((s) => s.trim()).filter(Boolean) : []),
+    z.array(z.string())
+  ),
 
   LOG_LEVEL: z.string().default('info'),
   PRINTER_OFFLINE_TIMEOUT_MS: z.coerce.number().default(30000),
@@ -54,6 +64,12 @@ const envSchema = z.object({
     (val) => (typeof val === 'string' ? val.split(',').map((s) => s.trim()).filter(Boolean) : []),
     z.array(z.string().url())
   ),
+  // Studio's container runs on the gateway's host although the gateway can't see that host's addresses (the
+  // gateway in its own container): STUDIO_URL is then pointed at the host the dashboard was opened with
+  STUDIO_ON_GATEWAY_HOST: z
+    .string()
+    .optional()
+    .transform((val) => val === 'true' || val === '1'),
   // Host folder mounted at /imports in the Studio container: the dashboard drops models there to open in Studio
   STUDIO_IMPORT_DIR: z.preprocess((val) => (typeof val === 'string' && val.trim() === '' ? undefined : val), z.string().optional()),
   // Claude model behind Studio's "AI tối ưu" button (POST /api/studio/ai-optimize); the key is ANTHROPIC_API_KEY
@@ -74,7 +90,8 @@ const envSchema = z.object({
   CAD_WORKER_URL: z.preprocess((val) => (typeof val === 'string' && val.trim() === '' ? undefined : val), z.string().url().optional()),
   // Host folder mounted at /jobs in the CAD container: one folder per model, with its code, files and status
   CAD_JOBS_DIR: z.preprocess((val) => (typeof val === 'string' && val.trim() === '' ? undefined : val), z.string().default('./data/cad/jobs')),
-  // Mesh worker container (docker-compose.mesh3d.yml): figures from a picture or a description with Hunyuan3D-2
+  // Mesh worker container (docker-compose.mesh3d.yml): figures shaped by Hunyuan3D-2 from a picture, or made from a
+  // description, and finished by Claude in Blender (MCP for Blender)
   MESH_WORKER_URL: z.preprocess((val) => (typeof val === 'string' && val.trim() === '' ? undefined : val), z.string().url().optional()),
   // Bambu Lab's filament colour catalogue (from Bambu Studio's repository), cached here after the first download
   BAMBU_COLOR_CODES_FILE: z.preprocess((val) => (typeof val === 'string' && val.trim() === '' ? undefined : val), z.string().default('./data/bambu/filaments_color_codes.json')),

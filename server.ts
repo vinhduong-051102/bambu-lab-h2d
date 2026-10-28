@@ -1,9 +1,12 @@
-import { createServer } from 'http';
+import { createServer, type IncomingMessage, type ServerResponse } from 'http';
+import { createServer as createHttpsServer } from 'https';
+import type { Duplex } from 'stream';
 import next from 'next';
 import { env } from './src/config/env';
 import { logger } from './src/logger/logger';
 import { startGateway } from './src/runtime/bootstrap';
 import { checkAuthorization, requiresAuth } from './src/server/auth';
+import { loadOrCreateCertificate } from './src/server/tls';
 import { createWebSocketHub } from './src/server/websocket';
 
 function maskString(str: string): string {
@@ -28,7 +31,8 @@ MQTT:
   Status: connecting...
 
 Web Dashboard:
-  ${base}
+  ${base}${env.HTTPS_PORT ? `
+  https://${env.HTTP_HOST}:${env.HTTPS_PORT}` : ''}
 
 REST API Endpoints:
   - Capabilities: ${base}/api/capabilities
@@ -58,7 +62,7 @@ async function main(): Promise<void> {
   const gateway = await startGateway();
   const wsHub = createWebSocketHub(gateway.printerService);
 
-  const server = createServer((req, res) => {
+  const onRequest = (req: IncomingMessage, res: ServerResponse) => {
     const { pathname } = new URL(req.url ?? '/', 'http://localhost');
 
     if (requiresAuth(pathname)) {
@@ -75,9 +79,9 @@ async function main(): Promise<void> {
       if (!res.headersSent) res.writeHead(500);
       res.end();
     });
-  });
+  };
 
-  server.on('upgrade', (req, socket, head) => {
+  const onUpgrade = (req: IncomingMessage, socket: Duplex, head: Buffer) => {
     const { pathname } = new URL(req.url ?? '/', 'http://localhost');
 
     if (pathname !== '/ws') {
@@ -93,15 +97,23 @@ async function main(): Promise<void> {
     }
 
     wsHub.handleUpgrade(req, socket, head);
-  });
+  };
 
-  server.listen(env.HTTP_PORT, env.HTTP_HOST, () => {
-    logger.info({ host: env.HTTP_HOST, port: env.HTTP_PORT, dev }, 'HTTP server started');
-  });
+  const servers = [createServer(onRequest)];
+  if (env.HTTPS_PORT) {
+    servers.push(createHttpsServer(loadOrCreateCertificate(env.HTTPS_CERT_FILE, env.HTTPS_KEY_FILE, env.HTTPS_HOSTNAMES), onRequest));
+  }
 
-  server.on('error', (err) => {
-    logger.error({ error: err.message }, 'Failed to start HTTP server');
-    process.exit(1);
+  servers.forEach((server, i) => {
+    const [kind, port] = i === 0 ? ['HTTP', env.HTTP_PORT] : ['HTTPS', env.HTTPS_PORT];
+    server.on('upgrade', onUpgrade);
+    server.listen(port, env.HTTP_HOST, () => {
+      logger.info({ host: env.HTTP_HOST, port, dev }, `${kind} server started`);
+    });
+    server.on('error', (err) => {
+      logger.error({ error: err.message }, `Failed to start ${kind} server`);
+      process.exit(1);
+    });
   });
 
   // Graceful shutdown handling
@@ -109,7 +121,7 @@ async function main(): Promise<void> {
     logger.info({ signal }, 'Shutting down Gateway...');
     wsHub.close();
     await gateway.stop();
-    server.close();
+    servers.forEach((server) => server.close());
     await app.close();
     logger.info('Gateway shutdown complete');
     process.exit(0);

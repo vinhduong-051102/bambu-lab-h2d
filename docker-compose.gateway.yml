@@ -1,0 +1,41 @@
+# The gateway itself, on http://<this host>:3000. Comes back by itself after a crash or a reboot (once Docker
+# Desktop is up, which it is at sign-in).
+#   docker compose -f docker-compose.gateway.yml up -d --build
+# After a source update, the same command rebuilds and replaces it.
+services:
+  gateway:
+    build: .
+    image: bambu-lab-h2d/gateway:latest
+    container_name: bambu-gateway
+    restart: unless-stopped
+    # Printer credentials, API key, CLAUDE_CODE_OAUTH_TOKEN and the rest, as for `npm start`
+    env_file: .env
+    environment:
+      - NODE_ENV=production
+      - HTTP_HOST=0.0.0.0
+      - HTTP_PORT=3000
+      - HTTPS_PORT=3443
+      - TZ=Asia/Ho_Chi_Minh
+      # The workers are on the same Docker network (compose project bambu-lab-h2d): their 127.0.0.1 ports
+      # in .env are the host's, not this container's
+      - CAD_WORKER_URL=http://bambu-cad:8000
+      - MESH_WORKER_URL=http://bambu-mesh3d:8000
+      # Studio runs next to the gateway, so the dashboard points it at the host it was opened from
+      - STUDIO_ON_GATEWAY_HOST=true
+    volumes:
+      # Print history, timelapses, Studio imports and analyses, CAD jobs, ... (the ./data/... paths in .env)
+      - ./data:/app/data
+    ports:
+      # Bambu Studio's "AI tối ưu" reaches it at host.docker.internal:3000
+      - "${HTTP_PORT:-3000}:3000"
+      # HTTPS, self-signed for HTTPS_HOSTNAMES in .env (certificate in data/certs)
+      - "${HTTPS_PORT:-3443}:3443"
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/api/health').then(r => process.exit(r.status < 500 ? 0 : 1), () => process.exit(1))"]
+      interval: 30s
+      timeout: 10s
+      start_period: 60s
+    logging:
+      options:
+        max-size: "20m"
+        max-file: "5"

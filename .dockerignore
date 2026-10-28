@@ -1,0 +1,15 @@
+node_modules
+.next
+.git
+.env
+.env.*
+data
+logs
+scratch
+tests
+coverage
+*.tsbuildinfo
+# The other containers' own sources
+cad
+mesh3d
+studio
