@@ -33,6 +33,7 @@ from sim import schema
 HERE = Path(__file__).resolve().parent
 SIM_DIR = Path(os.environ.get("SIM_DIR", "/sim"))
 JOBS_DIR = Path(os.environ.get("JOBS_DIR", "/jobs"))
+ENG_DIR = Path(os.environ.get("ENG_DIR", "/eng"))
 CHRONO_PYTHON = os.environ.get("CHRONO_PYTHON", "/opt/chrono/bin/python")
 BLENDER = os.environ.get("BLENDER", "blender")
 TIMEOUT_S = float(os.environ.get("SIM_TIMEOUT_S", "900"))
@@ -86,15 +87,17 @@ def read_json(path, default=None):
 
 def resolve_file(name):
     """A mesh named by the agent, inside the data the worker can read: "jobs/<job id>/<path>" (a model job's files,
-    e.g. jobs/<id>/out/model.stl) or "sim/files/<path>"; nothing outside them"""
+    e.g. jobs/<id>/out/model.stl), "sim/files/<path>" or an engineering model's component
+    "eng/models/<model id>/v<n>/components/<id>.ply"; nothing outside them"""
     name = name.replace("\\", "/").lstrip("/")
-    roots = {"jobs": JOBS_DIR, "sim": SIM_DIR}
+    roots = {"jobs": JOBS_DIR, "sim": SIM_DIR, "eng": ENG_DIR}
     head, _, rest = name.partition("/")
     if head not in roots or not rest:
-        raise ValueError(f"Đường dẫn {name!r} phải bắt đầu bằng jobs/<job id>/… hoặc sim/files/….")
+        raise ValueError(f"Đường dẫn {name!r} phải bắt đầu bằng jobs/<job id>/…, sim/files/… hoặc eng/models/….")
     root = roots[head].resolve()
     path = (root / rest).resolve()
-    if root not in path.parents or (head == "sim" and not rest.startswith("files/")):
+    if root not in path.parents or (head == "sim" and not rest.startswith("files/")) or (
+            head == "eng" and not rest.startswith("models/")):
         raise ValueError(f"Đường dẫn {name!r} ra ngoài vùng dữ liệu cho phép.")
     if path.suffix.lower() not in MESH_SUFFIXES:
         raise ValueError(f"File mesh phải là {', '.join(MESH_SUFFIXES)}: {name!r}.")

@@ -108,6 +108,10 @@ export const GATEWAY_ROUTES: RouteDoc[] = [
   { method: 'GET', path: '/api/sim/runs/:id/files/:name', category: 'Mô phỏng cơ cấu', description: 'File kết quả: body_transforms.csv, joint_results.csv, summary.json, metadata.json, model.json, mechanism.json, simulation.log', exampleUrl: '/api/sim/runs/<id>/files/summary.json' },
   { method: 'GET', path: '/api/sim/runs/:id/files/blender/:name', category: 'Mô phỏng cơ cấu', description: 'File của lần phát lại: playback.mp4, playback.blend, preview.png, check.json, blender.log', exampleUrl: '/api/sim/runs/<id>/files/blender/playback.mp4' },
 
+  // Engineering analysis of printed parts (docs/engineering-analysis.md): mesh3d container, one POST per MCP tool
+  { method: 'POST', path: '/api/eng/:tool', category: 'Phân tích kỹ thuật', description: 'inspect (nhập STL/3MF/OBJ/PLY/.blend, đo hình học), validate (lỗi lưới, giao nhau), assembly (đồng trục, khớp đề xuất/xác nhận), clearance (lắp ghép, khe hở, thành, răng, va chạm khi chuyển động), motion/configure + motion/run (Chrono), fea/configure + fea/run (gmsh + CalculiX), printability, report (Markdown + HTML), visualize (Blender)', body: '{"sources": [{"file": "jobs/<job id>/out/model.stl"}], "units": "mm"}' },
+  { method: 'GET', path: '/api/eng/:resource', category: 'Phân tích kỹ thuật', description: 'models, models/<id>, analyses (?model_id=&kind=), analyses/<id> (AnalysisResult), analyses/<id>/files/<file> (report.html, result.png, result.blend, job.inp…)', exampleUrl: '/api/eng/analyses' },
+
   // Timelapse
   { method: 'GET', path: '/api/timelapse', category: 'Lịch sử in', description: 'Video timelapse trên máy in (mới nhất trước), kèm bản in tương ứng trong lịch sử', exampleUrl: '/api/timelapse' },
   { method: 'GET', path: '/api/timelapse/:name', category: 'Lịch sử in', description: 'Phát/tải video timelapse (lấy từ máy in lần đầu xem, hỗ trợ tua)' },

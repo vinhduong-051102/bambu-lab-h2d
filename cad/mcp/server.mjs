@@ -202,6 +202,367 @@ const MECHANISM_DEFS = {
   },
 };
 
+// ---------- engineering analysis of printed parts (docs/engineering-analysis.md) ----------
+// Lengths mm, forces N, stresses and moduli MPa. Every result: status PASS / WARNING / FAIL / NOT_EVALUATED per check,
+// with its assumptions, warnings and missing data; nothing is filled in when a solver fails
+const ENG_STATUS =
+  ' The answer is an AnalysisResult: an overall status and checks, each PASS, WARNING, FAIL or NOT_EVALUATED (not enough ' +
+  'data, or not run); NOT_EVALUATED is never a pass. Repeat its assumptions and missing data to the user.';
+const modelRef = {
+  model_id: { type: 'string', description: 'From inspect_3d_model' },
+  version: { type: 'integer', minimum: 1, description: 'Model version (default: the latest)' },
+};
+const ENG_DEFS = {
+  print: {
+    type: 'object',
+    description:
+      'How the part is printed, as the user states or measured. Tolerances come from this printer, material and process ' +
+      '(a calibration print), never from a generic value.',
+    properties: {
+      printer: { type: 'string' },
+      process: { enum: ['fdm', 'sla', 'sls', 'mjf'] },
+      filament: { type: 'string', description: 'Type, e.g. PLA, PETG-CF' },
+      brand: { type: 'string' },
+      nozzle_mm: { type: 'number' },
+      line_width_mm: { type: 'number' },
+      layer_height_mm: { type: 'number' },
+      walls: { type: 'integer' },
+      infill_percent: { type: 'number' },
+      infill_pattern: { type: 'string' },
+      nozzle_temp_C: { type: 'number' },
+      bed_temp_C: { type: 'number' },
+      build_direction: { ...vec3, description: 'Model direction that points up on the printer (default +Z)' },
+      build_volume_mm: vec3,
+      overhang_limit_deg: { type: 'number', description: 'Steepest overhang from vertical printed without support' },
+      xy_tolerance_mm: { type: 'number', description: '± error on outer XY sizes' },
+      hole_shrink_mm: { type: 'number', description: 'How much smaller a printed hole comes out (on the diameter)' },
+      shaft_growth_mm: { type: 'number', description: 'How much larger a printed shaft comes out (on the diameter)' },
+      min_clearance_mm: { type: 'number', description: 'Diametral clearance a running fit needs on this printer' },
+      tolerance_source: { enum: ['calibration', 'user', 'datasheet', 'unknown'] },
+      service: { type: 'string', description: 'Use conditions: temperature, load, expected life' },
+    },
+  },
+  material: {
+    type: 'object',
+    description: 'Numbers for the printed material (MPa). The name alone gives no property.',
+    properties: {
+      name: { type: 'string' },
+      brand: { type: 'string' },
+      young_modulus_MPa: { type: 'number' },
+      poisson_ratio: { type: 'number' },
+      density_g_cm3: { type: 'number' },
+      yield_strength_MPa: { type: 'number' },
+      tensile_strength_MPa: { type: 'number' },
+      interlayer_strength_MPa: { type: 'number', description: 'Across layers (along the build direction)' },
+      source: { enum: ['datasheet', 'test', 'literature', 'unknown'] },
+      printed: { type: 'boolean', description: 'Measured on printed specimens' },
+    },
+  },
+  region: {
+    type: 'object',
+    description: 'Nodes picked on the surface (mm, model frame): exactly one of box, plane, sphere',
+    properties: {
+      box: { type: 'object', properties: { min: vec3, max: vec3 }, required: ['min', 'max'] },
+      plane: { type: 'object', properties: { axis: { enum: ['x', 'y', 'z'] }, value: { type: 'number' }, tolerance: { type: 'number' } }, required: ['axis', 'value'] },
+      sphere: { type: 'object', properties: { center: vec3, radius: { type: 'number' } }, required: ['center', 'radius'] },
+    },
+  },
+};
+const ENG_TOOLS = [
+  {
+    name: 'inspect_3d_model',
+    description:
+      'Import a model and report its geometry: components, bounding boxes, sizes, volumes (only from closed, outward ' +
+      'meshes), surface area, centre of mass, mesh counts, units and where each part came from. Reads STL, 3MF (every ' +
+      'object, its unit), OBJ, PLY, GLB, and .blend scenes (every visible mesh object, through Blender). STEP is not ' +
+      'read (no CAD kernel): export STL/3MF. The files are kept untouched; a new import of model_id is a new version. ' +
+      'Without files, describes an existing model.' + ENG_STATUS,
+    inputSchema: {
+      type: 'object',
+      properties: {
+        files: { type: 'array', items: { type: 'string' }, description: 'Paths on this computer: each is uploaded' },
+        gateway_files: { type: 'array', items: { type: 'string' }, description: 'Files the gateway has: jobs/<job id>/out/model.stl, sim/files/…' },
+        ...modelRef,
+        name: { type: 'string' },
+        units: { enum: ['mm', 'cm', 'm', 'in'], description: 'For STL/OBJ/PLY, which carry none (default mm, stated as an assumption)' },
+        split_bodies: { type: 'boolean', description: 'Make each separate body of a file its own component' },
+      },
+      additionalProperties: false,
+      $defs: ENG_DEFS,
+    },
+  },
+  {
+    name: 'validate_mesh',
+    description:
+      'Check each component\'s mesh: non-manifold edges, inverted or inconsistent normals and self-intersections (FAIL ' +
+      'for a solid), open edges (WARNING: a shell may be meant; set intents to "surface"), several bodies, degenerate ' +
+      'faces, whether volume and size can be trusted, parts too small for the extrusion width, and components that ' +
+      'overlap each other (with the volume).' + ENG_STATUS,
+    inputSchema: {
+      type: 'object',
+      properties: {
+        ...modelRef,
+        intents: { type: 'object', additionalProperties: { enum: ['solid', 'surface'] }, description: '{component: "solid" | "surface"}' },
+        print: { $ref: '#/$defs/print' },
+      },
+      required: ['model_id'],
+      additionalProperties: false,
+      $defs: ENG_DEFS,
+    },
+  },
+  {
+    name: 'analyze_assembly',
+    description:
+      'Analyse an assembly: each component\'s placement, overlaps, cylindrical holes and shafts (fitted on the mesh), ' +
+      'coaxial hole/shaft pairs with their offset and engagement, touching pairs, and SUGGESTED joints. Suggestions are ' +
+      'never used until the user confirms: pass `joints` (what the user confirmed or corrected) to store them for this ' +
+      'model version.' + ENG_STATUS,
+    inputSchema: {
+      type: 'object',
+      properties: {
+        ...modelRef,
+        joints: {
+          type: 'array',
+          items: {
+            type: 'object',
+            properties: {
+              id: { type: 'string' },
+              type: { enum: ['fixed', 'revolute', 'prismatic', 'cylindrical', 'spherical'] },
+              component_a: { type: 'string', description: 'The base' },
+              component_b: { type: 'string', description: 'The moving part' },
+              axis: vec3,
+              position: { ...vec3, description: 'mm, model frame' },
+              note: { type: 'string' },
+            },
+            required: ['type', 'component_a', 'component_b'],
+          },
+        },
+        touch_mm: { type: 'number', description: 'Closer than this counts as touching (default 0.05)' },
+      },
+      required: ['model_id'],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: 'check_clearance',
+    description:
+      'Fits and clearances (mm): gaps between components, coaxial hole/shaft fits as designed and as printed (from the ' +
+      'printer tolerances in `print`; without them the printed fit is NOT_EVALUATED), wall thickness against walls × ' +
+      'line width, gear backlash from the centre distance of declared gear pairs, or, with sim_id, collisions and the ' +
+      'smallest gap through a motion run.' + ENG_STATUS,
+    inputSchema: {
+      type: 'object',
+      properties: {
+        ...modelRef,
+        print: { $ref: '#/$defs/print' },
+        fits: {
+          type: 'array',
+          items: { type: 'object', properties: { hole: { type: 'string' }, shaft: { type: 'string' }, type: { enum: ['running', 'sliding', 'press', 'free'] } }, required: ['hole', 'shaft'] },
+          description: 'Feature ids from analyze_assembly (e.g. bracket.hole1, pin.shaft1); default: every coaxial pair as a running fit',
+        },
+        gears: {
+          type: 'array',
+          items: {
+            type: 'object',
+            properties: {
+              component_a: { type: 'string' },
+              component_b: { type: 'string' },
+              teeth_a: { type: 'integer' },
+              teeth_b: { type: 'integer' },
+              module: { type: 'number' },
+              pressure_angle_deg: { type: 'number' },
+              axis: vec3,
+            },
+            required: ['component_a', 'component_b', 'teeth_a', 'teeth_b', 'module'],
+          },
+        },
+        pairs: { type: 'array', items: { type: 'array', items: { type: 'string' }, minItems: 2, maxItems: 2 } },
+        sim_id: { type: 'string', description: 'A finished motion run of this model: check the parts through the motion' },
+        bodies: { type: 'object', additionalProperties: { type: 'string' }, description: '{component: sim body} (default: same ids)' },
+        frames: { type: 'integer', minimum: 2, maximum: 500 },
+      },
+      required: ['model_id'],
+      additionalProperties: false,
+      $defs: ENG_DEFS,
+    },
+  },
+  {
+    name: 'configure_motion_simulation',
+    description:
+      'Set up a Project Chrono simulation of the model: every component a rigid body placed as in the model (mass ' +
+      'properties from its closed mesh and the density or mass given; printed parts depend on infill, so ask), the ' +
+      'joints the user confirmed in analyze_assembly (or `joints` here, in sim_guide\'s format over component ids), ' +
+      'motors, loads and simulation settings (see sim_guide). Returns mechanism_id and the validation. Rigid bodies: ' +
+      'no bending or breaking is predicted.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        ...modelRef,
+        components: {
+          type: 'object',
+          additionalProperties: {
+            type: 'object',
+            properties: {
+              fixed: { type: 'boolean' },
+              density_kg_m3: { type: 'number' },
+              mass_kg: { type: 'number' },
+              collision: { type: 'boolean' },
+              material: { type: 'object' },
+            },
+          },
+        },
+        joints: { type: 'array', items: { $ref: '#/$defs/joint' } },
+        actuators: { type: 'array', items: { $ref: '#/$defs/actuator' } },
+        forces: { type: 'array', items: { $ref: '#/$defs/force' } },
+        simulation: { $ref: '#/$defs/simulation' },
+        assumed_density_kg_m3: { type: 'number', description: 'Only when the user accepts an assumed density: listed as an assumption with its effect' },
+        name: { type: 'string' },
+      },
+      required: ['model_id', 'simulation'],
+      additionalProperties: false,
+      $defs: MECHANISM_DEFS,
+    },
+  },
+  {
+    name: 'run_motion_simulation',
+    description:
+      'Run a configured motion simulation in Chrono (or collect a run with sim_id): the checks against theory (motor ' +
+      'laws, gear ratios, constraint violation), the per-joint ranges and reactions, and a collision sweep of the ' +
+      'moving parts through the motion. Video: visualize_results_in_blender mode "motion".' + ENG_STATUS,
+    inputSchema: {
+      type: 'object',
+      properties: {
+        ...modelRef,
+        mechanism_id: { type: 'string' },
+        sim_id: { type: 'string', description: 'Collect a run already started' },
+        simulation: { type: 'object', description: 'Overrides for this run (duration, time_step…)' },
+        wait_s: { type: 'number', minimum: 0, maximum: 600 },
+        check_clearance: { type: 'boolean', description: 'Sweep the parts for collisions (default true)' },
+        frames: { type: 'integer', minimum: 2, maximum: 500 },
+      },
+      required: ['model_id'],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: 'configure_fea_analysis',
+    description:
+      'Set up a linear static FEA of one component (gmsh second-order tetrahedra, CalculiX): material (E and ν required, ' +
+      'strengths for a safety factor), fixed regions, loads (total force in N over a region, or pressure in MPa), ' +
+      'element size and a two-size convergence study. Regions select surface nodes by box, plane or sphere in the model ' +
+      'frame (mm): use inspect_3d_model\'s bounds to place them. Loads and supports come from the user. Returns ' +
+      'config_id and what is still missing.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        ...modelRef,
+        config: {
+          type: 'object',
+          properties: {
+            component: { type: 'string' },
+            material: { $ref: '#/$defs/material' },
+            constraints: { type: 'array', items: { type: 'object', properties: { region: { $ref: '#/$defs/region' } }, required: ['region'] } },
+            loads: {
+              type: 'array',
+              items: {
+                type: 'object',
+                properties: {
+                  type: { enum: ['force', 'pressure'] },
+                  region: { $ref: '#/$defs/region' },
+                  vector: { ...vec3, description: 'force: total N' },
+                  value: { type: 'number', description: 'pressure: MPa, into the surface' },
+                },
+                required: ['type', 'region'],
+              },
+            },
+            mesh_size_mm: { type: 'number' },
+            convergence: { type: 'boolean', description: 'Solve at two element sizes and compare (default true)' },
+            required_safety_factor: { type: 'number' },
+            max_displacement_mm: { type: 'number' },
+            print: { $ref: '#/$defs/print' },
+          },
+          required: ['component', 'material', 'constraints', 'loads'],
+        },
+      },
+      required: ['model_id', 'config'],
+      additionalProperties: false,
+      $defs: ENG_DEFS,
+    },
+  },
+  {
+    name: 'run_fea_analysis',
+    description:
+      'Solve a configured FEA (or follow one with analysis_id): displacement, von Mises stress (peak, and away from ' +
+      'supports and load patches, where idealised boundary conditions make singular peaks), mesh convergence, safety ' +
+      'factor only with the material\'s strength and a required factor, tension across layers with the interlayer ' +
+      'strength and build direction. A solver failure is reported as such, with no numbers.' + ENG_STATUS,
+    inputSchema: {
+      type: 'object',
+      properties: {
+        ...modelRef,
+        config_id: { type: 'string' },
+        analysis_id: { type: 'string', description: 'Follow a solve already started' },
+        wait_s: { type: 'number', minimum: 0, maximum: 900, description: 'Wait this long for the solver (default 300)' },
+      },
+      required: ['model_id'],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: 'analyze_printability',
+    description:
+      'Printability for the declared print setup: overhangs needing support (area, where), bed contact, thin walls, ' +
+      'small and horizontal holes, build volume, layers against the load (with an FEA result), and what needs a ' +
+      'calibration print. No strength is inferred from a material name.' + ENG_STATUS,
+    inputSchema: {
+      type: 'object',
+      properties: {
+        ...modelRef,
+        print: { $ref: '#/$defs/print' },
+        fea_analysis_id: { type: 'string' },
+        intents: { type: 'object', additionalProperties: { enum: ['solid', 'surface'] } },
+      },
+      required: ['model_id'],
+      additionalProperties: false,
+      $defs: ENG_DEFS,
+    },
+  },
+  {
+    name: 'generate_engineering_report',
+    description:
+      'The engineering report of a model version from its latest analyses (or the ones named): model, geometry, mesh ' +
+      'errors, assembly, fits, motion, FEA, printability, assumptions and missing data, recommendations, confidence. ' +
+      'Markdown and a self-contained HTML (with the Blender renders).',
+    inputSchema: {
+      type: 'object',
+      properties: { ...modelRef, analysis_ids: { type: 'array', items: { type: 'string' } } },
+      required: ['model_id'],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: 'visualize_results_in_blender',
+    description:
+      'Show results in Blender (headless), returned as an image with a .blend to open: "fea" (von Mises on the ' +
+      'deformed part, from a finished FEA), "interference" (overlaps in red), "thickness" (walls coloured by ' +
+      'thickness), "motion" (renders a motion run\'s playback video).',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        ...modelRef,
+        mode: { enum: ['fea', 'interference', 'thickness', 'motion'] },
+        analysis_id: { type: 'string', description: 'fea: the FEA analysis' },
+        sim_id: { type: 'string', description: 'motion: the run' },
+        print: { $ref: '#/$defs/print' },
+        deformation_scale: { type: 'number' },
+      },
+      required: ['model_id', 'mode'],
+      additionalProperties: false,
+      $defs: ENG_DEFS,
+    },
+  },
+];
+
 const TOOLS = [
   {
     name: 'cad_guide',
@@ -460,11 +821,12 @@ const TOOLS = [
       additionalProperties: false,
     },
   },
+  ...ENG_TOOLS,
 ];
 
 class GatewayError extends Error {}
 
-async function gateway(method, route, body) {
+async function gateway(method, route, body, timeoutMs = 240000) {
   let res;
   try {
     // FormData (a picture upload) sets its own multipart Content-Type
@@ -476,7 +838,7 @@ async function gateway(method, route, body) {
         ...(API_KEY && { Authorization: `Bearer ${API_KEY}` }),
       },
       body: body === undefined || form ? body : JSON.stringify(body),
-      signal: AbortSignal.timeout(240000),
+      signal: AbortSignal.timeout(timeoutMs),
     });
   } catch (err) {
     throw new GatewayError(`Cannot reach the gateway at ${GATEWAY_URL}: ${err.message}`);
@@ -510,6 +872,35 @@ async function simJson(method, route, body) {
   }
   const { success, ...rest } = data;
   return rest;
+}
+
+/** An /api/eng answer (long operations: up to 15 minutes); a refusal carries the field-by-field errors */
+async function engJson(method, route, body) {
+  const res = await gateway(method, `/api/eng/${route}`, body, 16 * 60 * 1000);
+  const data = await res.json().catch(() => null);
+  if (!res.ok || !data) {
+    const details = Array.isArray(data?.details)
+      ? data.details.map((e) => (typeof e === 'string' ? `
+- ${e}` : `
+- ${e.path}: ${e.message}`)).join('')
+      : '';
+    throw new GatewayError(`${data?.message || `Gateway answered HTTP ${res.status} for /api/eng/${route}.`}${details}`);
+  }
+  const { success, ...rest } = data;
+  return rest;
+}
+
+const engFileUrls = (result) =>
+  result?.files &&
+  Object.fromEntries(Object.entries(result.files).map(([name, path]) => [name, `${GATEWAY_URL}/api/eng/analyses/${result.analysis_id}/files/${path}`]));
+
+/** An analysis result for the agent: everything, with the files as URLs */
+const engResult = (result) => ({ ...result, files: engFileUrls(result) });
+
+async function engImage(analysisId, name = 'result.png') {
+  const res = await gateway('GET', `/api/eng/analyses/${encodeURIComponent(analysisId)}/files/${name}`);
+  if (!res.ok) return null;
+  return { type: 'image', data: Buffer.from(await res.arrayBuffer()).toString('base64'), mimeType: 'image/png' };
 }
 
 /** Polls a run until `stateOf` its status is final or `seconds` pass; returns the last status */
@@ -652,6 +1043,58 @@ async function callTool(name, args) {
       const image = play.files?.['blender/preview.png'] ? await simImage(id) : null;
       return image ? [text(out), image] : [text(out)];
     }
+    case 'inspect_3d_model': {
+      const { files = [], gateway_files: gatewayFiles = [], ...rest } = args;
+      const sources = gatewayFiles.map((file) => ({ file }));
+      for (const path of files) {
+        let data;
+        try {
+          data = await readFile(path);
+        } catch (err) {
+          throw new GatewayError(`Cannot read ${path}: ${err.message}`);
+        }
+        sources.push({ filename: basename(path), data_base64: data.toString('base64') });
+      }
+      const out = await engJson('POST', 'inspect', { ...rest, ...(sources.length && { sources }) });
+      return [text({ model: out.model, result: engResult(out.result) })];
+    }
+    case 'validate_mesh':
+      return [text(engResult((await engJson('POST', 'validate', args)).result))];
+    case 'analyze_assembly':
+      return [text(engResult((await engJson('POST', 'assembly', args)).result))];
+    case 'check_clearance':
+      return [text(engResult((await engJson('POST', 'clearance', args)).result))];
+    case 'configure_motion_simulation':
+      return [text(await engJson('POST', 'motion/configure', args))];
+    case 'run_motion_simulation':
+      return [text(engResult((await engJson('POST', 'motion/run', args)).result))];
+    case 'configure_fea_analysis':
+      return [text(await engJson('POST', 'fea/configure', args))];
+    case 'run_fea_analysis': {
+      const { wait_s: waitS = 300, analysis_id: given, ...body } = args;
+      const analysisId = given ?? (await engJson('POST', 'fea/run', body)).analysis_id;
+      const deadline = Date.now() + waitS * 1000;
+      let result;
+      for (;;) {
+        ({ result } = await engJson('GET', `analyses/${encodeURIComponent(analysisId)}`));
+        if (!['queued', 'running'].includes(result.state) || Date.now() >= deadline) break;
+        await new Promise((resolve) => setTimeout(resolve, 2000));
+      }
+      const out = engResult(result);
+      if (['queued', 'running'].includes(result.state)) out.next = 'Still solving: call run_fea_analysis with this analysis_id.';
+      return [text(out)];
+    }
+    case 'analyze_printability':
+      return [text(engResult((await engJson('POST', 'printability', args)).result))];
+    case 'generate_engineering_report': {
+      const { result, markdown } = await engJson('POST', 'report', args);
+      return [text({ ...engResult(result), markdown })];
+    }
+    case 'visualize_results_in_blender': {
+      const { result } = await engJson('POST', 'visualize', args);
+      const image = result.files?.['result.png'] ? await engImage(result.analysis_id) : null;
+      return image ? [text(engResult(result)), image] : [text(engResult(result))];
+    }
     case 'cad_ask_claude': {
       const { job } = await gatewayJson('POST', '/api/cad/jobs', args);
       return [text({ job_id: job.id, state: job.state, next: 'It is made in the background; check with cad_get_job.' })];
@@ -675,7 +1118,11 @@ async function handle(message) {
           'when the preview shows problems. Send the accepted ' +
           'model with cad_send_to_studio. Mechanisms (linkages, gears, motors, springs): call sim_guide once, describe ' +
           'the mechanism with sim_create_mechanism (and sim_add_*), sim_run_simulation (Project Chrono, on this ' +
-          'computer), sim_get_simulation_results, then sim_play_simulation_in_blender.',
+          'computer), sim_get_simulation_results, then sim_play_simulation_in_blender. Engineering checks of a printed ' +
+          'part or assembly (local, no cloud): inspect_3d_model, validate_mesh, analyze_assembly (confirm joints with ' +
+          'the user), check_clearance, configure/run_motion_simulation, configure/run_fea_analysis, ' +
+          'analyze_printability, visualize_results_in_blender, generate_engineering_report. Ask the user for material, ' +
+          'printer tolerances, loads and supports; never invent them.',
       };
     case 'ping':
       return {};

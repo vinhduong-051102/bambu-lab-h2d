@@ -14,6 +14,9 @@ services:
       - ANALYSES_DIR=/analyses
       # Mechanism simulation (docs/mechanical-simulation.md): mechanisms, runs and their playback
       - SIM_DIR=/sim
+      # Engineering analysis of printed parts (docs/engineering-analysis.md): models, analyses, uploads
+      - ENG_DIR=/eng
+      - FEA_PYTHON=/opt/fea/bin/python
       # Claude fixes, paints and makes the figures, on your Claude subscription
       - CLAUDE_CODE_OAUTH_TOKEN=${CLAUDE_CODE_OAUTH_TOKEN:-}
       - CLAUDE_CODE_OAUTH_TOKEN_FALLBACK=${CLAUDE_CODE_OAUTH_TOKEN_FALLBACK:-}
@@ -36,6 +39,9 @@ services:
       - ${MODEL_ANALYSIS_DIR:-./data/studio/analyses}:/analyses
       # Mechanism simulation: mechanisms/, runs/<sim id>/ (CSV, JSON, log, Blender playback), files/ (meshes)
       - ./data/sim:/sim
+      # Engineering analysis: models/<id>/v<n>/ (the files as given, components, assembly, FEA setups),
+      # analyses/<id>/ (result.json, solver files, renders, reports), uploads/
+      - ./data/eng:/eng
     ports:
       - "127.0.0.1:3103:8000"
     # Hunyuan3D-2 and MV-Adapter run on the GPU; Blender renders what Claude looks at with Cycles there too
