@@ -1,0 +1,19 @@
+{
+  "schema": "mech/1",
+  "name": "Cơ cấu tay quay – con trượt (r = 30 mm, L = 100 mm)",
+  "units": { "length": "mm", "angle": "deg" },
+  "parts": [
+    { "id": "frame", "name": "Khung", "role": "frame", "fixed": true, "shape": { "type": "box", "size": [200, 40, 6] }, "position": [70, 0, -15] },
+    { "id": "crank", "name": "Tay quay", "role": "crank", "shape": { "type": "link", "length": 30, "width": 10, "thickness": 5, "hole_diameter": 4 }, "position": [0, 0, 0], "material": "aluminium" },
+    { "id": "rod", "name": "Thanh truyền", "role": "rod", "shape": { "type": "link", "length": 100, "width": 10, "thickness": 5, "hole_diameter": 4 }, "position": [30, 0, 5], "material": "aluminium" },
+    { "id": "slider", "name": "Con trượt", "role": "slider", "shape": { "type": "box", "size": [20, 12, 10] }, "position": [130, 0, 10], "material": "steel" }
+  ],
+  "joints": [
+    { "id": "crank_pivot", "type": "revolute", "part_a": "frame", "part_b": "crank", "position": [0, 0, 0], "axis": [0, 0, 1] },
+    { "id": "crank_pin", "type": "revolute", "part_a": "crank", "part_b": "rod", "position": [30, 0, 2.5], "axis": [0, 0, 1] },
+    { "id": "wrist_pin", "type": "revolute", "part_a": "rod", "part_b": "slider", "position": [130, 0, 7.5], "axis": [0, 0, 1] },
+    { "id": "slide", "type": "prismatic", "part_a": "frame", "part_b": "slider", "position": [130, 0, 10], "axis": [1, 0, 0] }
+  ],
+  "motors": [ { "id": "drive", "joint": "crank_pivot", "speed_rpm": 60, "ramp_s": 0.25 } ],
+  "simulation": { "duration": 2, "time_step": 0.0005, "output_interval": 0.005, "gravity": [0, 0, -9.81] }
+}

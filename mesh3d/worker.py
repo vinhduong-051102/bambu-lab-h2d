@@ -40,6 +40,12 @@ Engineering analysis of printed parts (eng/, docs/engineering-analysis.md): one 
        /fea/run · /printability · /report · /visualize · /check (a design job: mesh, walls, printability, report)
   GET  /eng/models[/<id>] · /eng/analyses[?model_id=&kind=] · /eng/analyses/<id> · /eng/analyses/<id>/files/<path> ·
        /eng/checks/<job id> (the latest check of a design job)
+
+Mechanical model (mech/, docs/mechanical-model.md): parts, assembly, joints, DOF, Chrono through sim/
+  POST /mech/designs {model} · /mech/designs/<id> {changes} (new revision) · /mech/designs/<id>/validate ·
+       /mech/designs/<id>/simulate {wait_s, simulation} · /mech/designs/<id>/repairs (proposals) ·
+       /mech/designs/<id>/apply {proposal_ids, approved} · /mech/import {model_id, fixed, materials, accept}
+  GET  /mech/designs[/<id>[?revision=]] · /mech/designs/<id>/runs/<sim id> · /mech/capabilities
 """
 
 import json
@@ -71,6 +77,7 @@ from sim import runs as sim  # noqa: E402 - mechanism simulation with Project Ch
 from eng import service as eng  # noqa: E402 - engineering analysis of printed parts
 from eng.schema import InputError  # noqa: E402
 from eng.store import EngError  # noqa: E402
+from mech import service as mech  # noqa: E402 - mechanical model: parts, assembly, DOF, Chrono
 
 ENG_POST = {"inspect": eng.inspect_model, "validate": eng.validate_mesh, "assembly": eng.analyze_assembly,
             "clearance": eng.check_clearance, "motion/configure": eng.configure_motion, "motion/run": eng.run_motion,
@@ -111,7 +118,58 @@ class Handler(BaseHTTPRequestHandler):
             return self.simulation("GET")
         if self.path.startswith("/eng/"):
             return self.engineering("GET")
+        if self.path.startswith("/mech/"):
+            return self.mechanical("GET")
         self.reply(404, {"ok": False, "error": "NOT_FOUND"})
+
+    def mechanical(self, method):
+        """The /mech routes: MechError answers with its status, other errors are the worker's (500)"""
+        from urllib.parse import parse_qs, urlsplit
+
+        url = urlsplit(self.path)
+        parts = url.path[len("/mech/"):].strip("/").split("/")
+        query = {k: v[0] for k, v in parse_qs(url.query).items()}
+        try:
+            if method == "GET":
+                if parts == ["guide"]:
+                    return self.send_file(Path(__file__).resolve().parent / "mech" / "guide.md", "text/markdown; charset=utf-8")
+                if parts == ["capabilities"]:
+                    body = mech.capabilities()
+                elif parts == ["designs"]:
+                    body = {"designs": mech.list_designs()}
+                elif len(parts) == 2 and parts[0] == "designs":
+                    body = mech.get_design(parts[1], query.get("revision"))
+                elif len(parts) == 4 and parts[0] == "designs" and parts[2] == "runs":
+                    body = mech.run_results(parts[1], parts[3])
+                else:
+                    raise mech.MechError(404, "NOT_FOUND", f"Không có GET /mech/{'/'.join(parts)}.")
+            else:
+                data = self.body()
+                if parts == ["designs"]:
+                    body = mech.create_design(data)
+                elif parts == ["import"]:
+                    body = mech.import_model(data)
+                elif len(parts) == 2 and parts[0] == "designs":
+                    body = mech.update_design(parts[1], data)
+                elif len(parts) == 3 and parts[0] == "designs" and parts[2] == "validate":
+                    body = mech.validate_design(parts[1], data.get("revision"))
+                elif len(parts) == 3 and parts[0] == "designs" and parts[2] == "simulate":
+                    body = mech.simulate(parts[1], data)
+                elif len(parts) == 3 and parts[0] == "designs" and parts[2] == "repairs":
+                    body = mech.propose(parts[1], data.get("revision"))
+                elif len(parts) == 3 and parts[0] == "designs" and parts[2] == "apply":
+                    body = mech.apply(parts[1], data)
+                else:
+                    raise mech.MechError(404, "NOT_FOUND", f"Không có POST /mech/{'/'.join(parts)}.")
+            return self.reply(200, {"ok": True, **body})
+        except mech.MechError as err:
+            return self.reply(err.status, {"ok": False, "error": err.code, "message": err.message,
+                                           **({"details": err.details} if err.details is not None else {})})
+        except (EngError, sim.SimError) as err:
+            return self.reply(err.status, {"ok": False, "error": err.code, "message": err.message})
+        except Exception as err:  # noqa: BLE001 - the worker keeps serving
+            traceback.print_exc()
+            return self.reply(500, {"ok": False, "error": "MECH_ERROR", "message": f"{type(err).__name__}: {str(err)[:500]}"})
 
     def engineering(self, method):
         """The /eng routes: EngError and InputError answer with their status, other errors are the worker's (500)"""
@@ -249,6 +307,8 @@ class Handler(BaseHTTPRequestHandler):
             return self.simulation("POST")
         if self.path.startswith("/eng/"):
             return self.engineering("POST")
+        if self.path.startswith("/mech/"):
+            return self.mechanical("POST")
         if self.path == "/analyze":
             return self.analyse()
         if self.path == "/generate":

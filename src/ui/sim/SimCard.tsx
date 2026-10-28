@@ -6,6 +6,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { formatPrintTime } from '../prints';
 import { SIM_STATES, checksSummary, formatNumber, isSimBusy, jointUnits, parseCsv, seriesBy, simFileUrl, thin } from '../sim';
 import { EXAMPLES } from '../simLive';
+import { MechCard } from './MechCard';
 import { SimLive } from './SimLive';
 
 /**
@@ -423,6 +424,9 @@ export function SimCard() {
   return (
     <Row gutter={[16, 16]}>
       <Col span={24}>{live ? <SimLive key={live} sessionId={live} onClose={() => setLive(null)} /> : <LiveStarter onOpen={setLive} />}</Col>
+      <Col span={24}>
+        <MechCard onOpenRun={setPicked} />
+      </Col>
       <Col xs={24} xl={9}>
         <Card
           title="⚙️ Mô phỏng cơ cấu"

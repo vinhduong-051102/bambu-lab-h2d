@@ -268,6 +268,147 @@ const ENG_DEFS = {
     },
   },
 };
+// ---------- mechanical model (docs/mechanical-model.md): parts, assembly, DOF, gears, Chrono, repairs ----------
+const MECH_STATUS =
+  ' Statuses are passed, warning, failed or not_verified (never a pass). Every value carries its source (user, ' +
+  'imported_cad, geometry, material_database, solver, assumption, unknown): repeat assumptions and missing data to the user.';
+const designRef = {
+  design_id: { type: 'string', description: 'From mech_create_design or mech_import_model' },
+  revision: { type: 'integer', minimum: 1, description: 'Revision (default: the latest)' },
+};
+const MECH_TOOLS = [
+  {
+    name: 'mech_guide',
+    description:
+      'Read this before the first mechanical design. The Mechanical Model Schema (mech/1): parts (shape or mesh, ' +
+      'material, mass, placement), joints, gear pairs, motors, loads, simulation settings; provenance of every value; ' +
+      'the workflow (create, validate, repair with approval, simulate, results); what Chrono does not support.',
+    inputSchema: { type: 'object', properties: {}, additionalProperties: false },
+  },
+  {
+    name: 'mech_create_design',
+    description:
+      'Store a mechanical design (mech/1, see mech_guide) as revision 1 and validate it: the parts table with each ' +
+      'value\'s source, degrees of freedom, diagnostics and missing data. Physical data the user did not give is ' +
+      'never filled in: ask for it.' + MECH_STATUS,
+    inputSchema: {
+      type: 'object',
+      properties: {
+        model: { type: 'object', description: 'The mech/1 model' },
+        note: { type: 'string', description: 'What this revision is' },
+      },
+      required: ['model'],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: 'mech_import_model',
+    description:
+      'Start a design from a CAD assembly inspected with inspect_3d_model: each component becomes a part (geometry ' +
+      'from the mesh, source imported_cad), and joint hypotheses (coaxial hole/shaft, touching faces) are listed with ' +
+      'their confidence. A hypothesis becomes a joint only when listed in `accept` after the user confirmed it.' + MECH_STATUS,
+    inputSchema: {
+      type: 'object',
+      properties: {
+        model_id: { type: 'string' },
+        version: { type: 'integer', minimum: 1 },
+        name: { type: 'string' },
+        fixed: { type: 'array', items: { type: 'string' }, description: 'Components fixed to the ground' },
+        materials: { type: 'object', additionalProperties: { type: 'string' }, description: '{component: material}' },
+        accept: { type: 'array', items: { type: 'string' }, description: 'Hypothesis ids the user confirmed' },
+        simulation: { type: 'object' },
+        create: { type: 'boolean', description: 'Store as a design (default true); false only drafts it' },
+      },
+      required: ['model_id'],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: 'mech_update_design',
+    description:
+      'Change a design: a new revision with `changes` merged into the latest. Lists (parts, joints, gears, motors, ' +
+      'loads) are updated by id: an item replaces the one with its id or is added; {"id", "remove": true} removes ' +
+      'it. `simulation` is merged. The old revision is kept.' + MECH_STATUS,
+    inputSchema: {
+      type: 'object',
+      properties: {
+        design_id: { type: 'string' },
+        changes: { type: 'object' },
+        note: { type: 'string', description: 'What changed and why' },
+      },
+      required: ['design_id', 'changes'],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: 'mech_validate',
+    description:
+      'Check the assembly: rigid groups, degrees of freedom from the constraint Jacobian (mobility, driven, ' +
+      'redundant equations by joint), motors driving locked coordinates or conflicting, undriven DOF, gear checks ' +
+      '(module, centre distance, common carrier), joints away from their part or hole, misaligned axes, overlaps, ' +
+      'Chrono capability, and the expected speed of every part.' + MECH_STATUS,
+    inputSchema: { type: 'object', properties: designRef, required: ['design_id'], additionalProperties: false },
+  },
+  {
+    name: 'mech_get_design',
+    description: 'A design: its revisions, the stored model, the validation and its runs. Without design_id, lists the designs.',
+    inputSchema: { type: 'object', properties: designRef, additionalProperties: false },
+  },
+  {
+    name: 'mech_propose_repairs',
+    description:
+      'Repair proposals for a design\'s problems: what each changes, and whether it needs data from the user ' +
+      '(changes null). Show them to the user; nothing is changed here.',
+    inputSchema: { type: 'object', properties: designRef, required: ['design_id'], additionalProperties: false },
+  },
+  {
+    name: 'mech_apply_repairs',
+    description:
+      'Apply proposals the USER APPROVED (approved: true) as a new revision, and compare the validation before and ' +
+      'after. At most 5 automatic repair rounds per design.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        design_id: { type: 'string' },
+        proposal_ids: { type: 'array', items: { type: 'string' }, minItems: 1 },
+        approved: { type: 'boolean', description: 'true only when the user agreed to these proposals' },
+      },
+      required: ['design_id', 'proposal_ids', 'approved'],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: 'mech_simulate',
+    description:
+      'Simulate a valid design in Project Chrono (refused with the errors when validation failed): compiles rigid ' +
+      'groups to bodies, runs, and compares to the kinematic prediction. Returns the sim_id and the results per part, ' +
+      'joint, gear and motor. Then sim_play_simulation_in_blender with the sim_id.' + MECH_STATUS,
+    inputSchema: {
+      type: 'object',
+      properties: {
+        ...designRef,
+        simulation: { type: 'object', description: 'Overrides for this run: duration, time_step, ...' },
+        wait_s: { type: 'number', minimum: 0, maximum: 600, description: 'Wait this long for Chrono (default 120)' },
+      },
+      required: ['design_id'],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: 'mech_get_results',
+    description:
+      'The results of a design\'s run, per part (simulated vs expected speed, mass and its source), per joint ' +
+      '(reaction force and torque), per gear (tooth force of the ideal constraint), per motor (effort) and the ' +
+      'system checks. Simulated with rigid bodies, not measured.' + MECH_STATUS,
+    inputSchema: {
+      type: 'object',
+      properties: { design_id: { type: 'string' }, sim_id: { type: 'string' } },
+      required: ['design_id', 'sim_id'],
+      additionalProperties: false,
+    },
+  },
+];
+
 const ENG_TOOLS = [
   {
     name: 'inspect_3d_model',
@@ -934,6 +1075,7 @@ const TOOLS = [
   },
   ...LIVE_TOOLS,
   ...ENG_TOOLS,
+  ...MECH_TOOLS,
 ];
 
 class GatewayError extends Error {}
@@ -981,6 +1123,18 @@ async function simJson(method, route, body) {
   if (!res.ok || !data) {
     const details = Array.isArray(data?.details) ? data.details.map((e) => `\n- ${e.path}: ${e.message}`).join('') : '';
     throw new GatewayError(`${data?.message || `Gateway answered HTTP ${res.status} for ${route}.`}${details}`);
+  }
+  const { success, ...rest } = data;
+  return rest;
+}
+
+/** An /api/mech answer; a refusal carries its diagnostics and missing data, for the agent to fix or ask about */
+async function mechJson(method, route, body) {
+  const res = await gateway(method, `/api/mech/${route}`, body, 12 * 60 * 1000);
+  const data = await res.json().catch(() => null);
+  if (!res.ok || !data) {
+    const details = data?.details ? `\n${JSON.stringify(data.details, null, 2)}` : '';
+    throw new GatewayError(`${data?.message || `Gateway answered HTTP ${res.status} for /api/mech/${route}.`}${details}`);
   }
   const { success, ...rest } = data;
   return rest;
@@ -1183,6 +1337,41 @@ async function callTool(name, args) {
     case 'sim_stop_interactive':
       await simJson('POST', `/api/sim/live/${encodeURIComponent(args.session_id)}/stop`, {});
       return [text({ stopped: args.session_id })];
+    case 'mech_guide': {
+      const res = await gateway('GET', '/api/mech/guide');
+      if (!res.ok) throw new GatewayError(`Gateway answered HTTP ${res.status} for the mechanical model guide.`);
+      return [text(await res.text())];
+    }
+    case 'mech_create_design':
+      return [text(await mechJson('POST', 'designs', args))];
+    case 'mech_import_model':
+      return [text(await mechJson('POST', 'import', args))];
+    case 'mech_update_design': {
+      const { design_id: designId, ...body } = args;
+      return [text(await mechJson('POST', `designs/${encodeURIComponent(designId)}`, body))];
+    }
+    case 'mech_validate':
+      return [text(await mechJson('POST', `designs/${encodeURIComponent(args.design_id)}/validate`, { revision: args.revision }))];
+    case 'mech_get_design': {
+      if (!args.design_id) return [text(await mechJson('GET', 'designs'))];
+      const query = args.revision ? `?revision=${args.revision}` : '';
+      return [text(await mechJson('GET', `designs/${encodeURIComponent(args.design_id)}${query}`))];
+    }
+    case 'mech_propose_repairs':
+      return [text(await mechJson('POST', `designs/${encodeURIComponent(args.design_id)}/repairs`, { revision: args.revision }))];
+    case 'mech_apply_repairs': {
+      const { design_id: designId, ...body } = args;
+      return [text(await mechJson('POST', `designs/${encodeURIComponent(designId)}/apply`, body))];
+    }
+    case 'mech_simulate': {
+      const { design_id: designId, ...body } = args;
+      const out = await mechJson('POST', `designs/${encodeURIComponent(designId)}/simulate`, body);
+      if (out.state === 'completed') out.next = 'sim_play_simulation_in_blender with this sim_id to watch it';
+      else if (['queued', 'running'].includes(out.state)) out.next = 'Still running: check with mech_get_results.';
+      return [text(out)];
+    }
+    case 'mech_get_results':
+      return [text(await mechJson('GET', `designs/${encodeURIComponent(args.design_id)}/runs/${encodeURIComponent(args.sim_id)}`))];
     case 'inspect_3d_model': {
       const { files = [], gateway_files: gatewayFiles = [], ...rest } = args;
       const sources = gatewayFiles.map((file) => ({ file }));

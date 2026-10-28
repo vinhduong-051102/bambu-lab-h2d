@@ -554,7 +554,8 @@ def theory_checks(model, rec, sim, meshes=None):
         wb = np.array([np.dot(w, axis) for _, w in rec.angular[j["body_b"]]])
         carrier = np.array([np.dot(w, axis) for _, w in rec.angular[j["carrier"]]])
         ra, rb = wa - carrier, wb - carrier
-        moving = np.abs(ra) > 1e-6
+        # Turning: above 0.1 % of the run's top speed (what is left of the assembly at t = 0 is not a ratio)
+        moving = np.abs(ra) > max(1e-6, 1e-3 * float(np.max(np.abs(ra))))
         ratio = (-1 if not j["internal"] else 1) * j["teeth_a"] / j["teeth_b"]
         if not moving.any():
             checks.append({"id": f"{j['id']}.ratio", "kind": "gear_ratio", "item": j["id"], "passed": None,

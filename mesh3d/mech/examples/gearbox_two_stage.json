@@ -1,0 +1,32 @@
+{
+  "schema": "mech/1",
+  "name": "Hộp số hai cấp 20/40 · 18/45 (tỉ số 5)",
+  "request": "Two-stage gearbox: motor, input, intermediate and output shafts, two gear pairs, bearings, housing; input 1500 RPM; report output speed, shaft torque and gear forces.",
+  "units": { "length": "mm", "angle": "deg" },
+  "parts": [
+    { "id": "housing", "name": "Vỏ hộp số", "role": "housing", "fixed": true, "shape": { "type": "box", "size": [200, 80, 10] }, "position": [70, 0, -25] },
+    { "id": "input_shaft", "name": "Trục vào", "role": "shaft", "shape": { "type": "shaft", "diameter": 10, "length": 40, "axis": "z" }, "position": [0, 0, 7.5], "material": "steel" },
+    { "id": "intermediate_shaft", "name": "Trục trung gian", "role": "shaft", "shape": { "type": "shaft", "diameter": 10, "length": 40, "axis": "z" }, "position": [60, 0, 7.5], "material": "steel" },
+    { "id": "output_shaft", "name": "Trục ra", "role": "shaft", "shape": { "type": "shaft", "diameter": 12, "length": 40, "axis": "z" }, "position": [138.75, 0, 7.5], "material": "steel" },
+    { "id": "g1", "name": "Bánh 1 (20 răng, m2)", "role": "gear", "shape": { "type": "gear", "teeth": 20, "module": 2, "width": 10, "bore": 10, "axis": "z" }, "position": [0, 0, 0], "material": "steel" },
+    { "id": "g2", "name": "Bánh 2 (40 răng, m2)", "role": "gear", "shape": { "type": "gear", "teeth": 40, "module": 2, "width": 10, "bore": 10, "axis": "z" }, "position": [60, 0, 0], "orientation": { "euler_xyz": [0, 0, 4.5] }, "material": "steel" },
+    { "id": "g3", "name": "Bánh 3 (18 răng, m2.5)", "role": "gear", "shape": { "type": "gear", "teeth": 18, "module": 2.5, "width": 12, "bore": 10, "axis": "z" }, "position": [60, 0, 16], "material": "steel" },
+    { "id": "g4", "name": "Bánh 4 (45 răng, m2.5)", "role": "gear", "shape": { "type": "gear", "teeth": 45, "module": 2.5, "width": 12, "bore": 12, "axis": "z" }, "position": [138.75, 0, 16], "orientation": { "euler_xyz": [0, 0, 4] }, "material": "steel" }
+  ],
+  "joints": [
+    { "id": "key_g1", "type": "fixed", "part_a": "input_shaft", "part_b": "g1", "position": [0, 0, 0] },
+    { "id": "key_g2", "type": "fixed", "part_a": "intermediate_shaft", "part_b": "g2", "position": [60, 0, 0] },
+    { "id": "key_g3", "type": "fixed", "part_a": "intermediate_shaft", "part_b": "g3", "position": [60, 0, 16] },
+    { "id": "key_g4", "type": "fixed", "part_a": "output_shaft", "part_b": "g4", "position": [138.75, 0, 16] },
+    { "id": "bearing_in", "type": "revolute", "part_a": "housing", "part_b": "input_shaft", "position": [0, 0, 7.5], "axis": [0, 0, 1] },
+    { "id": "bearing_mid", "type": "revolute", "part_a": "housing", "part_b": "intermediate_shaft", "position": [60, 0, 7.5], "axis": [0, 0, 1] },
+    { "id": "bearing_out", "type": "revolute", "part_a": "housing", "part_b": "output_shaft", "position": [138.75, 0, 7.5], "axis": [0, 0, 1] }
+  ],
+  "gears": [
+    { "id": "stage1", "gear_a": "g1", "gear_b": "g2" },
+    { "id": "stage2", "gear_a": "g3", "gear_b": "g4" }
+  ],
+  "motors": [ { "id": "motor", "joint": "bearing_in", "speed_rpm": 1500, "ramp_s": 0.2 } ],
+  "loads": [ { "id": "output_load", "type": "torque", "part": "output_shaft", "vector": [0, 0, -2], "frame": "world" } ],
+  "simulation": { "duration": 1, "time_step": 0.0002, "output_interval": 0.002, "gravity": [0, 0, -9.81] }
+}

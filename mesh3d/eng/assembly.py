@@ -25,6 +25,8 @@ MIN_FACES = 12
 MAX_RESIDUAL = 0.01  # vertex distance spread / radius
 MIN_COVER_DEG = 200  # a cylinder covers most of the circle (a fillet or a half-round slot is not a bearing)
 COAXIAL_DEG = 1.0
+# Facets of one curved surface meet at less than this (a 16-sided cylinder: 22.5°)
+SMOOTH_RAD = math.radians(25)
 JOINT_TYPES = ("fixed", "revolute", "prismatic", "cylindrical", "spherical", "gear")
 
 
@@ -69,7 +71,9 @@ def cylinders(mesh, min_radius=0.3):
         side = np.abs(normals @ axis) < AXIS_TOLERANCE
         if side.sum() < MIN_FACES:
             continue
-        pairs = adjacency[side[adjacency[:, 0]] & side[adjacency[:, 1]]]
+        # Only smooth neighbours: a cylinder's facets meet at a few degrees, a flat face meets it at a sharp edge
+        smooth = mesh.face_adjacency_angles < SMOOTH_RAD
+        pairs = adjacency[side[adjacency[:, 0]] & side[adjacency[:, 1]] & smooth]
         groups = trimesh.graph.connected_components(pairs, nodes=np.nonzero(side)[0], min_len=MIN_FACES)
         u, v = plane_basis(axis)
         for group in groups:
