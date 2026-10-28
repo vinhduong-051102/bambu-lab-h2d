@@ -15,10 +15,11 @@ import {
   SendOutlined,
   StopOutlined,
 } from '@ant-design/icons';
-import { Alert, Button, Card, Collapse, Flex, Image, Input, Popconfirm, Progress, Space, Tag, Timeline, Tooltip, Typography } from 'antd';
+import { Alert, App, Button, Card, Collapse, Flex, Image, Input, Popconfirm, Progress, Space, Tag, Timeline, Tooltip, Typography } from 'antd';
 import { useEffect, useMemo, useState, type ClipboardEvent, type ReactNode } from 'react';
 import { deltaLabel } from '../../domain/filaments/colourMixing';
 import { fileUrl, formatDuration, formatProgress, formatSize, isBusy, jobSteps, modelName, ORIGINS, REVISE_PLACEHOLDERS, STATE_LABELS, STEP_LABELS, versionLabel } from '../cad';
+import { checkedSettings, settingsSummary, sortedChecks, statusCounts } from '../eng';
 import { formatPrintTime } from '../prints';
 import { EngCheckButton } from './EngCheck';
 
@@ -211,6 +212,7 @@ export function CadJobCard(props: {
   onRevise?: (comment: string, images: File[]) => Promise<boolean>;
 }) {
   const { job, now = Date.now(), before, onAction, onRevise } = props;
+  const { modal } = App.useApp();
   const [acting, setActing] = useState<CadAction | null>(null);
   const [revising, setRevising] = useState(false);
   const [comment, setComment] = useState('');
@@ -254,6 +256,52 @@ export function CadJobCard(props: {
     } finally {
       setActing(null);
     }
+  };
+
+  /**
+   * Studio gets the model's shape only and prints it with whatever profile is chosen there: when this model was
+   * checked, the user is shown the print settings the check assumed (and what still failed) before it goes
+   */
+  const sendToStudio = async (action: CadAction) => {
+    let last: { report: { finished_at?: string } | null; results: Record<string, { checks?: unknown[]; inputs?: unknown }> } | null = null;
+    try {
+      const res = await fetch(`/api/eng/checks/${encodeURIComponent(job.id)}`, { cache: 'no-store' });
+      const body = await res.json();
+      if (body?.success && body.report) last = body;
+    } catch {
+      // No check to remind of: sent as before
+    }
+    if (!last) return act(action);
+    const settings = settingsSummary(checkedSettings(last.results));
+    const counts = statusCounts(sortedChecks(last.results));
+    modal.confirm({
+      title: 'Chọn đúng thông số in trong Bambu Studio',
+      width: 560,
+      okText: 'Gửi sang Studio',
+      cancelText: 'Thôi',
+      content: (
+        <Flex vertical gap={8}>
+          <Typography.Text>
+            File gửi sang chỉ có hình dạng mô hình. Studio in theo hồ sơ đang chọn trong Studio, còn kết quả kiểm tra kỹ thuật
+            {last.report?.finished_at ? ` (lúc ${new Date(last.report.finished_at).toLocaleString('vi-VN')})` : ''} đúng khi in với:
+          </Typography.Text>
+          {settings.length ? (
+            <ul style={{ margin: 0, paddingLeft: 18 }}>
+              {settings.map((s) => (
+                <li key={s.key}>
+                  {s.label}: <b>{s.value}</b>
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <Typography.Text type="secondary">Lần kiểm tra đó chưa có thông số in nào.</Typography.Text>
+          )}
+          {counts.FAIL > 0 && <Alert type="error" showIcon title={`Còn ${counts.FAIL} mục không đạt trong lần kiểm tra đó.`} />}
+          {counts.FAIL === 0 && counts.WARNING > 0 && <Alert type="warning" showIcon title={`Còn ${counts.WARNING} mục cần xem.`} />}
+        </Flex>
+      ),
+      onOk: () => act(action),
+    });
   };
 
   const revise = async () => {
@@ -433,20 +481,20 @@ export function CadJobCard(props: {
                   type="primary"
                   icon={<SendOutlined />}
                   loading={acting === 'studio-3mf'}
-                  onClick={() => act('studio-3mf')}
+                  onClick={() => sendToStudio('studio-3mf')}
                   title="3MF đã tô sẵn màu: filament n trong Studio là màu số n"
                 >
                   Gửi sang Studio (có màu)
                 </Button>
               ) : (
-                <Button size="small" type="primary" icon={<SendOutlined />} loading={acting === 'studio-stl'} onClick={() => act('studio-stl')}>
+                <Button size="small" type="primary" icon={<SendOutlined />} loading={acting === 'studio-stl'} onClick={() => sendToStudio('studio-stl')}>
                   Gửi sang Studio
                 </Button>
               ))}
             {done && job.files?.threemf && link('model.3mf', '3MF màu', { download: true, icon: <DownloadOutlined /> })}
             {done && link('model.stl', 'STL', { download: true, icon: <DownloadOutlined /> })}
             {done && job.files?.step && link('model.step', 'STEP', { download: true, icon: <DownloadOutlined /> })}
-            {done && <EngCheckButton job={job} />}
+            {done && <EngCheckButton job={job} onRevise={onRevise ? (comment) => onRevise(comment, []) : undefined} />}
             {job.files?.code && link('model.py', 'Code', { icon: <FileTextOutlined /> })}
             {!busy && job.files?.code && (
               <Button size="small" icon={<EditOutlined />} onClick={() => setRevising(!revising)}>

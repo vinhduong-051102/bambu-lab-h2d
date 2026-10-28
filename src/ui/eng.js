@@ -225,3 +225,83 @@ export const engFileUrl = (analysisId, name) => `/api/eng/analyses/${encodeURICo
 export function missingData(results) {
   return [...new Set(Object.values(results ?? {}).flatMap((r) => r?.missing ?? []))];
 }
+
+// ---------- After the check: what to do about each result ----------
+
+/** Checks whose fix is a change of the model's shape, which Claude makes (the id's last part) */
+const SHAPE_FIXES = /\.(wall|overhang|bed|solid|empty|nonmanifold|open_edges|inverted|winding|self_intersection|degenerate|tiny|layers|hole\d+\.(size|horizontal))$/;
+/** Checks that wait for the printer's measured accuracy */
+const NEEDS_CALIBRATION = /^(fit\.|gear\.)|\.hole\d+\.tolerance$/;
+
+/**
+ * What a check's result calls for, or null: "claude" (Claude changes the model), "clearance" (Claude opens up a
+ * fit that comes out too tight, by the amount it is short), "split" (check each separate body as its own part),
+ * "calibrate" (the printer's accuracy is needed: the calibration print)
+ */
+export function fixKind(check) {
+  if (!check) return null;
+  if (check.status === 'NOT_EVALUATED') return NEEDS_CALIBRATION.test(check.id) ? 'calibrate' : null;
+  if (check.status !== 'FAIL' && check.status !== 'WARNING') return null;
+  if (/^fit\./.test(check.id)) {
+    return typeof check.value === 'number' && typeof check.limit === 'number' && check.value < check.limit ? 'clearance' : 'claude';
+  }
+  if (/\.bodies$/.test(check.id)) return 'split';
+  return SHAPE_FIXES.test(check.id) ? 'claude' : null;
+}
+
+const round = (n, step) => Math.ceil(n / step - 1e-9) * step;
+
+/** The print setup as short lines a person reads, in the form's words and units (the slot gap back to each side) */
+export function settingsSummary(print) {
+  const out = [];
+  for (const field of PRINT_FIELDS) {
+    const value = print?.[field.key];
+    if (value === undefined || value === null || value === '') continue;
+    const shown = field.scale ? Math.round((Number(value) / field.scale) * 1e6) / 1e6 : value;
+    out.push({ key: field.key, label: field.label, value: `${shown}${field.unit ? ` ${field.unit}` : ''}` });
+  }
+  return out;
+}
+
+const where = (check) => {
+  const w = check.where;
+  if (!w) return '';
+  if (Array.isArray(w.thinnest_at) && w.thinnest_at.length) return ` (chỗ mỏng nhất quanh ${JSON.stringify(w.thinnest_at[0])} mm)`;
+  if (w.min && w.max) return ` (vùng ${JSON.stringify(w.min)} … ${JSON.stringify(w.max)} mm)`;
+  return '';
+};
+
+/** One line of the request to Claude for a check, with the numbers and where it is */
+export function fixLine(check) {
+  if (fixKind(check) === 'clearance') {
+    // The printed gap is short of what turning needs: open the hole by the difference, to the next 0.05 mm
+    const more = round(check.limit - check.value, 0.05);
+    return `- ${check.title}: sau khi in dự kiến chỉ còn khe ${check.value} mm, cần ít nhất ${check.limit} mm (theo đường kính). Tăng đường kính lỗ thêm ${more.toFixed(2)} mm, giữ nguyên trục.`;
+  }
+  // The detail may already name the place (an overhang's area): not twice
+  return `- ${check.title}: ${check.detail}${String(check.detail ?? '').includes('[') ? '' : where(check)}`;
+}
+
+/**
+ * The request for Claude from the checks the user picked: what is wrong and where, the print setup it was checked
+ * for, and what to keep. Claude is asked to say when a problem is better solved in the print settings than in the
+ * model (more walls, a smaller nozzle), since a setting change is not made by changing the model.
+ */
+export function fixRequest(checks, print) {
+  const settings = settingsSummary(print).map((s) => `${s.label} ${s.value}`).join(', ');
+  return [
+    `Kiểm tra kỹ thuật${settings ? ` (in với: ${settings})` : ''} còn các vấn đề sau, hãy sửa mô hình:`,
+    ...checks.map(fixLine),
+    'Giữ nguyên hình dạng chung, kích thước lắp ghép và vị trí các lỗ, trừ chỗ được yêu cầu sửa. Nếu vấn đề nào nên ' +
+      'giải quyết bằng thông số in (thêm vỏ, đầu phun nhỏ hơn, support) thay vì sửa hình thì nói rõ trong phần tóm tắt.',
+  ].join('\n');
+}
+
+/** The print setup a check was run with, from its results */
+export function checkedSettings(results) {
+  for (const result of Object.values(results ?? {})) {
+    const print = result?.inputs?.print;
+    if (print && typeof print === 'object') return print;
+  }
+  return null;
+}

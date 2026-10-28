@@ -334,8 +334,8 @@ def validate_component(cid, mesh, intent="solid", line_width=None):
                             f"{degenerate} mặt diện tích ~0, {duplicate} mặt trùng nhau.", degenerate + duplicate))
     if mesh.body_count > 1:
         checks.append(check(f"{cid}.bodies", WARNING, f"{cid}: {mesh.body_count} khối rời",
-                            "Một chi tiết gồm nhiều khối tách rời: xác nhận đó là ý muốn, hoặc nhập với "
-                            "split_bodies = true để tách thành các chi tiết.", int(mesh.body_count)))
+                            "Một chi tiết gồm nhiều khối tách rời: xác nhận đó là ý muốn, hoặc kiểm tra mỗi khối như "
+                            "một chi tiết riêng (split_bodies) để xem cả lắp ghép giữa chúng.", int(mesh.body_count)))
     ok = solid_ok(mesh) and not crossing
     checks.append(check(f"{cid}.volume_reliable", PASS if ok else (NOT_EVALUATED if intent == "surface" else WARNING),
                         f"{cid}: thể tích và kích thước tin cậy",

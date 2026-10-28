@@ -162,7 +162,8 @@ def generate_report(body):
 
 
 JOB_ID_RE = re.compile(r"^[a-z0-9][a-z0-9-]{5,63}$")
-SUMMARY_KEYS = ("analysis_id", "kind", "status", "checks", "assumptions", "missing", "warnings", "files", "data")
+SUMMARY_KEYS = ("analysis_id", "kind", "status", "checks", "assumptions", "missing", "warnings", "files", "data",
+                "inputs")
 
 
 def job_model_id(job_id):
@@ -179,8 +180,9 @@ def check_job(body):
         raise EngError(400, "BAD_JOB", "Mã job không hợp lệ.")
     source = resolve_input(f"jobs/{job_id}/out/model.stl")
     pc = print_config(body)
+    # split_bodies: each separate body of the STL its own part, so fits between them are checked too
     model = geometry.import_model([{"path": str(source), "label": "model.stl"}], body.get("name") or job_id,
-                                  model_id=job_model_id(job_id))
+                                  model_id=job_model_id(job_id), split_bodies=bool(body.get("split_bodies")))
     results = {}
     for kind, run in (("inspect", lambda: geometry.inspect(model)),
                       ("validate", lambda: geometry.validate(model, None, pc)),

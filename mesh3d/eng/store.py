@@ -171,7 +171,9 @@ def load_analysis(analysis_id):
 def list_analyses(model_id=None, kind=None, limit=100):
     root = ENG_DIR / "analyses"
     out = []
-    for folder in sorted(root.glob("a-*"), key=lambda p: p.name, reverse=True) if root.exists() else []:
+    # Newest first by when each was created: ids only say the second, and two checks can share one
+    folders = list(root.glob("a-*")) if root.exists() else []
+    for folder in sorted(folders, key=lambda p: (p.name[:17], p.stat().st_ctime_ns), reverse=True):
         r = read_json(folder / "result.json")
         if not r or (model_id and r.get("model_id") != model_id) or (kind and r.get("kind") != kind):
             continue

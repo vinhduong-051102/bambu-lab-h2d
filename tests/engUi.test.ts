@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { engFileUrl, missingData, printConfig, sortedChecks, statusCounts } from '../src/ui/eng.js';
+import { checkedSettings, engFileUrl, fixKind, fixLine, fixRequest, missingData, printConfig, settingsSummary, sortedChecks, statusCounts } from '../src/ui/eng.js';
 
 describe('design tab engineering check helpers', () => {
   it('turns the form into a print config, leaving unknowns out', () => {
@@ -33,5 +33,54 @@ describe('design tab engineering check helpers', () => {
 
   it('links an analysis file through the gateway', () => {
     expect(engFileUrl('a-20261028-120000-ab12', 'report.html')).toBe('/api/eng/analyses/a-20261028-120000-ab12/files/report.html');
+  });
+});
+
+describe('what to do after the engineering check', () => {
+  it('picks an action for each result', () => {
+    expect(fixKind({ id: 'model.wall', status: 'FAIL' })).toBe('claude');
+    expect(fixKind({ id: 'model.hole2.horizontal', status: 'WARNING' })).toBe('claude');
+    expect(fixKind({ id: 'model.bodies', status: 'WARNING' })).toBe('split');
+    expect(fixKind({ id: 'fit.bracket.hole1.arm.shaft1', status: 'FAIL', value: 0.15, limit: 0.2 })).toBe('clearance');
+    expect(fixKind({ id: 'fit.bracket.hole1.arm.shaft1', status: 'NOT_EVALUATED' })).toBe('calibrate');
+    expect(fixKind({ id: 'model.hole1.tolerance', status: 'NOT_EVALUATED' })).toBe('calibrate');
+    // Nothing to do about a pass, or about a check no button can fix
+    expect(fixKind({ id: 'model.wall', status: 'PASS' })).toBeNull();
+    expect(fixKind({ id: 'strength_basis', status: 'WARNING' })).toBeNull();
+  });
+
+  it('writes the request for Claude with the numbers, the place and the print setup', () => {
+    const text = fixRequest(
+      [
+        { id: 'model.wall', status: 'WARNING', title: 'model: độ dày thành', detail: 'Chỗ mỏng ~1 mm.', where: { thinnest_at: [[1, 2, 3]] } },
+        { id: 'fit.a.hole1.b.shaft1', status: 'FAIL', title: 'Lắp ghép a.hole1 / b.shaft1', value: 0.12, limit: 0.4 },
+      ],
+      { nozzle_mm: 0.4, walls: 2, min_clearance_mm: 0.4 }
+    );
+    expect(text).toContain('Cỡ đầu phun 0.4 mm');
+    expect(text).toContain('Số lớp vỏ (thành) 2');
+    // The slot gap is shown as engraved: each side
+    expect(text).toContain('0.2 mm mỗi bên');
+    expect(text).toContain('quanh [1,2,3] mm');
+    // 0.4 − 0.12 = 0.28, up to the next 0.05
+    expect(text).toContain('Tăng đường kính lỗ thêm 0.30 mm');
+  });
+
+  it('reads the print setup a check used, as the form shows it', () => {
+    const results = { inspect: { inputs: {} }, printability: { inputs: { print: { printer: 'Bambu Lab H2D', walls: 4, infill_percent: 40, nozzle_mm: null } } } };
+    const print = checkedSettings(results);
+    expect(settingsSummary(print)).toEqual([
+      { key: 'printer', label: 'Máy in', value: 'Bambu Lab H2D' },
+      { key: 'walls', label: 'Số lớp vỏ (thành)', value: '4' },
+      { key: 'infill_percent', label: 'Độ đặc bên trong (infill)', value: '40 %' },
+    ]);
+    expect(checkedSettings({})).toBeNull();
+  });
+});
+
+describe('the request for Claude names each place once', () => {
+  it('does not repeat an area the detail already gives', () => {
+    const line = fixLine({ id: 'model.overhang', status: 'WARNING', title: 'model: phần nhô', detail: 'vùng [-1, 0, 0]…[1, 2, 3] mm.', where: { min: [-1, 0, 0], max: [1, 2, 3] } });
+    expect(line.match(/\[-1/g)).toHaveLength(1);
   });
 });

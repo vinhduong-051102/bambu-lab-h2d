@@ -6,8 +6,11 @@ import type { FormInstance } from 'antd';
 import { useEffect, useState } from 'react';
 import {
   CALIBRATION_BUILD,
+  checkedSettings,
   ENG_STATUS,
   engFileUrl,
+  fixKind,
+  fixRequest,
   missingData,
   PRINT_FIELDS,
   PRINT_GROUPS,
@@ -25,8 +28,24 @@ import { PrintIllustration } from './PrintIllustration';
  * render of the wall thickness, and the report. FEA and motion need loads, supports and joints: through Claude (MCP).
  */
 
-type Check = { id: string; status: keyof typeof ENG_STATUS; title: string; detail?: string; kind: string };
-type Result = { analysis_id: string; status: string; checks: Check[]; missing?: string[]; files?: Record<string, string> };
+type Check = {
+  id: string;
+  status: keyof typeof ENG_STATUS;
+  title: string;
+  detail?: string;
+  kind: string;
+  value?: unknown;
+  limit?: unknown;
+  where?: Record<string, unknown>;
+};
+type Result = {
+  analysis_id: string;
+  status: string;
+  checks: Check[];
+  missing?: string[];
+  files?: Record<string, string>;
+  inputs?: { print?: Record<string, unknown> | null };
+};
 type CheckResponse = {
   report: { analysis_id: string; status: string; finished_at?: string; data?: { sections?: { title: string; status: string; checks: number }[] } } | null;
   results: Record<string, Result>;
@@ -57,28 +76,85 @@ const StatusTag = ({ status }: { status: string }) => {
   return <Tag color={s.color}>{s.text}</Tag>;
 };
 
-function CheckList({ checks }: { checks: Check[] }) {
+/** What the dialog can do about a result: have Claude change the model, build the calibration print, check again
+ * with each body as its own part */
+type Actions = {
+  onFix?: (checks: Check[]) => void;
+  onCalibrate: () => void;
+  onSplit: () => void;
+  busy?: 'calibrate' | 'split' | null;
+};
+
+const FIX_LABELS: Record<string, { text: string; title: string }> = {
+  claude: { text: 'Nhờ Claude sửa', title: 'Claude sửa mô hình chỗ này và tạo phiên bản mới; bản này giữ nguyên' },
+  clearance: { text: 'Nới khe hở', title: 'Claude mở rộng lỗ đúng lượng còn thiếu để lắp quay được' },
+  calibrate: { text: 'In mẫu hiệu chuẩn', title: 'Cần biết máy in lỗ nhỏ đi, trục to ra bao nhiêu: tạo mẫu in thử để đo' },
+  split: { text: 'Tách thành chi tiết', title: 'Kiểm tra lại, coi mỗi khối rời là một chi tiết riêng (kiểm tra cả lắp ghép giữa chúng)' },
+};
+
+function CheckList({ checks, actions, selected, onSelect }: { checks: Check[]; actions?: Actions; selected?: Set<string>; onSelect?: (id: string, on: boolean) => void }) {
   return (
     <List
       size="small"
       dataSource={checks}
-      renderItem={(c) => (
-        <List.Item>
-          <Space align="start">
-            <StatusTag status={c.status} />
-            <span>
-              <Typography.Text strong>{c.title}</Typography.Text>
-              {c.detail ? <Typography.Text type="secondary"> · {c.detail}</Typography.Text> : null}
-            </span>
-          </Space>
-        </List.Item>
-      )}
+      renderItem={(c) => {
+        const kind = actions ? fixKind(c) : null;
+        const toClaude = kind === 'claude' || kind === 'clearance';
+        const usable = kind && (!toClaude || actions?.onFix);
+        const label = kind ? FIX_LABELS[kind] : null;
+        const run = () => {
+          if (kind === 'calibrate') actions?.onCalibrate();
+          else if (kind === 'split') actions?.onSplit();
+          else actions?.onFix?.([c]);
+        };
+        return (
+          <List.Item
+            actions={
+              usable && label
+                ? [
+                    <Button
+                      key="fix"
+                      size="small"
+                      type={toClaude ? 'primary' : 'default'}
+                      ghost={toClaude}
+                      title={label.title}
+                      loading={(kind === 'calibrate' && actions?.busy === 'calibrate') || (kind === 'split' && actions?.busy === 'split')}
+                      onClick={run}
+                    >
+                      {label.text}
+                    </Button>,
+                  ]
+                : undefined
+            }
+          >
+            <Space align="start">
+              {toClaude && usable && onSelect ? (
+                <Checkbox checked={selected?.has(c.id)} onChange={(e) => onSelect(c.id, e.target.checked)} aria-label={`Chọn ${c.title}`} />
+              ) : null}
+              <StatusTag status={c.status} />
+              <span>
+                <Typography.Text strong>{c.title}</Typography.Text>
+                {c.detail ? <Typography.Text type="secondary"> · {c.detail}</Typography.Text> : null}
+              </span>
+            </Space>
+          </List.Item>
+        );
+      }}
     />
   );
 }
 
-function Results({ data }: { data: CheckResponse }) {
+function Results({ data, actions }: { data: CheckResponse; actions: Actions }) {
   const checks = sortedChecks(data.results) as Check[];
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const toggle = (id: string, on: boolean) =>
+    setSelected((current) => {
+      const next = new Set(current);
+      if (on) next.add(id);
+      else next.delete(id);
+      return next;
+    });
+  const picked = checks.filter((c) => selected.has(c.id));
   const counts = statusCounts(checks);
   const urgent = checks.filter((c) => c.status === 'FAIL' || c.status === 'WARNING');
   const rest = checks.filter((c) => c.status === 'NOT_EVALUATED' || c.status === 'PASS');
@@ -143,9 +219,29 @@ function Results({ data }: { data: CheckResponse }) {
           }
         />
       )}
-      {urgent.length > 0 ? <CheckList checks={urgent} /> : <Typography.Text type="secondary">Không có mục không đạt hay cần xem.</Typography.Text>}
+      {urgent.length > 0 ? (
+        <>
+          <Flex justify="space-between" align="center" wrap gap={8}>
+            <Typography.Text strong>Cần xử lý</Typography.Text>
+            {actions.onFix && (
+              <Button
+                size="small"
+                type="primary"
+                disabled={!picked.length}
+                onClick={() => actions.onFix?.(picked)}
+                title="Gửi các mục đã đánh dấu cho Claude trong một lần sửa"
+              >
+                Nhờ Claude sửa {picked.length ? `${picked.length} mục đã chọn` : 'các mục đã chọn'}
+              </Button>
+            )}
+          </Flex>
+          <CheckList checks={urgent} actions={actions} selected={selected} onSelect={toggle} />
+        </>
+      ) : (
+        <Typography.Text type="secondary">Không có mục không đạt hay cần xem.</Typography.Text>
+      )}
       {rest.length > 0 && (
-        <Collapse size="small" items={[{ key: 'rest', label: `Chưa đánh giá và đạt (${rest.length})`, children: <CheckList checks={rest} /> }]} />
+        <Collapse size="small" items={[{ key: 'rest', label: `Chưa đánh giá và đạt (${rest.length})`, children: <CheckList checks={rest} actions={actions} /> }]} />
       )}
     </Flex>
   );
@@ -187,11 +283,11 @@ function SettingCard({ field }: { field: PrintField }) {
 
 /** The print setup, grouped: machine and material, the slicer settings (with Bambu Studio's standard profiles one
  * click away), and the printer's own accuracy, measured on the calibration print this button builds */
-function PrintSetup({ form, measured, onMeasured }: { form: FormInstance; measured: boolean; onMeasured: (on: boolean) => void }) {
+/** Builds the tolerance calibration print as a design job (it then shows in the list, ready for Studio) */
+function useCalibrationPrint() {
   const { message } = App.useApp();
   const [building, setBuilding] = useState(false);
-
-  const buildCalibration = async () => {
+  const build = async () => {
     setBuilding(true);
     try {
       const res = await fetch('/api/cad/builds', {
@@ -208,6 +304,11 @@ function PrintSetup({ form, measured, onMeasured }: { form: FormInstance; measur
       setBuilding(false);
     }
   };
+  return [building, build] as const;
+}
+
+function PrintSetup({ form, measured, onMeasured }: { form: FormInstance; measured: boolean; onMeasured: (on: boolean) => void }) {
+  const [building, buildCalibration] = useCalibrationPrint();
 
   return (
     <Flex vertical gap={14}>
@@ -257,8 +358,17 @@ function PrintSetup({ form, measured, onMeasured }: { form: FormInstance; measur
   );
 }
 
-export function EngCheckButton({ job }: { job: CadJob }) {
+/**
+ * `onRevise` sends a request to Claude the way the card's "Sửa" does (a new version of the model); without it the
+ * results show no "Nhờ Claude sửa" buttons
+ */
+export function EngCheckButton({ job, onRevise }: { job: CadJob; onRevise?: (comment: string) => Promise<boolean> }) {
   const { message } = App.useApp();
+  const [request, setRequest] = useState<string | null>(null);
+  const [sendingFix, setSendingFix] = useState(false);
+  // Each separate body checked as its own part (fits between them too); kept until the dialog closes
+  const [split, setSplit] = useState(false);
+  const [calibrating, buildCalibration] = useCalibrationPrint();
   const [open, setOpen] = useState(false);
   const [data, setData] = useState<CheckResponse | null>(null);
   const [loading, setLoading] = useState(false);
@@ -280,7 +390,7 @@ export function EngCheckButton({ job }: { job: CadJob }) {
       .finally(() => setLoading(false));
   }, [open, job.id, form]);
 
-  const run = async () => {
+  const run = async (splitBodies = split) => {
     const values = form.getFieldsValue();
     remember(values, measured);
     setRunning(true);
@@ -289,7 +399,7 @@ export function EngCheckButton({ job }: { job: CadJob }) {
       const res = await fetch('/api/eng/check', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ job_id: job.id, name: job.title || job.id, print: printConfig(values, measured) }),
+        body: JSON.stringify({ job_id: job.id, name: job.title || job.id, print: printConfig(values, measured), split_bodies: splitBodies }),
       });
       const body = await res.json().catch(() => null);
       if (!res.ok || !body?.success) {
@@ -303,6 +413,33 @@ export function EngCheckButton({ job }: { job: CadJob }) {
     } finally {
       setRunning(false);
     }
+  };
+
+  // The request is written from the checks and the print setup the check used, and shown for the user to edit
+  const askFix = (checks: Check[]) => setRequest(fixRequest(checks, checkedSettings(data?.results) ?? printConfig(form.getFieldsValue(), measured)));
+
+  const sendFix = async () => {
+    if (!onRevise || !request?.trim()) return;
+    setSendingFix(true);
+    try {
+      if (await onRevise(request.trim())) {
+        message.success('Đã gửi cho Claude: bản sửa sẽ hiện thành phiên bản mới của mô hình này. Kiểm tra lại bản mới khi xong.', 8);
+        setRequest(null);
+        setOpen(false);
+      }
+    } finally {
+      setSendingFix(false);
+    }
+  };
+
+  const actions: Actions = {
+    onFix: onRevise ? askFix : undefined,
+    onCalibrate: buildCalibration,
+    onSplit: () => {
+      setSplit(true);
+      void run(true);
+    },
+    busy: calibrating ? 'calibrate' : running && split ? 'split' : null,
   };
 
   return (
@@ -328,15 +465,34 @@ export function EngCheckButton({ job }: { job: CadJob }) {
           <Form form={form} layout="vertical" size="small">
             <PrintSetup form={form} measured={measured} onMeasured={setMeasured} />
           </Form>
-          <Space>
-            <Button type="primary" icon={<ExperimentOutlined />} loading={running} onClick={run}>
+          <Space wrap>
+            <Button type="primary" icon={<ExperimentOutlined />} loading={running} onClick={() => run()}>
               {running ? 'Đang kiểm tra… (~20 s)' : 'Chạy kiểm tra'}
             </Button>
+            <Checkbox checked={split} onChange={(e) => setSplit(e.target.checked)}>
+              Coi mỗi khối rời là một chi tiết riêng (kiểm tra cả lắp ghép giữa chúng)
+            </Checkbox>
           </Space>
           {error && <Alert type="error" showIcon title={error} />}
           <Divider style={{ margin: '4px 0' }} />
-          {loading ? <Spin /> : data ? <Results data={data} /> : <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="Chưa kiểm tra mô hình này" />}
+          {loading ? <Spin /> : data ? <Results data={data} actions={actions} /> : <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="Chưa kiểm tra mô hình này" />}
         </Flex>
+      </Modal>
+      <Modal
+        open={request !== null}
+        onCancel={() => setRequest(null)}
+        title="Nhờ Claude sửa mô hình"
+        okText="Gửi cho Claude"
+        cancelText="Thôi"
+        confirmLoading={sendingFix}
+        onOk={sendFix}
+        width={720}
+      >
+        <Typography.Paragraph type="secondary">
+          Lời nhắn viết sẵn từ kết quả kiểm tra; sửa thêm nếu muốn. Claude tạo một phiên bản mới, bản này giữ nguyên.
+          Claude chỉ sửa hình dạng mô hình; thông số in (số vỏ, infill…) vẫn chọn trong Bambu Studio.
+        </Typography.Paragraph>
+        <Input.TextArea value={request ?? ''} onChange={(e) => setRequest(e.target.value)} autoSize={{ minRows: 6, maxRows: 16 }} maxLength={4000} showCount />
       </Modal>
     </>
   );

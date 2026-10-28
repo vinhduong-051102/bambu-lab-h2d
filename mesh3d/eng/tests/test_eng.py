@@ -416,6 +416,27 @@ class JobCheck(unittest.TestCase):
         self.assertEqual(last["report"]["analysis_id"], second["report"]["analysis_id"])
         self.assertEqual(sorted(last["results"]), ["clearance", "inspect", "printability", "validate"])
         self.assertEqual(service.last_job_check("20261028-120000-ffff")["report"], None)
+        # The print setup the check used comes back with it (the Studio reminder shows it)
+        self.assertEqual(last["results"]["printability"]["inputs"]["print"]["walls"], 2)
+
+    def test_split_bodies_checks_the_fit_between_them(self):
+        from eng import service
+
+        # One STL with a bracket and a pin in its hole: as one part there is no fit; split, the 0.4 mm one is found
+        out = Path(os.environ["JOBS_DIR"]) / "20261028-120000-cd34" / "out"
+        out.mkdir(parents=True)
+        bracket = trimesh.boolean.difference([box((30, 20, 10)), trimesh.creation.cylinder(4.2, 20, sections=96)],
+                                             engine="manifold")
+        pin = trimesh.creation.cylinder(4.0, 20, sections=96)
+        trimesh.util.concatenate([bracket, pin]).export(out / "model.stl")
+        body = {"job_id": "20261028-120000-cd34", "print": {"nozzle_mm": 0.4}, "render": False}
+        whole = service.check_job(body)
+        self.assertFalse([c for c in whole["results"]["clearance"]["checks"] if c["id"].startswith("fit.")])
+        split = service.check_job({**body, "split_bodies": True})
+        self.assertEqual(len(split["model"]["components"]), 2)
+        (fit,) = [c for c in split["results"]["clearance"]["checks"] if c["id"].startswith("fit.")]
+        self.assertEqual(fit["status"], "NOT_EVALUATED")
+        self.assertAlmostEqual(fit["value"], 0.4, places=3)
         with self.assertRaises(Exception):
             service.check_job({"job_id": "../etc"})
 
