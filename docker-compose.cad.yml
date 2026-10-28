@@ -11,6 +11,7 @@ services:
       - JOBS_DIR=/jobs
       # Claude writes the models on your Claude subscription (`claude setup-token`), like Studio's "AI tối ưu"
       - CLAUDE_CODE_OAUTH_TOKEN=${CLAUDE_CODE_OAUTH_TOKEN:-}
+      - CLAUDE_CODE_OAUTH_TOKEN_FALLBACK=${CLAUDE_CODE_OAUTH_TOKEN_FALLBACK:-}
       - CAD_AI_MODEL=${CAD_AI_MODEL:-claude-opus-5-5}
       - TZ=Asia/Ho_Chi_Minh
     volumes:

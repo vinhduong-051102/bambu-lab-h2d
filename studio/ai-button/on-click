@@ -15,7 +15,7 @@ request="$1"
 response="$2"
 
 # Container variables from docker-compose.studio.yml; s6 keeps them here when the session didn't inherit them
-for var in STUDIO_AI_URL STUDIO_AI_TOKEN STUDIO_AI_MODEL CLAUDE_CODE_OAUTH_TOKEN DISABLE_AUTOUPDATER; do
+for var in STUDIO_AI_URL STUDIO_AI_TOKEN STUDIO_AI_MODEL CLAUDE_CODE_OAUTH_TOKEN CLAUDE_CODE_OAUTH_TOKEN_FALLBACK DISABLE_AUTOUPDATER; do
   eval "current=\${$var:-}"
   if [ -z "$current" ] && [ -r "/run/s6/container_environment/$var" ]; then
     eval "$var=\$(cat /run/s6/container_environment/$var)"
@@ -93,39 +93,52 @@ jq -r '.user' "$work/prompt.json" > "$work/user.txt"
 # long answer: asked to change every setting, it lists several hundred. Streamed, so the progress shows
 # when Claude starts writing its answer and how many changes it has written.
 progress thinking
-CLAUDE_CODE_MAX_OUTPUT_TOKENS=64000 timeout 600 claude -p \
-  --model "${STUDIO_AI_MODEL:-claude-opus-5-5}" \
-  --tools "" \
-  --setting-sources "" \
-  --no-session-persistence \
-  --system-prompt "$(jq -r '.system' "$work/prompt.json")" \
-  --json-schema "$(jq -c '.schema' "$work/prompt.json")" \
-  --output-format stream-json --verbose --include-partial-messages \
-  < "$work/user.txt" > "$work/claude.jsonl" 2> "$work/claude.err" &
-pid=$!
-# Cancelled from Studio (SIGTERM to this script's process group): timeout runs in a group of its own, so it
-# is stopped here, and passes the signal on to claude
-trap 'kill "$pid" 2>/dev/null; rm -rf "$work"; exit 143' TERM INT
-# The system prompt asks for "• " analysis lines first (text_delta pieces); the answer is then the
-# StructuredOutput tool's input, streamed as input_json_delta pieces. Pieces are joined before reading
-# them, so a line or a "key" split across two pieces still counts.
-notes='[]'
-while kill -0 "$pid" 2>/dev/null; do
-  sleep 1
-  notes=$(jq -Rrj 'fromjson? | select(.type == "stream_event" and .event.delta.type? == "text_delta") | .event.delta.text' \
-    "$work/claude.jsonl" 2>/dev/null | jq -Rsc '[split("\n")[] | ltrimstr(" ") | select(startswith("•"))]' 2>/dev/null)
-  [ -n "$notes" ] || notes='[]'
-  if grep -q '"input_json_delta"' "$work/claude.jsonl" 2>/dev/null; then
-    written=$(jq -Rrj 'fromjson? | select(.type == "stream_event" and .event.delta.type? == "input_json_delta") | .event.delta.partial_json' \
-      "$work/claude.jsonl" 2>/dev/null | grep -o '"key"' | wc -l)
-    progress writing "$written" "$notes"
-  else
-    progress thinking 0 "$notes"
-  fi
-done
-wait "$pid"
-code=$?
-jq -Rc 'fromjson? | select(.type == "result")' "$work/claude.jsonl" > "$work/claude.json" 2>/dev/null
+# ask [token]: runs Claude once (on that subscription's token when given), leaving its answer in claude.json
+ask() {
+  if [ -n "$1" ]; then export CLAUDE_CODE_OAUTH_TOKEN="$1"; fi
+  CLAUDE_CODE_MAX_OUTPUT_TOKENS=64000 timeout 600 claude -p \
+    --model "${STUDIO_AI_MODEL:-claude-opus-5-5}" \
+    --tools "" \
+    --setting-sources "" \
+    --no-session-persistence \
+    --system-prompt "$(jq -r '.system' "$work/prompt.json")" \
+    --json-schema "$(jq -c '.schema' "$work/prompt.json")" \
+    --output-format stream-json --verbose --include-partial-messages \
+    < "$work/user.txt" > "$work/claude.jsonl" 2> "$work/claude.err" &
+  pid=$!
+  # Cancelled from Studio (SIGTERM to this script's process group): timeout runs in a group of its own, so it
+  # is stopped here, and passes the signal on to claude
+  trap 'kill "$pid" 2>/dev/null; rm -rf "$work"; exit 143' TERM INT
+  # The system prompt asks for "• " analysis lines first (text_delta pieces); the answer is then the
+  # StructuredOutput tool's input, streamed as input_json_delta pieces. Pieces are joined before reading
+  # them, so a line or a "key" split across two pieces still counts.
+  notes='[]'
+  while kill -0 "$pid" 2>/dev/null; do
+    sleep 1
+    notes=$(jq -Rrj 'fromjson? | select(.type == "stream_event" and .event.delta.type? == "text_delta") | .event.delta.text' \
+      "$work/claude.jsonl" 2>/dev/null | jq -Rsc '[split("\n")[] | ltrimstr(" ") | select(startswith("•"))]' 2>/dev/null)
+    [ -n "$notes" ] || notes='[]'
+    if grep -q '"input_json_delta"' "$work/claude.jsonl" 2>/dev/null; then
+      written=$(jq -Rrj 'fromjson? | select(.type == "stream_event" and .event.delta.type? == "input_json_delta") | .event.delta.partial_json' \
+        "$work/claude.jsonl" 2>/dev/null | grep -o '"key"' | wc -l)
+      progress writing "$written" "$notes"
+    else
+      progress thinking 0 "$notes"
+    fi
+  done
+  wait "$pid"
+  code=$?
+  jq -Rc 'fromjson? | select(.type == "result")' "$work/claude.jsonl" > "$work/claude.json" 2>/dev/null
+}
+ask
+# Out of usage on CLAUDE_CODE_OAUTH_TOKEN's subscription: asked again on CLAUDE_CODE_OAUTH_TOKEN_FALLBACK's
+if [ "$code" != "124" ] && [ -n "$CLAUDE_CODE_OAUTH_TOKEN_FALLBACK" ] \
+  && [ "$CLAUDE_CODE_OAUTH_TOKEN_FALLBACK" != "$CLAUDE_CODE_OAUTH_TOKEN" ] \
+  && ! jq -e '.structured_output' "$work/claude.json" >/dev/null 2>&1 \
+  && { jq -r '.result // empty' "$work/claude.json" 2>/dev/null; tail -n 3 "$work/claude.err" 2>/dev/null; } | grep -qi limit; then
+  progress thinking
+  ask "$CLAUDE_CODE_OAUTH_TOKEN_FALLBACK"
+fi
 
 [ "$code" = "124" ] && fail "Claude không trả lời trong 10 phút."
 if ! jq -e '.structured_output' "$work/claude.json" >/dev/null 2>&1; then

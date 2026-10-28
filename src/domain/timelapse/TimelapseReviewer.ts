@@ -194,6 +194,22 @@ export function claudeError(detail: string): string {
   return `Claude không trả về nhận xét: ${detail}`;
 }
 
+/** When a token hit its usage limit (Date.now()), so the next runs start with the other one for a while */
+const limitedAt = new Map<string, number>();
+const LIMIT_COOLDOWN_MS = 60 * 60 * 1000;
+
+/**
+ * CLAUDE_CODE_OAUTH_TOKEN, then CLAUDE_CODE_OAUTH_TOKEN_FALLBACK (a second subscription); one that hit its
+ * usage limit within the hour goes last. Empty when neither is set: `claude` then signs in however it can.
+ */
+export function claudeTokens(now = Date.now()): string[] {
+  const tokens = [...new Set([process.env.CLAUDE_CODE_OAUTH_TOKEN?.trim(), process.env.CLAUDE_CODE_OAUTH_TOKEN_FALLBACK?.trim()])].filter(
+    (token): token is string => !!token
+  );
+  const limited = (token: string) => now - (limitedAt.get(token) ?? -Infinity) < LIMIT_COOLDOWN_MS;
+  return [...tokens.filter((token) => !limited(token)), ...tokens.filter(limited)];
+}
+
 /**
  * Claude, through Claude Code (`claude -p`) on the gateway's machine, on the Claude subscription in
  * CLAUDE_CODE_OAUTH_TOKEN. It may only read: the frames are files in a folder of their own.
@@ -224,25 +240,33 @@ export class ClaudeCodeVision implements VisionModel {
         '--json-schema', JSON.stringify(schema),
         '--output-format', 'json',
       ];
-      const { code, stdout, stderr } = await this.run(args, dir, prompt(files));
-      let result: { is_error?: boolean; result?: string; structured_output?: unknown } | null = null;
-      try {
-        result = JSON.parse(stdout);
-      } catch {
-        // Reported below
+      const tokens = claudeTokens();
+      for (let i = 0; ; i++) {
+        const { code, stdout, stderr } = await this.run(args, dir, prompt(files), tokens[i]);
+        let result: { is_error?: boolean; result?: string; structured_output?: unknown } | null = null;
+        try {
+          result = JSON.parse(stdout);
+        } catch {
+          // Reported below
+        }
+        if (result && !result.is_error && result.structured_output) return result.structured_output;
+        const detail = result?.result || stderr.trim().slice(-500) || `claude thoát với mã ${code}`;
+        // Out of usage on this subscription: the same request again on the next one
+        if (/limit/i.test(detail) && i + 1 < tokens.length) {
+          limitedAt.set(tokens[i], Date.now());
+          continue;
+        }
+        throw new Error(claudeError(detail));
       }
-      if (!result || result.is_error || !result.structured_output) {
-        throw new Error(claudeError(result?.result || stderr.trim().slice(-500) || `claude thoát với mã ${code}`));
-      }
-      return result.structured_output;
     } finally {
       await fs.rm(dir, { recursive: true, force: true });
     }
   }
 
-  private run(args: string[], cwd: string, input: string): Promise<{ code: number | null; stdout: string; stderr: string }> {
+  private run(args: string[], cwd: string, input: string, token?: string): Promise<{ code: number | null; stdout: string; stderr: string }> {
     return new Promise((resolve, reject) => {
-      const child = spawn(this.command, args, { cwd, stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true });
+      const env = token ? { ...process.env, CLAUDE_CODE_OAUTH_TOKEN: token } : process.env;
+      const child = spawn(this.command, args, { cwd, env, stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true });
       let stdout = '';
       let stderr = '';
       const timer = setTimeout(() => {

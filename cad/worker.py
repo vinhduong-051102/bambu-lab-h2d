@@ -149,6 +149,23 @@ def build_outcome(content):
     return f"✓ {size} mm" + ("" if watertight is not False else ", lưới hở") + (f", {count} cảnh báo" if count else "")
 
 
+LIMIT_COOLDOWN_S = 3600
+limited_at = {}  # token → time.monotonic() when it hit its usage limit, so the next runs start with the other one
+
+
+def claude_tokens():
+    """CLAUDE_CODE_OAUTH_TOKEN, then CLAUDE_CODE_OAUTH_TOKEN_FALLBACK (a second subscription); one that hit its
+    usage limit within the hour goes last"""
+    names = ("CLAUDE_CODE_OAUTH_TOKEN", "CLAUDE_CODE_OAUTH_TOKEN_FALLBACK")
+    tokens = list(dict.fromkeys(t for t in (os.environ.get(n, "").strip() for n in names) if t))
+    return sorted(tokens, key=lambda t: t in limited_at and time.monotonic() - limited_at[t] < LIMIT_COOLDOWN_S)
+
+
+def limit_hit(result, stderr):
+    """Whether a failed run ran out of usage on its subscription"""
+    return "limit" in ((result or {}).get("result") or stderr.strip()[-500:]).lower()
+
+
 def claude_error(result, stderr):
     detail = (result or {}).get("result") or stderr.strip()[-500:] or "không có thông báo lỗi"
     lowered = detail.lower()
@@ -159,7 +176,8 @@ def claude_error(result, stderr):
     return f"Claude không trả về kết quả hợp lệ: {detail}"
 
 
-def generate(job_id, model):
+def generate(job_id, model, tokens=None):
+    tokens = claude_tokens() if tokens is None else tokens
     directory = job_dir(job_id)
     status = {"state": "running", "step": "starting", "notes": [], "builds": 0, "model": model,
               "started_at": now(), "finished_at": None, "error": None, "result": None, "report": None,
@@ -182,6 +200,8 @@ def generate(job_id, model):
         "--output-format", "stream-json", "--verbose",
     ]
     env = {**os.environ, "CLAUDE_CODE_MAX_OUTPUT_TOKENS": "32000"}
+    if tokens:
+        env["CLAUDE_CODE_OAUTH_TOKEN"] = tokens[0]
     stderr_path = directory / "claude.err"
     with open(stderr_path, "w", encoding="utf-8") as stderr_file:
         proc = subprocess.Popen(command, cwd=directory, env=env, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
@@ -244,6 +264,13 @@ def generate(job_id, model):
     # worker no longer lists as interrupted, and the last build below takes a few seconds
     with lock:
         was_cancelled = job_id in cancelled
+
+    # Out of usage on this subscription: the job starts over on the next one
+    if not was_cancelled and len(tokens) > 1 and not (result_line or {}).get("structured_output"):
+        stderr = stderr_path.read_text(encoding="utf-8", errors="replace") if stderr_path.exists() else ""
+        if limit_hit(result_line, stderr):
+            limited_at[tokens[0]] = time.monotonic()
+            return generate(job_id, model, tokens[1:])
 
     status["finished_at"] = now()
     status["report"] = read_json(directory / "out" / "report.json")

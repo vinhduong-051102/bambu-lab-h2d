@@ -31,6 +31,7 @@ services:
       # With a token from `claude setup-token`, on-click asks Claude itself (`claude -p`, billed to that
       # Claude subscription) and the gateway only builds the prompt and checks the answer: no ANTHROPIC_API_KEY
       - CLAUDE_CODE_OAUTH_TOKEN=${CLAUDE_CODE_OAUTH_TOKEN:-}
+      - CLAUDE_CODE_OAUTH_TOKEN_FALLBACK=${CLAUDE_CODE_OAUTH_TOKEN_FALLBACK:-}
       - STUDIO_AI_MODEL=${STUDIO_AI_MODEL:-claude-opus-5-5}
       - DISABLE_AUTOUPDATER=1
       # Stream encoding stays on the CPU: NVENC can't work under WSL2, whose libcuda lacks the CUDA-EGL
