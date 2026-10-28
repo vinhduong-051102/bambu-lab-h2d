@@ -24,7 +24,7 @@ class FakeMeshWorker implements MeshWorkerApi {
   constructor(private readonly dir: string) {}
 
   async health() {
-    return { ok: true, claude: true, running: this.running, loaded: false };
+    return { ok: true, claude: true, running: this.running };
   }
 
   async generate(id: string, params: MeshParams) {
@@ -101,26 +101,67 @@ describe('AI figures (/api/cad/meshes)', () => {
     env.CAD_WORKER_URL = undefined;
     try {
       const res = (await app.inject({ method: 'GET', url: '/api/cad' })).json();
-      expect(res).toMatchObject({ enabled: true, worker: null, mesh: { online: true, claude: true, loaded: false } });
+      expect(res).toMatchObject({ enabled: true, worker: null, mesh: { online: true, claude: true } });
     } finally {
       env.CAD_WORKER_URL = saved;
     }
   });
 
-  it('makes a figure from an uploaded picture', async () => {
+  it('has Hunyuan3D shape a figure from an uploaded picture, with a seed, for Claude to finish', async () => {
     const res = await upload({ height_mm: '60', base: 'true' }, PNG);
     expect(res.statusCode).toBe(202);
     const { job } = res.json();
-    expect(job).toMatchObject({ source: 'mesh', model: 'hunyuan3d-2mini-turbo', prompt: 'Mô hình từ ảnh', state: 'running', step: 'queued' });
-    expect(mesh.generated[0].params).toMatchObject({ prompt: '', height_mm: 60, base: true });
-    expect(mesh.generated[0].params.seed).toBeGreaterThan(0);
+    expect(job).toMatchObject({ source: 'mesh', model: 'claude-opus-5-5', prompt: 'Mô hình từ ảnh', state: 'running', step: 'queued' });
+    expect(mesh.generated[0].params).toEqual({
+      prompt: '',
+      height_mm: 60,
+      base: true,
+      colour: null,
+      model: 'claude-opus-5-5',
+      seed: expect.any(Number),
+      multiview: false,
+    });
     expect(new Uint8Array(await fs.readFile(path.join(jobsDir, job.id, 'input.png')))).toEqual(PNG);
   });
 
-  it('makes a figure from a description alone, as JSON too', async () => {
-    const res = await app.inject({ method: 'POST', url: '/api/cad/meshes', payload: { prompt: 'Mèo ngồi đội mũ', seed: 7 } });
+  it('makes a figure from a description alone, as JSON too, with the Claude model chosen', async () => {
+    const res = await app.inject({ method: 'POST', url: '/api/cad/meshes', payload: { prompt: 'Mèo ngồi đội mũ', model: 'claude-sonnet-5-5' } });
     expect(res.statusCode).toBe(202);
-    expect(mesh.generated[0].params).toEqual({ prompt: 'Mèo ngồi đội mũ', height_mm: 80, base: false, seed: 7, colour: null });
+    expect(mesh.generated[0].params).toMatchObject({ prompt: 'Mèo ngồi đội mũ', height_mm: 80, base: false, colour: null, model: 'claude-sonnet-5-5' });
+    // "Dựng nhiều góc" needs a picture
+    const multi = await app.inject({ method: 'POST', url: '/api/cad/meshes', payload: { prompt: 'Mèo ngồi', multiview: true } });
+    expect(multi.statusCode).toBe(202);
+    expect(mesh.generated.at(-1)!.params.multiview).toBe(false);
+    const wrong = await app.inject({ method: 'POST', url: '/api/cad/meshes', payload: { prompt: 'Mèo', model: 'gpt-5' } });
+    expect(wrong.json().error).toBe('UNSUPPORTED_MODEL');
+  });
+
+  it('shapes a figure from several sides: the ones uploaded, kept for making it again', async () => {
+    const form = new FormData();
+    form.append('prompt', 'Mèo ngồi');
+    form.append('multiview', 'true');
+    form.append('image', new File([PNG], 'front.png', { type: 'image/png' }));
+    form.append('image_back', new File([PNG], 'back.png', { type: 'image/png' }));
+    form.append('image_left', new File([PNG], 'left.png', { type: 'image/png' }));
+    const res = await app.inject({ method: 'POST', url: '/api/cad/meshes', form });
+    expect(res.statusCode).toBe(202);
+    const job = res.json().job;
+    expect(mesh.generated[0].params.multiview).toBe(true);
+    expect((await fs.readdir(path.join(jobsDir, job.id, 'views'))).sort()).toEqual(['back.png', 'left.png']);
+
+    // Made again: the same picture with the same sides, and another seed unless one is given
+    const again = (await upload({ parent_id: job.id, multiview: 'true', seed: '42' })).json().job;
+    expect((await fs.readdir(path.join(jobsDir, again.id, 'views'))).sort()).toEqual(['back.png', 'left.png']);
+    expect(mesh.generated.at(-1)!.params.seed).toBe(42);
+    // A new front picture leaves the parent's sides behind
+    const fresh = (await upload({ parent_id: job.id }, PNG)).json().job;
+    await expect(fs.readdir(path.join(jobsDir, fresh.id, 'views'))).rejects.toThrow();
+    expect(mesh.generated.at(-1)!.params.multiview).toBe(false);
+
+    // Sides need the front they go with
+    const sidesOnly = new FormData();
+    sidesOnly.append('image_back', new File([PNG], 'back.png', { type: 'image/png' }));
+    expect((await app.inject({ method: 'POST', url: '/api/cad/meshes', form: sidesOnly })).json().error).toBe('NO_FRONT_IMAGE');
   });
 
   it('colours a figure with as many filaments as asked', async () => {
@@ -166,7 +207,7 @@ describe('AI figures (/api/cad/meshes)', () => {
     expect(mesh.generated).toHaveLength(0);
   });
 
-  it('makes a figure again from the same picture with a new seed', async () => {
+  it('makes a figure again from the same picture', async () => {
     const { job } = (await upload({ prompt: 'Mèo ngồi' }, PNG)).json();
     await mesh.finish(job.id);
     const res = await upload({ parent_id: job.id, height_mm: '100' });
@@ -207,6 +248,31 @@ describe('AI figures (/api/cad/meshes)', () => {
     expect(remake.parent_id).toBe(fix.id);
     expect(mesh.generated.at(-1)!.params.prompt).toBe('Goku đứng');
     expect(new Uint8Array(await fs.readFile(path.join(jobsDir, remake.id, 'input.png')))).toEqual(PNG);
+  });
+
+  it('hands Claude the pictures pasted into a fix, and keeps them for the fixes after it', async () => {
+    const { job } = (await upload({ prompt: 'Mèo ngồi' }, PNG)).json();
+    await mesh.finish(job.id);
+    const pasted = `data:image/png;base64,${Buffer.from(PNG).toString('base64')}`;
+
+    const fix = (await app.inject({ method: 'POST', url: `/api/cad/jobs/${job.id}/fix`, payload: { images: [pasted] } })).json().job;
+    expect(fix.prompt).toBe('Sửa theo ảnh gửi kèm');
+    expect(new Uint8Array(await fs.readFile(path.join(jobsDir, fix.id, 'attachments', '1.png')))).toEqual(PNG);
+    expect(await fs.readFile(path.join(jobsDir, fix.id, 'request.md'), 'utf8')).toContain('Xem ảnh gửi kèm.\n\nẢnh người dùng gửi kèm yêu cầu này (mở bằng Read và xem kỹ trước khi sửa): attachments/1.png');
+
+    // The next fix keeps the first picture (its brief names it) and numbers its own after it
+    await fs.mkdir(path.join(jobsDir, fix.id, 'out'), { recursive: true });
+    await fs.writeFile(path.join(jobsDir, fix.id, 'out', 'model.stl'), 'solid x\nendsolid x\n');
+    await fs.writeFile(path.join(jobsDir, fix.id, 'status.json'), JSON.stringify({ state: 'done', input: 'fix', report: { ok: true } }));
+    const again = (await app.inject({ method: 'POST', url: `/api/cad/jobs/${fix.id}/fix`, payload: { prompt: 'Tai to hơn', images: [pasted] } })).json().job;
+    expect((await fs.readdir(path.join(jobsDir, again.id, 'attachments'))).sort()).toEqual(['1.png', '2.png']);
+    expect(await fs.readFile(path.join(jobsDir, again.id, 'request.md'), 'utf8')).toContain('Tai to hơn\n\nẢnh người dùng gửi kèm yêu cầu này (mở bằng Read và xem kỹ trước khi sửa): attachments/2.png');
+
+    const text = await app.inject({ method: 'POST', url: `/api/cad/jobs/${job.id}/fix`, payload: { images: [Buffer.from('hello').toString('base64')] } });
+    expect(text.statusCode).toBe(415);
+    const many = await app.inject({ method: 'POST', url: `/api/cad/jobs/${job.id}/fix`, payload: { images: Array(5).fill(pasted) } });
+    expect(many.json().error).toBe('INVALID_PAYLOAD');
+    expect(mesh.fixed).toHaveLength(2);
   });
 
   it('only fixes figures, with the models offered', async () => {

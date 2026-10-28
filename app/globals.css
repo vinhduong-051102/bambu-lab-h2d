@@ -277,6 +277,45 @@ body {
   border-radius: var(--radius-sm);
 }
 
+.cad-compare {
+  margin: 0;
+}
+
+.cad-compare figcaption {
+  margin-top: 2px;
+  color: var(--text-muted);
+  font-size: 0.75rem;
+  text-align: center;
+}
+
+/* A model's versions: the original, Claude's fixes, revisions and remakes */
+.cad-version {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 8px 2px 2px;
+  border: 1px solid var(--border, rgba(127, 127, 127, 0.35));
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: inherit;
+  font-size: 0.8rem;
+  cursor: pointer;
+}
+
+.cad-version.is-shown {
+  border-color: #3b82f6;
+  background: rgba(59, 130, 246, 0.12);
+}
+
+.cad-version img,
+.cad-version-empty {
+  width: 36px;
+  height: 36px;
+  object-fit: contain;
+  border-radius: 4px;
+  background: #fff;
+}
+
 .cad-notes,
 .cad-step-detail {
   color: var(--text-muted);

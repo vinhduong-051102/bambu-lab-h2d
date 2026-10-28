@@ -1,5 +1,5 @@
-# Mesh worker for "Thiết kế AI → Nhân vật" on the dashboard (see docs/cad.md): Hunyuan3D-2 on the NVIDIA GPU, and
-# Claude reviewing and fixing the figures it makes.
+# Mesh worker for "Thiết kế AI → Nhân vật" on the dashboard (see docs/cad.md): Hunyuan3D-2 shapes figures from
+# pictures on the NVIDIA GPU, and Claude fixes and paints them in Blender (or models them from a description).
 #   docker compose -f docker-compose.mesh3d.yml up -d --build
 # Then in .env: MESH_WORKER_URL=http://127.0.0.1:3103
 services:
@@ -12,8 +12,9 @@ services:
       - JOBS_DIR=/jobs
       - IMPORTS_DIR=/imports
       - ANALYSES_DIR=/analyses
-      # Claude turns a description into the picture brief and reviews figures, on your Claude subscription
+      # Claude fixes, paints and makes the figures, on your Claude subscription
       - CLAUDE_CODE_OAUTH_TOKEN=${CLAUDE_CODE_OAUTH_TOKEN:-}
+      - CLAUDE_CODE_OAUTH_TOKEN_FALLBACK=${CLAUDE_CODE_OAUTH_TOKEN_FALLBACK:-}
       # Optional Hugging Face read token: model downloads without one are rate limited and slow
       - HF_TOKEN=${HF_TOKEN:-}
       # Models leave the GPU after this many seconds without a job
@@ -22,8 +23,8 @@ services:
     volumes:
       # Shared with the gateway and the CAD worker (CAD_JOBS_DIR): one folder per job
       - ./data/cad/jobs:/jobs
-      # Hunyuan3D-2mini, HunyuanDiT, Hunyuan3D-Paint and the background remover (~40 GB), downloaded on first
-      # use; MESH_MODELS_DIR puts them on a roomier drive
+      # Hunyuan3D-2mini, Hunyuan3D-2mv, MV-Adapter with SDXL and the background remover (~25 GB), downloaded on
+      # first use; MESH_MODELS_DIR puts them on a roomier drive
       - ${MESH_MODELS_DIR:-./data/mesh3d/models}:/models
       # The worker, and the CAD worker's preview renderer
       - ./mesh3d:/opt/mesh3d:ro
@@ -33,6 +34,7 @@ services:
       - ${MODEL_ANALYSIS_DIR:-./data/studio/analyses}:/analyses
     ports:
       - "127.0.0.1:3103:8000"
+    # Hunyuan3D-2 and MV-Adapter run on the GPU; Blender renders what Claude looks at with Cycles there too
     gpus: all
     # PyTorch's data loaders share memory between processes
     shm_size: "2gb"

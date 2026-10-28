@@ -1,8 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
-import { formatDuration, formatSize, jobSteps } from '../src/ui/cad.js';
+import { formatDuration, formatSize, groupVersions, jobSteps, versionLabel } from '../src/ui/cad.js';
+import { pastedImage } from '../src/ui/cad/CadCard';
 import { CadJobCard } from '../src/ui/cad/CadJob';
+import { CadFamily } from '../src/ui/cad/CadFamily';
 
 const renderJob = (job: any) => renderToStaticMarkup(createElement(CadJobCard, { job, now: Date.parse('2026-10-23T09:16:00Z') }));
 const button = (label: string) => `<span>${label}</span></button>`;
@@ -107,7 +109,7 @@ describe('AI modelling UI helpers', () => {
       files: { code: false, stl: true, step: false, preview: true, concept: true, fix: true, views: true },
     });
     expect(html).toContain('Claude sửa · sonnet 5.5');
-    expect(html).toContain('bản sửa');
+    expect(html).not.toContain('sonnet 5.5 · Claude sửa');
     expect(html).toContain('Claude đã xem (1/2 lỗi đã sửa)');
     expect(html).toContain('class="cad-issue is-fixed">✓ <b>Chân cụt ở mắt cá</b>: Đắp hai chiếc giày &lt;ellipsoid&gt;');
     expect(html).toContain('class="cad-issue is-open">✗ <b>Mặt bị phẳng</b>');
@@ -134,6 +136,35 @@ describe('AI modelling UI helpers', () => {
     const html = renderJob({ ...baseJob, source: 'mesh', step: 'loading', builds: 0, notes: [] });
     expect(html).toContain('Nạp model dựng hình vào GPU');
     expect(html).toContain(button('Hủy'));
+  });
+
+  it('shows a figure from a picture as Hunyuan3D shaping it, then Claude finishing it next to its shape', () => {
+    const shaping = {
+      ...baseJob,
+      source: 'mesh',
+      input: 'image',
+      maker: 'hunyuan',
+      views: 'drawn',
+      step: 'viewing',
+      steps: [
+        { id: 'queued', started_at: '2026-10-23T09:15:00Z', finished_at: '2026-10-23T09:15:01Z', detail: null },
+        { id: 'background', started_at: '2026-10-23T09:15:01Z', finished_at: '2026-10-23T09:15:03Z', detail: null },
+        { id: 'viewing', started_at: '2026-10-23T09:15:03Z', finished_at: null, detail: null },
+      ],
+    };
+    const ahead = jobSteps(shaping, Date.parse('2026-10-23T09:15:30Z'))
+      .filter((s: any) => s.kind === 'ahead')
+      .map((s: any) => s.label);
+    expect(ahead).toEqual(['Dựng hình 3D từ ảnh', 'Sửa lưới, chỉnh kích thước', 'Mở Blender', 'Khởi động Claude']);
+    // Once Claude works, it decides the steps
+    const finishing = { ...shaping, step: 'building', steps: [...shaping.steps, { id: 'building', started_at: '2026-10-23T09:16:00Z', finished_at: null, detail: 'Bước 1' }] };
+    expect(jobSteps(finishing, Date.parse('2026-10-23T09:16:10Z')).some((s: any) => s.kind === 'ahead')).toBe(false);
+
+    const done = renderJob({ ...shaping, state: 'done', step: null, model: 'claude-opus-5-5', files: { preview: true, shaped: true, stl: true, blend: true } });
+    expect(done).toContain('Hunyuan3D nhiều góc + Claude');
+    expect(done).toContain('Hunyuan3D dựng');
+    expect(done).toContain('Claude hoàn thiện');
+    expect(done).toContain('scene.blend');
   });
 
   it('formats durations in Vietnamese', () => {
@@ -172,6 +203,23 @@ describe('AI modelling UI helpers', () => {
     expect(steps[2].progress).toEqual({ done: 12, total: 25, unit: 'bước' });
   });
 
+  it('puts MV-Adapter drawing the other sides ahead of the shape when they are not uploaded', () => {
+    const job = {
+      ...baseJob,
+      source: 'mesh',
+      input: 'image',
+      views: 'drawn',
+      step: 'background',
+      steps: [{ id: 'background', started_at: '2026-10-23T06:00:00Z', finished_at: null, detail: null }],
+    };
+    const ahead = (views: string | null) =>
+      jobSteps({ ...job, views }, Date.parse('2026-10-23T06:00:05Z'))
+        .filter((s: any) => s.kind === 'ahead')
+        .map((s: any) => s.label);
+    expect(ahead('drawn').slice(0, 2)).toEqual(['Vẽ các góc nhìn khác', 'Dựng hình 3D từ ảnh']);
+    expect(ahead('uploaded')[0]).toBe('Dựng hình 3D từ ảnh');
+  });
+
   it('marks failed builds that Claude fixed, and the step a failed job stopped at', () => {
     const steps = [
       { id: 'building', started_at: '2026-10-23T06:00:00Z', finished_at: '2026-10-23T06:00:03Z', detail: 'Lần dựng 1: ✗ NameError' },
@@ -201,5 +249,75 @@ describe('AI modelling UI helpers', () => {
     expect(html).not.toContain('<img src=x');
     expect(html).toContain('&lt;img src=x onerror=alert(1)&gt;');
     expect(html).toContain('• &lt;b&gt;x&lt;/b&gt;');
+  });
+});
+
+describe("pasting a picture into a figure's description", () => {
+  const item = (file: File) => ({ kind: 'file', type: file.type, getAsFile: () => file });
+  const text = { kind: 'string', type: 'text/plain', getAsFile: () => null };
+  const clipboard = (...items: unknown[]) => ({ items: items as unknown as DataTransferItemList });
+  const at = new Date(2026, 9, 27, 9, 5, 7);
+
+  it('takes the first picture, and names a screenshot by the time it was pasted', () => {
+    const shot = new File(['png'], 'image.png', { type: 'image/png' });
+    const pasted = pastedImage(clipboard(text, item(shot)), at);
+    expect(pasted?.name).toBe('anh-dan-090507.png');
+    expect(pasted?.type).toBe('image/png');
+    const copied = new File(['jpg'], 'meo.jpg', { type: 'image/jpeg' });
+    expect(pastedImage(clipboard(item(copied)), at)).toBe(copied);
+  });
+
+  it('leaves text and other files to paste as usual', () => {
+    expect(pastedImage(clipboard(text), at)).toBeNull();
+    expect(pastedImage(clipboard(item(new File(['gif'], 'a.gif', { type: 'image/gif' }))), at)).toBeNull();
+  });
+});
+
+
+describe('A model and its versions', () => {
+  const job = (id: string, created: string, extra: Record<string, unknown> = {}) => ({
+    ...baseJob,
+    id,
+    created_at: created,
+    state: 'done',
+    finished_at: created,
+    files: { preview: true, stl: true },
+    ...extra,
+  });
+  const figure = job('20261027-100000-aaaa', '2026-10-27T10:00:00Z', { source: 'mesh', title: 'Goku' });
+  const fix = job('20261027-110000-bbbb', '2026-10-27T11:00:00Z', { source: 'mesh', input: 'fix', parent_id: figure.id });
+  const fixAgain = job('20261027-120000-cccc', '2026-10-27T12:00:00Z', { source: 'mesh', input: 'fix', parent_id: fix.id });
+  const other = job('20261027-113000-dddd', '2026-10-27T11:30:00Z', { prompt: 'Giá đỡ' });
+  const orphan = job('20261027-090000-eeee', '2026-10-27T09:00:00Z', { parent_id: '20261001-000000-gone' });
+
+  it('groups fixes, revisions and remakes under the model they come from, newest group first', () => {
+    const groups = groupVersions([fixAgain, other, fix, figure, orphan]);
+    expect(groups.map((g: { root: string }) => g.root)).toEqual([figure.id, other.id, orphan.id]);
+    expect(groups[0].versions.map((v: { id: string }) => v.id)).toEqual([figure.id, fix.id, fixAgain.id]);
+    expect([figure, fix, job('x', '', { source: 'mesh', parent_id: figure.id }), job('y', '', { parent_id: other.id })].map(versionLabel)).toEqual([
+      'Gốc',
+      'Claude sửa',
+      'Tạo lại',
+      'Sửa',
+    ]);
+  });
+
+  it('shows the newest version, before and after, with the others in a strip', () => {
+    const html = renderToStaticMarkup(
+      createElement(CadFamily, { versions: [figure, fix, fixAgain], onAction: async () => {}, onRevise: async () => true, onDeleteAll: async () => {} })
+    );
+    expect(html).toContain('3 phiên bản:');
+    expect(html).toContain('v1 · Gốc');
+    expect(html).toContain('v3 · Claude sửa');
+    expect(html).toContain(`jobs/${fix.id}/files/preview.png`);
+    expect(html).toContain('Trước · Claude sửa');
+    expect(html).toContain('Sau · Claude sửa');
+    expect(html).toContain('Xóa cả nhóm');
+  });
+
+  it('shows a model without versions as it was, without a strip', () => {
+    const html = renderToStaticMarkup(createElement(CadFamily, { versions: [other], onAction: async () => {}, onRevise: async () => true }));
+    expect(html).not.toContain('phiên bản:');
+    expect(html).not.toContain('Trước ·');
   });
 });

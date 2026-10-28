@@ -19,14 +19,16 @@ import {
   Typography,
   Upload,
 } from 'antd';
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState, type ClipboardEvent } from 'react';
 import { useActions } from '../DashboardContext';
-import { HINTS, isBusy, PLACEHOLDERS } from '../cad';
-import { CadJobCard, type CadAction, type CadJob } from './CadJob';
+import { groupVersions, HINTS, isBusy, PLACEHOLDERS } from '../cad';
+import { type CadAction, type CadJob } from './CadJob';
+import { CadFamily } from './CadFamily';
 
 const BUSY_REFRESH_MS = 3000;
 const IDLE_REFRESH_MS = 30_000;
-const LIST_LIMIT = 30;
+// Enough that a model's versions come with it: they show as one group
+const LIST_LIMIT = 100;
 
 type Kind = 'technical' | 'figure';
 type Palette = 'prefer' | 'auto' | 'ams' | 'bambu' | 'custom';
@@ -34,6 +36,7 @@ type Palette = 'prefer' | 'auto' | 'ams' | 'bambu' | 'custom';
 interface Worker {
   online: boolean;
   claude: boolean;
+  /** Mesh worker: a Hunyuan3D-2 shape model is in GPU memory */
   loaded?: boolean;
   error?: string;
 }
@@ -69,6 +72,31 @@ async function api<T = any>(method: string, url: string, body?: unknown): Promis
   if (!res.ok || !data) throw new Error(data?.message || `Lỗi HTTP ${res.status}`);
   return data;
 }
+
+/** A pasted picture as a data: URL, as the gateway takes it in JSON */
+const dataUrl = (file: File) =>
+  new Promise<string>((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result));
+    reader.onerror = () => reject(new Error('Không đọc được ảnh đã dán.'));
+    reader.readAsDataURL(file);
+  });
+/**
+ * The first picture on the clipboard (a screenshot, an image copied from a page), or null for a text paste. A
+ * screenshot comes as "image.png": it gets a name the log can tell apart.
+ */
+export function pastedImage(data: Pick<DataTransfer, 'items'>, now = new Date()): File | null {
+  const file = [...data.items].find((item) => item.kind === 'file' && /^image\/(png|jpeg|webp)$/.test(item.type))?.getAsFile();
+  if (!file) return null;
+  if (file.name && file.name !== 'image.png') return file;
+  const stamp = now.toTimeString().slice(0, 8).replace(/:/g, '');
+  return new File([file], `anh-dan-${stamp}.${file.type.split('/')[1].replace('jpeg', 'jpg')}`, { type: file.type });
+}
+
+/** A figure's sides besides its front, as the gateway names its uploads (image_<side>) */
+const SIDES = ['left', 'back', 'right'] as const;
+type Side = (typeof SIDES)[number];
+const SIDE_LABELS: Record<Side, string> = { left: 'Trái', back: 'Sau', right: 'Phải' };
 
 const errorText = (err: unknown) => (err instanceof Error ? err.message : String(err));
 const swatch = (hex: string) => <i className="cad-swatch-dot" style={{ background: hex }} />;
@@ -134,9 +162,9 @@ function MyFilaments({ filaments, onChange }: { filaments: Filament[]; onChange:
 }
 
 /**
- * "Thiết kế mô hình bằng AI": technical parts (Claude writes build123d in the CAD container) and figures
- * (Hunyuan3D-2 on the GPU) in one list, polled every 3s while one is being made. `onBusyChange` tells the tab
- * whether something is being designed.
+ * "Thiết kế mô hình bằng AI": technical parts (Claude writes build123d in the CAD container) and figures (Claude
+ * models them in Blender in the mesh container) in one list, polled every 3s while one is being made.
+ * `onBusyChange` tells the tab whether something is being designed.
  */
 export function CadCard({ onBusyChange }: { onBusyChange?: (busy: boolean) => void }) {
   const { showToast, addLog } = useActions();
@@ -148,6 +176,9 @@ export function CadCard({ onBusyChange }: { onBusyChange?: (busy: boolean) => vo
   const [model, setModel] = useState<string>();
   const [prompt, setPrompt] = useState('');
   const [image, setImage] = useState<File | null>(null);
+  // "Dựng nhiều góc": the figure's other sides, uploaded or else drawn by MV-Adapter
+  const [multiview, setMultiview] = useState(false);
+  const [sides, setSides] = useState<Partial<Record<Side, File>>>({});
   const [height, setHeight] = useState<number | null>(80);
   const [base, setBase] = useState(true);
   const [colour, setColour] = useState(false);
@@ -227,10 +258,9 @@ export function CadCard({ onBusyChange }: { onBusyChange?: (busy: boolean) => vo
     : !worker.claude
       ? '🟡 Thiếu CLAUDE_CODE_OAUTH_TOKEN'
       : figure && !worker.loaded
-        ? '🟢 Sẵn sàng (model chưa nạp vào GPU)'
+        ? '🟢 Sẵn sàng (Hunyuan3D chưa nạp vào GPU)'
         : '🟢 Sẵn sàng';
-  // A figure from an uploaded picture needs no Claude
-  const canCreate = !!worker?.online && (figure || worker.claude);
+  const canCreate = !!worker?.online && worker.claude;
   const bambuPalette = !!config?.bambu_materials?.length;
   const customPick = colour && (palette === 'custom' || palette === 'prefer');
 
@@ -241,10 +271,33 @@ export function CadCard({ onBusyChange }: { onBusyChange?: (busy: boolean) => vo
     if ((next === 'custom' || next === 'prefer') && filaments.length < 2) setFilamentsOpen(true);
   };
 
-  /** A figure from the form: the picture if one is chosen, the description, the height and the plinth */
+  // A thumbnail of the front picture, chosen or pasted
+  const [preview, setPreview] = useState<string | null>(null);
+  useEffect(() => {
+    if (!image) {
+      setPreview(null);
+      return;
+    }
+    const url = URL.createObjectURL(image);
+    setPreview(url);
+    return () => URL.revokeObjectURL(url);
+  }, [image]);
+
+  /** A picture pasted into a figure's description becomes its front picture (the other sides chosen go with the old one) */
+  const pasteImage = (e: ClipboardEvent<HTMLTextAreaElement>) => {
+    const file = pastedImage(e.clipboardData);
+    if (!file) return;
+    e.preventDefault();
+    setImage(file);
+    setSides({});
+    addLog(`Đã dán ảnh ${file.name} làm ảnh mặt trước.`);
+  };
+
+  /** A figure from the form: the picture if one is chosen, the description, the height, the plinth and the colours */
   const createFigure = async (text: string) => {
     const body = new FormData();
     body.append('prompt', text);
+    if (model) body.append('model', model);
     body.append('height_mm', String(height || 80));
     body.append('base', base ? 'true' : 'false');
     if (colour) {
@@ -257,15 +310,25 @@ export function CadCard({ onBusyChange }: { onBusyChange?: (busy: boolean) => vo
       }
     }
     if (image) body.append('image', image);
+    const uploaded = multiview && image ? SIDES.filter((side) => sides[side]) : [];
+    if (multiview && image) {
+      body.append('multiview', 'true');
+      for (const side of uploaded) body.append(`image_${side}`, sides[side]!);
+    }
     const { job } = await api<{ job: CadJob }>('POST', '/api/cad/meshes', body);
     added(job);
-    addLog(`Đã gửi dựng mô hình nhân vật${image ? ` từ ảnh ${image.name}` : ''}: ${text || job.prompt}`);
+    const how = !(multiview && image) ? '' : uploaded.length ? `, kèm ${uploaded.length} ảnh góc khác` : ', AI vẽ thêm các góc';
+    addLog(
+      image
+        ? `Đã gửi dựng mô hình từ ảnh ${image.name}${how} (Hunyuan3D-2, rồi Claude hoàn thiện): ${text || job.prompt}`
+        : `Đã gửi Claude dựng mô hình nhân vật: ${text || job.prompt}`
+    );
   };
 
-  const create = async (text: string, parentId?: string) => {
-    const { job } = await api<{ job: CadJob }>('POST', '/api/cad/jobs', { prompt: text, model, ...(parentId && { parent_id: parentId }) });
+  const create = async (text: string, parentId?: string, images: string[] = []) => {
+    const { job } = await api<{ job: CadJob }>('POST', '/api/cad/jobs', { prompt: text, model, images, ...(parentId && { parent_id: parentId }) });
     added(job);
-    addLog(`Đã gửi Claude ${parentId ? 'sửa' : 'thiết kế'} mô hình: ${text}`);
+    addLog(`Đã gửi Claude ${parentId ? 'sửa' : 'thiết kế'} mô hình: ${text}${images.length ? ` (kèm ${images.length} ảnh)` : ''}`);
   };
 
   const submit = async () => {
@@ -279,6 +342,7 @@ export function CadCard({ onBusyChange }: { onBusyChange?: (busy: boolean) => vo
       if (figure) {
         await createFigure(text);
         setImage(null);
+        setSides({});
       } else {
         await create(text);
       }
@@ -294,21 +358,26 @@ export function CadCard({ onBusyChange }: { onBusyChange?: (busy: boolean) => vo
 
   const action = async (job: CadJob, act: CadAction) => {
     try {
-      if (act === 'cancel') {
+      if (act === 'delete') {
+        await api('DELETE', `/api/cad/jobs/${encodeURIComponent(job.id)}`);
+        showToast('Đã xóa bản này.', 'info');
+      } else if (act === 'cancel') {
         await api('POST', `/api/cad/jobs/${encodeURIComponent(job.id)}/cancel`, {});
         showToast('Đã hủy.', 'info');
       } else if (act === 'again') {
-        // Same picture or description, same size and plinth, coloured the same way, another seed
+        // Same picture (with another seed) or description, same size, plinth and colours: made afresh
         const params = Object.fromEntries((job.result?.parameters ?? []).map((p) => [p.name, p.value])) as Record<string, any>;
         const asked = job.report?.colour_request;
         const { job: next } = await api<{ job: CadJob }>('POST', '/api/cad/meshes', {
           parent_id: job.id,
+          model,
           ...(params.height_mm && { height_mm: params.height_mm }),
           base: Boolean(params.base),
           ...(params.colours > 0 && { colour: true, colours: params.colours, ...(asked ?? {}) }),
+          ...(params.multiview > 0 && { multiview: true }),
         });
         added(next);
-        showToast('Đang dựng lại với số ngẫu nhiên khác.', 'info');
+        showToast('Đang dựng lại mô hình.', 'info');
       } else {
         const sent = await api('POST', `/api/cad/jobs/${encodeURIComponent(job.id)}/studio`, { format: act === 'studio-3mf' ? '3mf' : 'stl' });
         showToast(`Đã gửi ${sent.studioPath}. Trong Studio: File → Import.`, 'success');
@@ -320,25 +389,39 @@ export function CadCard({ onBusyChange }: { onBusyChange?: (busy: boolean) => vo
     }
   };
 
-  /** Revise a technical model, or have Claude review and fix a figure (words optional) */
-  const revise = async (job: CadJob, comment: string) => {
+  /** Revise a technical model, or have Claude review and fix a figure (words optional), with the pictures pasted in */
+  const revise = async (job: CadJob, comment: string, pictures: File[]) => {
     const fix = job.source === 'mesh';
     if (fix ? comment.length > 0 && comment.length < 3 : comment.length < 3) {
-      showToast('Ghi cần sửa gì trước đã.', 'error');
+      showToast(pictures.length && !fix ? 'Ghi thêm vài chữ cần sửa gì cùng với ảnh.' : 'Ghi cần sửa gì trước đã.', 'error');
       return false;
     }
     try {
+      const images = await Promise.all(pictures.map(dataUrl));
+      const withImages = pictures.length ? ` (kèm ${pictures.length} ảnh)` : '';
       if (fix) {
-        const { job: next } = await api<{ job: CadJob }>('POST', `/api/cad/jobs/${encodeURIComponent(job.id)}/fix`, { prompt: comment, model });
+        const { job: next } = await api<{ job: CadJob }>('POST', `/api/cad/jobs/${encodeURIComponent(job.id)}/fix`, { prompt: comment, model, images });
         added(next);
-        addLog(`Đã gửi Claude review và sửa mô hình nhân vật${comment ? `: ${comment}` : ''}`);
+        addLog(`Đã gửi Claude review và sửa mô hình nhân vật${comment ? `: ${comment}` : ''}${withImages}`);
       } else {
-        await create(comment, job.id);
+        await create(comment, job.id, images);
       }
       return true;
     } catch (err) {
       showToast(errorText(err), 'error');
       return false;
+    }
+  };
+
+  /** Deletes a model with every version made from it */
+  const deleteGroup = async (root: CadJob, count: number) => {
+    try {
+      await api('DELETE', `/api/cad/jobs/${encodeURIComponent(root.id)}?family=1`);
+      showToast(`Đã xóa ${count} phiên bản.`, 'info');
+      addLog(`Đã xóa mô hình AI "${root.title || root.prompt}" cùng các phiên bản của nó.`);
+      await refresh();
+    } catch (err) {
+      showToast(errorText(err), 'error');
     }
   };
 
@@ -389,7 +472,14 @@ export function CadCard({ onBusyChange }: { onBusyChange?: (busy: boolean) => vo
             ]}
           />
         )}
-        <Input.TextArea rows={3} maxLength={4000} placeholder={PLACEHOLDERS[kind]} value={prompt} onChange={(e) => setPrompt(e.target.value)} />
+        <Input.TextArea
+          rows={3}
+          maxLength={4000}
+          placeholder={PLACEHOLDERS[kind]}
+          value={prompt}
+          onChange={(e) => setPrompt(e.target.value)}
+          onPaste={figure ? pasteImage : undefined}
+        />
         {figure && (
           <Flex wrap gap={12} align="center">
             <Upload
@@ -402,8 +492,22 @@ export function CadCard({ onBusyChange }: { onBusyChange?: (busy: boolean) => vo
             >
               <Button icon={<PictureOutlined />}>Chọn ảnh</Button>
             </Upload>
-            <Typography.Text type="secondary">{image ? image.name : 'Chưa chọn ảnh: AI sẽ vẽ ảnh từ mô tả'}</Typography.Text>
-            {image && <Button size="small" type="text" icon={<CloseOutlined />} title="Bỏ ảnh" onClick={() => setImage(null)} />}
+            {preview && <img src={preview} alt="Ảnh mẫu" style={{ height: 40, maxWidth: 80, objectFit: 'contain', borderRadius: 4 }} />}
+            <Typography.Text type="secondary">
+              {image ? image.name : 'Chưa chọn ảnh (hoặc dán ảnh vào ô mô tả): Claude dựng theo mô tả'}
+            </Typography.Text>
+            {image && (
+              <Button
+                size="small"
+                type="text"
+                icon={<CloseOutlined />}
+                title="Bỏ ảnh"
+                onClick={() => {
+                  setImage(null);
+                  setSides({});
+                }}
+              />
+            )}
             <Space>
               Cao
               <InputNumber min={10} max={300} step={1} value={height} onChange={setHeight} suffix="mm" style={{ width: 110 }} />
@@ -419,6 +523,14 @@ export function CadCard({ onBusyChange }: { onBusyChange?: (busy: boolean) => vo
               }}
             >
               Tô màu
+            </Checkbox>
+            <Checkbox
+              checked={multiview}
+              disabled={!image}
+              onChange={(e) => setMultiview(e.target.checked)}
+              title="Hunyuan3D-2mv dựng từ 4 góc thay vì đoán mặt sau từ 1 ảnh: dùng ảnh các góc bạn tải lên, không có thì AI vẽ thêm (chậm hơn 1–4 phút, cần gần hết VRAM). Cần ảnh mặt trước."
+            >
+              Dựng nhiều góc
             </Checkbox>
             {colour && (
               <>
@@ -458,6 +570,40 @@ export function CadCard({ onBusyChange }: { onBusyChange?: (busy: boolean) => vo
             )}
           </Flex>
         )}
+        {/* The other sides for "Dựng nhiều góc": with the front picture only */}
+        {figure && multiview && image && (
+          <Flex wrap gap={10} align="center">
+            <Typography.Text type="secondary">Ảnh các góc khác (không bắt buộc):</Typography.Text>
+            {SIDES.map((side) => (
+              <Space.Compact key={side}>
+                <Upload
+                  accept="image/png,image/jpeg,image/webp"
+                  showUploadList={false}
+                  beforeUpload={(file) => {
+                    setSides((prev) => ({ ...prev, [side]: file }));
+                    return false;
+                  }}
+                >
+                  <Button size="small" icon={<PictureOutlined />} title={sides[side]?.name ?? `Ảnh nhìn từ ${SIDE_LABELS[side].toLowerCase()}`}>
+                    {SIDE_LABELS[side]}
+                    {sides[side] ? ' ✓' : ''}
+                  </Button>
+                </Upload>
+                {sides[side] && (
+                  <Button
+                    size="small"
+                    icon={<CloseOutlined />}
+                    title={`Bỏ ảnh ${SIDE_LABELS[side].toLowerCase()}`}
+                    onClick={() => setSides(({ [side]: _dropped, ...rest }) => rest)}
+                  />
+                )}
+              </Space.Compact>
+            ))}
+            <Typography.Text type="secondary">
+              {SIDES.some((side) => sides[side]) ? 'Dựng từ ảnh trước và các góc đã chọn' : 'Không chọn góc nào: AI vẽ thêm trái, sau, phải từ ảnh trước'}
+            </Typography.Text>
+          </Flex>
+        )}
         {/* "Filament của tôi" to paint with: ticked ones only */}
         {figure && customPick && (
           <Flex wrap gap={10} align="center">
@@ -488,9 +634,7 @@ export function CadCard({ onBusyChange }: { onBusyChange?: (busy: boolean) => vo
           </Flex>
         )}
         <Flex gap={8} wrap>
-          {!figure && (
-            <Select value={model} onChange={setModel} style={{ minWidth: 200 }} aria-label="Model Claude" options={config.models.map((m) => ({ value: m.id, label: m.label }))} />
-          )}
+          <Select value={model} onChange={setModel} style={{ minWidth: 200 }} aria-label="Model Claude" options={config.models.map((m) => ({ value: m.id, label: m.label }))} />
           <Button type="primary" icon={<ThunderboltOutlined />} loading={creating} disabled={!canCreate} onClick={submit}>
             Tạo mô hình
           </Button>
@@ -516,9 +660,16 @@ export function CadCard({ onBusyChange }: { onBusyChange?: (busy: boolean) => vo
         ) : jobs.length === 0 ? (
           <Empty description="Chưa có mô hình nào. Mô tả mô hình ở trên rồi bấm ✨ Tạo mô hình." />
         ) : (
-          <Flex vertical gap={10}>
-            {jobs.map((job) => (
-              <CadJobCard key={job.id} job={job} now={now} onAction={(act) => action(job, act)} onRevise={(comment) => revise(job, comment)} />
+          <Flex vertical gap={14}>
+            {groupVersions(jobs).map(({ root, versions }: { root: string; versions: CadJob[] }) => (
+              <CadFamily
+                key={root}
+                versions={versions}
+                now={now}
+                onAction={action}
+                onRevise={revise}
+                onDeleteAll={() => deleteGroup(versions[0], versions.length)}
+              />
             ))}
           </Flex>
         )}

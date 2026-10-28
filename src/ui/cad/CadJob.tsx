@@ -4,6 +4,8 @@ import {
   CheckCircleFilled,
   ClockCircleOutlined,
   CloseCircleFilled,
+  CloseOutlined,
+  DeleteOutlined,
   DownloadOutlined,
   EditOutlined,
   FileTextOutlined,
@@ -13,11 +15,14 @@ import {
   SendOutlined,
   StopOutlined,
 } from '@ant-design/icons';
-import { Alert, Button, Card, Collapse, Flex, Image, Input, Progress, Space, Tag, Timeline, Tooltip, Typography } from 'antd';
-import { useState, type ReactNode } from 'react';
+import { Alert, Button, Card, Collapse, Flex, Image, Input, Popconfirm, Progress, Space, Tag, Timeline, Tooltip, Typography } from 'antd';
+import { useEffect, useMemo, useState, type ClipboardEvent, type ReactNode } from 'react';
 import { deltaLabel } from '../../domain/filaments/colourMixing';
-import { fileUrl, formatDuration, formatProgress, formatSize, isBusy, jobSteps, modelName, ORIGINS, REVISE_PLACEHOLDERS, STATE_LABELS, STEP_LABELS } from '../cad';
+import { fileUrl, formatDuration, formatProgress, formatSize, isBusy, jobSteps, modelName, ORIGINS, REVISE_PLACEHOLDERS, STATE_LABELS, STEP_LABELS, versionLabel } from '../cad';
 import { formatPrintTime } from '../prints';
+
+/** As many pictures as the gateway takes with one revision */
+const MAX_PASTED_IMAGES = 4;
 
 export interface CadJob {
   id: string;
@@ -26,7 +31,9 @@ export interface CadJob {
   source: string;
   model?: string | null;
   input?: string;
+  maker?: string | null;
   colour?: boolean;
+  views?: 'uploaded' | 'drawn' | null;
   parent_id?: string | null;
   created_at: string;
   started_at?: string | null;
@@ -69,7 +76,7 @@ export interface PaletteEntry {
   mix?: { components: { key: string; hex: string; percent: number; name?: string | null }[]; hex: string; delta_e: number } | null;
 }
 
-export type CadAction = 'cancel' | 'again' | 'studio-stl' | 'studio-3mf';
+export type CadAction = 'cancel' | 'again' | 'studio-stl' | 'studio-3mf' | 'delete';
 
 const STATE_COLORS: Record<string, string> = { queued: 'default', running: 'processing', done: 'success', failed: 'error', cancelled: 'warning' };
 
@@ -191,20 +198,26 @@ const Bullets = ({ items }: { items: string[] }) => (
 
 /**
  * One model: preview, state and progress, Claude's notes and details, its palette, downloads and actions. `onAction`
- * runs a button; `onRevise` sends the revise/review comment (a figure may go without words: Claude then looks for
- * problems itself).
+ * runs a button; `onRevise` sends the revise/review comment and the pictures pasted into it (a figure may go without
+ * either: Claude then looks for problems itself). `before` is the version this one was made from: its preview is
+ * shown next to this one's, before and after.
  */
 export function CadJobCard(props: {
   job: CadJob;
   now?: number;
+  before?: CadJob | null;
   onAction?: (action: CadAction) => Promise<void>;
-  onRevise?: (comment: string) => Promise<boolean>;
+  onRevise?: (comment: string, images: File[]) => Promise<boolean>;
 }) {
-  const { job, now = Date.now(), onAction, onRevise } = props;
+  const { job, now = Date.now(), before, onAction, onRevise } = props;
   const [acting, setActing] = useState<CadAction | null>(null);
   const [revising, setRevising] = useState(false);
   const [comment, setComment] = useState('');
+  const [images, setImages] = useState<File[]>([]);
   const [sending, setSending] = useState(false);
+  // Thumbnails of the pasted pictures, freed when they change
+  const thumbs = useMemo(() => images.map((file) => URL.createObjectURL(file)), [images]);
+  useEffect(() => () => thumbs.forEach((url) => URL.revokeObjectURL(url)), [thumbs]);
 
   const busy = isBusy(job);
   const done = job.state === 'done';
@@ -212,7 +225,19 @@ export function CadJobCard(props: {
   // Claude reviewing and fixing a figure
   const fix = figure && job.input === 'fix';
   const size = formatSize(job.report?.size_mm);
-  const source = fix ? `Claude sửa · ${modelName(job.model)}` : figure ? 'Hunyuan3D' : job.source === 'code' ? 'Antigravity / code' : modelName(job.model);
+  const source = fix
+    ? `Claude sửa · ${modelName(job.model)}`
+    : figure
+      ? job.maker === 'claude'
+        ? `Claude dựng · ${modelName(job.model)}`
+        : job.maker === 'hunyuan'
+          ? `Hunyuan3D${job.views ? ' nhiều góc' : ''} + Claude · ${modelName(job.model)}`
+          : job.views
+            ? 'Hunyuan3D · nhiều góc'
+            : 'Hunyuan3D'
+      : job.source === 'code'
+        ? 'Antigravity / code'
+        : modelName(job.model);
   const time = (iso?: string | null) => (iso ? Date.parse(iso) : NaN);
   const started = time(job.steps?.[0]?.started_at ?? job.started_at ?? job.created_at);
   const ended = job.finished_at ? time(job.finished_at) : busy ? now : NaN;
@@ -234,13 +259,25 @@ export function CadJobCard(props: {
     if (!onRevise) return;
     setSending(true);
     try {
-      if (await onRevise(comment.trim())) {
+      if (await onRevise(comment.trim(), images)) {
         setRevising(false);
         setComment('');
+        setImages([]);
       }
     } finally {
       setSending(false);
     }
+  };
+
+  /** Pictures pasted into the comment (a screenshot, a copied image) join the ones to send; text pastes as usual */
+  const paste = (e: ClipboardEvent<HTMLInputElement>) => {
+    const pasted = [...e.clipboardData.items]
+      .filter((item) => item.kind === 'file' && /^image\/(png|jpeg|webp)$/.test(item.type))
+      .map((item) => item.getAsFile())
+      .filter((file): file is File => file !== null);
+    if (!pasted.length) return;
+    e.preventDefault();
+    setImages((current) => [...current, ...pasted].slice(0, MAX_PASTED_IMAGES));
   };
 
   const link = (name: string, label: ReactNode, opts: { download?: boolean; title?: string; icon?: ReactNode } = {}) => (
@@ -290,13 +327,36 @@ export function CadJobCard(props: {
   return (
     <Card size="small" className="cad-job">
       <Flex gap={14} wrap>
-        <div className="cad-preview">
-          {job.files?.preview ? (
-            <Image src={url('preview.png')} alt="Ảnh xem trước" width={160} height={160} style={{ objectFit: 'contain' }} />
-          ) : (
-            <div className="cad-preview-empty">{busy ? '⏳' : '—'}</div>
-          )}
-        </div>
+        <Image.PreviewGroup>
+          <Flex gap={8} className="cad-preview">
+            {before?.files?.preview ? (
+              <figure className="cad-compare">
+                <Image src={fileUrl(before, 'preview.png')} alt="Trước khi sửa" width={160} height={160} style={{ objectFit: 'contain' }} />
+                <figcaption>Trước · {versionLabel(before)}</figcaption>
+              </figure>
+            ) : (
+              // A figure from a picture: as Hunyuan3D-2 shaped it, before Claude finished it
+              job.files?.shaped && (
+                <figure className="cad-compare">
+                  <Image src={url('shaped.png')} alt="Hunyuan3D dựng" width={160} height={160} style={{ objectFit: 'contain' }} />
+                  <figcaption>Hunyuan3D dựng</figcaption>
+                </figure>
+              )
+            )}
+            <figure className="cad-compare">
+              {job.files?.preview ? (
+                <Image src={url('preview.png')} alt="Ảnh xem trước" width={160} height={160} style={{ objectFit: 'contain' }} />
+              ) : (
+                <div className="cad-preview-empty">{busy ? '⏳' : '—'}</div>
+              )}
+              {before?.files?.preview ? (
+                <figcaption>Sau · {versionLabel(job)}</figcaption>
+              ) : (
+                job.files?.shaped && <figcaption>Claude hoàn thiện</figcaption>
+              )}
+            </figure>
+          </Flex>
+        </Image.PreviewGroup>
         <Flex vertical gap={8} flex={1} style={{ minWidth: 260 }}>
           <Flex justify="space-between" align="start" gap={8}>
             <Typography.Text strong style={{ fontSize: 15 }}>
@@ -306,7 +366,7 @@ export function CadJobCard(props: {
           </Flex>
           <Typography.Text type="secondary" style={{ fontSize: 12 }}>
             {formatPrintTime(job.created_at)} · {source}
-            {job.parent_id ? ' · bản sửa' : ''}
+            {job.parent_id && !fix ? ` · ${versionLabel(job)}` : ''}
           </Typography.Text>
           {job.title && job.title !== job.prompt && (
             <Typography.Paragraph type="secondary" ellipsis={{ rows: 2, expandable: 'collapsible' }} style={{ margin: 0 }}>
@@ -392,38 +452,71 @@ export function CadJobCard(props: {
               </Button>
             )}
             {job.files?.concept && link('concept.png', '🖼 Ảnh gốc')}
+            {job.files?.sides &&
+              link('sides.png', '🧭 4 góc', {
+                title: job.views === 'drawn' ? 'Các góc Hunyuan3D-2mv dựng từ (trái, sau, phải do AI vẽ)' : 'Các góc Hunyuan3D-2mv dựng từ',
+              })}
             {job.files?.views && link('views.png', '👁 6 phía', { title: 'Mô hình nhìn từ 6 phía, như Claude đã xem' })}
             {job.files?.fix && link('fix.py', 'fix.py', { icon: <FileTextOutlined /> })}
+            {done && job.files?.blend && link('scene.blend', 'Blender', { download: true, icon: <DownloadOutlined />, title: 'Cảnh Blender Claude để lại' })}
             {figure && done && (
               <Button
                 size="small"
                 icon={<SearchOutlined />}
                 onClick={() => setRevising(!revising)}
-                title="Claude so mô hình với ảnh gốc, xem từ 6 phía, rồi sửa: chân cụt, mảnh rời, bề mặt sần, lỗ hở… Bản sửa là mô hình mới, bản này giữ nguyên"
+                title="Claude so mô hình với ảnh gốc, xem từ 6 phía, rồi sửa: chân cụt, mảnh rời, bề mặt sần, lỗ hở… Bản sửa thành phiên bản mới của mô hình này, bản này giữ nguyên"
               >
                 Claude review &amp; sửa
               </Button>
             )}
             {figure && !fix && !busy && (
-              <Button size="small" loading={acting === 'again'} onClick={() => act('again')} title="Dựng lại từ cùng ảnh/mô tả với số ngẫu nhiên khác">
+              <Button size="small" loading={acting === 'again'} onClick={() => act('again')} title="Claude dựng lại từ cùng ảnh/mô tả, cỡ và màu: một phiên bản khác">
                 🎲 Tạo lại
               </Button>
             )}
+            {!busy && onAction && (
+              <Popconfirm title="Xóa bản này?" description="Xóa cả file mô hình của bản này, không lấy lại được." okText="Xóa" cancelText="Thôi" okButtonProps={{ danger: true }} onConfirm={() => act('delete')}>
+                <Button size="small" type="text" danger icon={<DeleteOutlined />} loading={acting === 'delete'} title="Xóa bản này" />
+              </Popconfirm>
+            )}
           </Space>
           {revising && (
-            <Space.Compact style={{ width: '100%' }}>
-              <Input
-                autoFocus
-                maxLength={4000}
-                placeholder={REVISE_PLACEHOLDERS[figure ? 'figure' : 'technical']}
-                value={comment}
-                onChange={(e) => setComment(e.target.value)}
-                onPressEnter={revise}
-              />
-              <Button type="primary" loading={sending} onClick={revise}>
-                {figure ? 'Gửi Claude review' : 'Gửi Claude sửa'}
-              </Button>
-            </Space.Compact>
+            <Flex vertical gap={6}>
+              <Space.Compact style={{ width: '100%' }}>
+                <Input
+                  autoFocus
+                  maxLength={4000}
+                  placeholder={`${REVISE_PLACEHOLDERS[figure ? 'figure' : 'technical']} (Ctrl+V để dán ảnh)`}
+                  value={comment}
+                  onChange={(e) => setComment(e.target.value)}
+                  onPaste={paste}
+                  onPressEnter={revise}
+                />
+                <Button type="primary" loading={sending} onClick={revise}>
+                  {figure ? 'Gửi Claude review' : 'Gửi Claude sửa'}
+                </Button>
+              </Space.Compact>
+              {images.length > 0 && (
+                <Flex gap={6} wrap>
+                  {thumbs.map((url, i) => (
+                    <div key={url} style={{ position: 'relative' }}>
+                      <Image src={url} width={64} height={64} style={{ objectFit: 'cover', borderRadius: 4 }} alt={`Ảnh dán ${i + 1}`} />
+                      <Button
+                        size="small"
+                        type="text"
+                        icon={<CloseOutlined />}
+                        title="Bỏ ảnh này"
+                        style={{ position: 'absolute', top: 0, right: 0, background: 'rgba(255,255,255,0.8)' }}
+                        onClick={() => setImages((current) => current.filter((_, j) => j !== i))}
+                      />
+                    </div>
+                  ))}
+                  <Typography.Text type="secondary" style={{ alignSelf: 'center' }}>
+                    {images.length}/{MAX_PASTED_IMAGES} ảnh gửi kèm cho Claude
+                  </Typography.Text>
+                </Flex>
+              )}
+            </Flex>
           )}
         </Flex>
       </Flex>

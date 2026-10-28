@@ -10,12 +10,16 @@ import {
   CadJobStore,
   CadWorkerClient,
   CadWorkerError,
+  FIGURE_SIDES,
+  lineageOf,
   MeshWorkerClient,
+  type Attachment,
   type CadFileName,
   type CadJob,
   type CadWorkerApi,
   type MeshColour,
   type MeshWorkerApi,
+  type SideViews,
 } from '../../domain/cad/cadJobs';
 import type { PrinterState } from '../../domain/PrinterState';
 import type { BambuColourCatalogue } from '../../domain/filaments/bambuColors';
@@ -38,8 +42,11 @@ const MAX_JOB_LIST = 100;
 const MAX_IMAGE_BYTES = 15 * 1024 * 1024;
 // PNG, JPEG and WebP by their first bytes: the mesh worker opens any of them, whatever the file is called
 const IMAGE_SIGNATURES = [[0x89, 0x50, 0x4e, 0x47], [0xff, 0xd8, 0xff], [0x52, 0x49, 0x46, 0x46]];
-/** What the dashboard shows as a figure's maker */
-const MESH_MODEL = 'hunyuan3d-2mini-turbo';
+const IMAGE_EXTENSIONS = ['png', 'jpg', 'webp'];
+// Pictures pasted into a revision, sent as base64 (data: URLs) in its JSON
+const MAX_ATTACHMENTS = 4;
+const MAX_ATTACHMENT_BYTES = 8 * 1024 * 1024;
+const imagesField = z.array(z.string()).max(MAX_ATTACHMENTS, `Tối đa ${MAX_ATTACHMENTS} ảnh.`).default([]);
 
 let workerOverride: CadWorkerApi | null = null;
 let meshWorkerOverride: MeshWorkerApi | null = null;
@@ -105,6 +112,8 @@ const jobSchema = z.object({
   model: z.string().optional(),
   // A revision: the prompt says what to change in that job's model
   parent_id: z.string().optional(),
+  // Pictures pasted with the prompt (data: URLs or base64), for Claude to look at
+  images: imagesField,
 });
 
 const buildSchema = z.object({
@@ -123,7 +132,7 @@ export const getCad = handler(async () => {
   // null for a worker that is not set up: the dashboard then only offers the other kind of model
   const [health, mesh] = await Promise.all([
     w ? w.health().then((h) => ({ online: true, claude: h.claude, error: null }), failed) : null,
-    m ? m.health().then((h) => ({ online: true, claude: h.claude, loaded: h.loaded, error: null }), failed) : null,
+    m ? m.health().then((h) => ({ online: true, claude: h.claude, loaded: h.loaded ?? false, error: null }), failed) : null,
   ]);
   return json({
     enabled: true,
@@ -153,7 +162,7 @@ export const listCadJobs = handler(async ({ request }) => {
   return json({ success: true, jobs: await Promise.all(jobs.map((job) => withMixes(settle(job, running)))) });
 });
 
-// POST /api/cad/jobs - {prompt, model?, parent_id?}: Claude designs a model (or changes parent_id's) in the background
+// POST /api/cad/jobs - {prompt, model?, parent_id?, images?}: Claude designs a model (or changes parent_id's) in the background
 export const createCadJob = handler(async ({ request }) => {
   const w = worker();
   if (!w) return disabled();
@@ -164,17 +173,22 @@ export const createCadJob = handler(async ({ request }) => {
     return json({ success: false, error: 'UNSUPPORTED_MODEL', message: `Model không hỗ trợ: ${model}.` }, 400);
   }
 
-  let files: { request: string; code?: string };
+  let files: { request: string; code?: string; attachments: Attachment[] };
   if (body.data.parent_id) {
     const parent = await store().get(body.data.parent_id);
     const parentCode = await store().filePath(body.data.parent_id, 'model.py');
     if (!parent || !parentCode) return jobNotFound();
+    const pasted = pastedImages(body.data.images, await store().attachments(parent.id));
+    if (pasted instanceof Response) return pasted;
     files = {
-      request: buildRequest(body.data.prompt, { request: await store().request(parent.id), prompt: parent.prompt }),
+      request: buildRequest(body.data.prompt, { request: await store().request(parent.id), prompt: parent.prompt }, pasted.names),
       code: await fs.readFile(parentCode, 'utf8'),
+      attachments: pasted.attachments,
     };
   } else {
-    files = { request: buildRequest(body.data.prompt) };
+    const pasted = pastedImages(body.data.images, []);
+    if (pasted instanceof Response) return pasted;
+    files = { request: buildRequest(body.data.prompt, undefined, pasted.names), attachments: pasted.attachments };
   }
 
   const meta = await store().create(
@@ -239,14 +253,34 @@ export const cancelCadJob = handler<{ id: string }>(async ({ params }) => {
   return json({ success: true, job: await store().get(params.id) });
 });
 
+// DELETE /api/cad/jobs/:id?family=1 - Deletes a model (with family=1 also every fix, revision and remake made from
+// it); refused while one of them is being made
+export const deleteCadJob = handler<{ id: string }>(async ({ request, params }) => {
+  const job = await store().get(params.id);
+  if (!job) return jobNotFound();
+  const family = ['1', 'true'].includes(new URL(request.url).searchParams.get('family') ?? '');
+  const all = family ? await store().list(Number.MAX_SAFE_INTEGER) : [job];
+  const ids = new Set(family ? lineageOf(job.id, all) : [job.id]);
+  const busy = all.filter((j) => ids.has(j.id) && (j.state === 'running' || j.state === 'queued'));
+  const running = await runningJobs(busy);
+  if (busy.some((j) => settle(j, running).state === 'running' || j.state === 'queued')) {
+    return json({ success: false, error: 'JOB_BUSY', message: 'Có bản đang được dựng hoặc sửa: hủy hoặc chờ xong rồi xóa.' }, 409);
+  }
+  return json({ success: true, deleted: await store().remove(job.id, family) });
+});
+
 const meshSchema = z.object({
   prompt: z.string().trim().max(MAX_PROMPT_CHARS, `Mô tả dài quá ${MAX_PROMPT_CHARS} ký tự.`).default(''),
   height_mm: z.coerce.number().min(10, 'Chiều cao tối thiểu 10 mm.').max(300, 'Chiều cao tối đa 300 mm.').default(80),
   base: z.preprocess((v) => v === true || v === 'true' || v === '1' || v === 'on', z.boolean()).default(false),
+  // The Claude model that makes or finishes it (CAD_MODELS); default CAD_AI_MODEL
+  model: z.string().optional(),
+  // Hunyuan3D-2's seed, for a figure from a picture; random when not given
   seed: z.coerce.number().int().min(0).optional(),
-  // "Make again": the parent's picture (or prompt, when none is given) with a new seed
+  // "Make again": the parent's picture (with a new seed) or description, afresh
   parent_id: z.string().optional(),
-  // Colour: Hunyuan3D-Paint's texture cut down to `colours` filaments, or to the ones loaded in the AMS
+  // Colour: Claude paints the figure in up to `colours` filaments (from those offered; from a picture, in the
+  // picture's colours), or in the ones loaded in the AMS
   colour: z.preprocess((v) => v === true || v === 'true' || v === '1' || v === 'on', z.boolean()).default(false),
   colours: z.coerce.number().int().min(2, 'Tối thiểu 2 màu.').max(8, 'Tối đa 8 màu.').default(4),
   // prefer: what is loaded in the AMS first, then the user's own filaments, then Bambu's colours to buy
@@ -256,6 +290,9 @@ const meshSchema = z.object({
   material: z.string().trim().max(60).default(''),
   // For palette=custom: the saved filaments to choose from (comma-separated ids; all when empty)
   filaments: z.string().trim().max(2000).default(''),
+  // "Dựng nhiều góc": Hunyuan3D-2mv from four sides, MV-Adapter drawing those not uploaded (image_left, image_back,
+  // image_right, which are used whenever they come)
+  multiview: z.preprocess((v) => v === true || v === 'true' || v === '1' || v === 'on', z.boolean()).default(false),
 });
 
 /**
@@ -347,22 +384,45 @@ async function withMixes(job: CadJob): Promise<CadJob> {
   };
 }
 
-const isImage = (data: Uint8Array) => IMAGE_SIGNATURES.some((sig) => sig.every((byte, i) => data[i] === byte));
+const imageType = (data: Uint8Array) => IMAGE_SIGNATURES.findIndex((sig) => sig.every((byte, i) => data[i] === byte));
+const isImage = (data: Uint8Array) => imageType(data) >= 0;
+
+/**
+ * The pictures pasted into a revision, numbered after the ones its parent already had (`inherited`, kept with it,
+ * since the parent's brief names them): every attachment for the new job and the names of the new ones; or the
+ * error response for a picture that is too big or not a PNG, JPEG or WebP
+ */
+function pastedImages(images: string[], inherited: Attachment[]): { attachments: Attachment[]; names: string[] } | Response {
+  const added: Attachment[] = [];
+  for (const image of images) {
+    const data = new Uint8Array(Buffer.from(image.replace(/^data:[^,]*,/, ''), 'base64'));
+    if (data.byteLength > MAX_ATTACHMENT_BYTES) {
+      return json({ success: false, error: 'FILE_TOO_LARGE', message: `Ảnh dán vào vượt quá ${MAX_ATTACHMENT_BYTES / 1024 / 1024} MB.` }, 413);
+    }
+    const type = imageType(data);
+    if (type < 0) return json({ success: false, error: 'UNSUPPORTED_FILE_TYPE', message: 'Chỉ dán được ảnh PNG, JPEG hoặc WebP.' }, 415);
+    added.push({ name: `${inherited.length + added.length + 1}.${IMAGE_EXTENSIONS[type]}`, data });
+  }
+  return { attachments: [...inherited, ...added], names: added.map((a) => a.name) };
+}
 
 /**
  * POST /api/cad/meshes - A figure (character, statue, decoration) from a picture and/or a description: multipart
- * with "image" (PNG/JPEG/WebP) and the fields prompt, height_mm, base, seed, parent_id (or JSON without a
- * picture). The mesh worker makes it in the background; 202 with the job.
+ * with "image" (PNG/JPEG/WebP), optionally its other sides "image_left", "image_back", "image_right", and the
+ * fields prompt, height_mm, base, model, seed, parent_id, multiview and the colour fields (or JSON without a
+ * picture). From a picture Hunyuan3D-2 shapes it on the GPU and Claude finishes it in Blender; from a description
+ * Claude makes it in Blender. In the background; 202 with the job.
  */
 export const createMeshJob = handler(async ({ request, printerService }) => {
   const m = meshWorker();
   if (!m) return meshDisabled();
-  if (Number(request.headers.get('content-length') ?? 0) > MAX_IMAGE_BYTES + 64 * 1024) {
+  if (Number(request.headers.get('content-length') ?? 0) > (FIGURE_SIDES.length + 1) * MAX_IMAGE_BYTES + 64 * 1024) {
     return json({ success: false, error: 'FILE_TOO_LARGE', message: 'Ảnh vượt quá 15 MB.' }, 413);
   }
 
   let fields: Record<string, unknown>;
   let image: Uint8Array | undefined;
+  let views: SideViews = {};
   if ((request.headers.get('content-type') ?? '').includes('multipart/form-data')) {
     let form: FormData;
     try {
@@ -371,26 +431,38 @@ export const createMeshJob = handler(async ({ request, printerService }) => {
       return json({ success: false, error: 'INVALID_PAYLOAD', message: 'Expected multipart/form-data.' }, 400);
     }
     fields = Object.fromEntries([...form.entries()].filter(([, v]) => typeof v === 'string'));
-    const file = form.get('image');
-    if (file instanceof File && file.size > 0) {
-      image = new Uint8Array(await file.arrayBuffer());
-      if (image.byteLength > MAX_IMAGE_BYTES) return json({ success: false, error: 'FILE_TOO_LARGE', message: 'Ảnh vượt quá 15 MB.' }, 413);
-      if (!isImage(image)) {
+    for (const name of ['image', ...FIGURE_SIDES.map((side) => `image_${side}`)]) {
+      const file = form.get(name);
+      if (!(file instanceof File) || file.size === 0) continue;
+      const data = new Uint8Array(await file.arrayBuffer());
+      if (data.byteLength > MAX_IMAGE_BYTES) return json({ success: false, error: 'FILE_TOO_LARGE', message: 'Ảnh vượt quá 15 MB.' }, 413);
+      if (!isImage(data)) {
         return json({ success: false, error: 'UNSUPPORTED_FILE_TYPE', message: 'Chỉ nhận ảnh PNG, JPEG hoặc WebP.' }, 415);
       }
+      if (name === 'image') image = data;
+      else views = { ...views, [name.slice('image_'.length)]: data };
+    }
+    if (Object.keys(views).length && !image && !fields.parent_id) {
+      return json({ success: false, error: 'NO_FRONT_IMAGE', message: 'Ảnh các góc khác cần đi kèm ảnh mặt trước.' }, 400);
     }
   } else {
     fields = ((await readJsonBody(request)) ?? {}) as Record<string, unknown>;
   }
   const body = meshSchema.safeParse(fields);
   if (!body.success) return invalidPayload(body.error);
+  const model = body.data.model ?? env.CAD_AI_MODEL;
+  if (!CAD_MODELS.some((c) => c.id === model)) {
+    return json({ success: false, error: 'UNSUPPORTED_MODEL', message: `Model không hỗ trợ: ${model}.` }, 400);
+  }
   let prompt = body.data.prompt;
 
   if (body.data.parent_id) {
     let parent = await store().get(body.data.parent_id);
-    // Made again from a fix: from the figure Hunyuan3D made, whose picture and description the fixes started from
+    // Made again from a fix: from the figure the fixes started from, whose picture and description it has
     while (parent?.input === 'fix' && parent.parent_id) parent = await store().get(parent.parent_id);
     if (!parent || parent.source !== 'mesh') return jobNotFound();
+    // The parent's other sides go with its picture, not with a new one
+    if (!image && !Object.keys(views).length) views = await store().views(parent.id);
     image ??= (await store().inputImage(parent.id)) ?? undefined;
     if (!prompt) prompt = parent.prompt;
   }
@@ -432,16 +504,18 @@ export const createMeshJob = handler(async ({ request, printerService }) => {
   }
 
   const meta = await store().create(
-    { prompt: prompt || 'Mô hình từ ảnh', source: 'mesh', model: MESH_MODEL, parent_id: body.data.parent_id ?? null, title: null },
-    image ? { image } : {}
+    { prompt: prompt || 'Mô hình từ ảnh', source: 'mesh', model, parent_id: body.data.parent_id ?? null, title: null },
+    image ? { image, views } : {}
   );
   try {
     await m.generate(meta.id, {
       prompt,
       height_mm: body.data.height_mm,
       base: body.data.base,
-      seed: body.data.seed ?? randomInt(1, 2 ** 31 - 1),
       colour,
+      model,
+      seed: body.data.seed ?? randomInt(1, 2 ** 31 - 1),
+      multiview: Boolean(image) && body.data.multiview,
     });
   } catch (err) {
     if (err instanceof CadWorkerError) return workerFailed(err);
@@ -454,10 +528,12 @@ const fixSchema = z.object({
   // What to fix; empty: Claude looks for problems itself
   prompt: z.string().trim().max(MAX_PROMPT_CHARS, `Mô tả dài quá ${MAX_PROMPT_CHARS} ký tự.`).default(''),
   model: z.string().optional(),
+  // Pictures pasted with it (data: URLs or base64): what is wrong, or how it should look
+  images: imagesField,
 });
 
 /**
- * POST /api/cad/jobs/:id/fix - {prompt?, model?}: Claude reviews a finished figure against its picture and fixes it
+ * POST /api/cad/jobs/:id/fix - {prompt?, model?, images?}: Claude reviews a finished figure against its picture and fixes it
  * (feet, loose bits, rough surfaces, holes, or what the prompt asks) in the mesh container. A new job, so the
  * figure stays as it was; 202 with the job.
  */
@@ -476,15 +552,21 @@ export const fixMeshJob = handler<{ id: string }>(async ({ request, params }) =>
     return json({ success: false, error: 'MODEL_NOT_READY', message: 'Mô hình chưa dựng xong nên chưa sửa được.' }, 409);
   }
 
+  const pasted = pastedImages(body.data.images, await store().attachments(parent.id));
+  if (pasted instanceof Response) return pasted;
+
   const meta = await store().create(
     {
-      prompt: body.data.prompt || 'Claude tự xem và sửa lỗi',
+      prompt: body.data.prompt || (pasted.names.length ? 'Sửa theo ảnh gửi kèm' : 'Claude tự xem và sửa lỗi'),
       source: 'mesh',
       model,
       parent_id: parent.id,
       title: parent.title,
     },
-    { request: buildFixRequest(body.data.prompt, { ...parent, request: await store().request(parent.id) }) }
+    {
+      request: buildFixRequest(body.data.prompt, { ...parent, request: await store().request(parent.id) }, pasted.names),
+      attachments: pasted.attachments,
+    }
   );
   try {
     await m.fix(meta.id, parent.id, model);

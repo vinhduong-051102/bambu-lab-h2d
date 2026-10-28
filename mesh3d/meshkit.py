@@ -1,6 +1,6 @@
 """
-Mesh toolkit for Claude's review of a figure (docs/cad.md, "Claude review & sửa"; the rules are in fix_guide.md).
-fix.py imports it: `from meshkit import *`, edits the figure and assigns the finished mesh to `result`.
+Mesh toolkit for figures (docs/cad.md, "Nhân vật"): loading the figure a job starts from, and the repairs,
+decimation and views the export (refine.py) uses. Older jobs' fix.py imported it: `from meshkit import *`.
 
 Every function takes and returns a trimesh.Trimesh in millimetres, Z up, front facing −Y, standing on Z = 0, and
 leaves its input alone. A region (box, ball) is a function of points → bool, so it picks vertices and faces alike.

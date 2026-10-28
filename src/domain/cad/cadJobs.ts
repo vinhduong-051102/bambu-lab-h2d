@@ -5,8 +5,10 @@ import path from 'path';
 /**
  * Models designed by AI (docs/cad.md). Each job is a folder in CAD_JOBS_DIR, shared with the CAD and mesh
  * containers: the gateway writes job.json (who asked for what), request.md (Claude's brief for a technical
- * model, or for Claude's review of a figure) or input.png (a picture for a figure); the workers write model.py
- * (build123d code), concept.png (the figure's picture, background removed), fix.py (Claude's changes to a figure),
+ * model, or for Claude's review of a figure), input.png (a picture for a figure) and views/<side>.png (its other
+ * sides, for "Dựng nhiều góc"), or attachments/ (pictures the user pasted into a revision, for Claude to look at);
+ * the workers write model.py (build123d code), concept.png (the figure's picture, background removed), sides.png
+ * (the sides a figure was shaped from), fix.py (Claude's changes to a figure),
  * out/ (model.stl, model.step, preview.png, report.json) and status.json.
  */
 
@@ -19,8 +21,8 @@ export interface CadJobMeta {
   prompt: string;
   /**
    * claude: written by Claude in the CAD container; code: model.py sent ready-made (Antigravity, the API);
-   * mesh: a figure Hunyuan3D-2 made from a picture (uploaded, or drawn from the prompt), or Claude's fix of one
-   * (model is then the Claude model, parent_id the figure fixed)
+   * mesh: a figure Claude modelled in Blender from a picture and/or a description, or Claude's fix of one (model
+   * is the Claude model, parent_id the figure fixed or made again); figures from before were Hunyuan3D-2's
    */
   source: CadJobSource;
   model: string | null;
@@ -104,8 +106,15 @@ interface WorkerStatus {
    * Claude reviewing and fixing a figure
    */
   input?: 'image' | 'prompt' | 'fix';
+  /**
+   * claude: made or fixed by Claude in Blender, whose steps are not known ahead; hunyuan: shaped by Hunyuan3D-2
+   * from its picture (those steps are ahead), then finished by Claude in Blender
+   */
+  maker?: FigureMaker;
   /** A figure being coloured (the paint steps are ahead) */
   colour?: boolean;
+  /** A figure shaped from several sides: the ones uploaded, or those MV-Adapter draws (its steps are ahead) */
+  views?: FigureViews | null;
   notes: string[];
   builds: number;
   started_at: string | null;
@@ -121,7 +130,9 @@ export interface CadJob extends CadJobMeta {
   steps: CadStep[];
   progress: CadProgress | null;
   input: 'image' | 'prompt' | 'fix' | null;
+  maker: FigureMaker | null;
   colour: boolean;
+  views: FigureViews | null;
   notes: string[];
   builds: number;
   started_at: string | null;
@@ -131,7 +142,9 @@ export interface CadJob extends CadJobMeta {
   report: CadBuildReport | null;
   /**
    * threemf: a coloured figure's 3MF, its faces painted with the filaments in report.palette; fix: the fix.py
-   * of Claude's review; views: the six sides it reviewed the figure from
+   * of an older Claude review; views: the six sides Claude checked the figure from; sides: the sides a figure was
+   * shaped from; shaped: the preview of the figure as Hunyuan3D-2 shaped it, before Claude finished it; blend: the
+   * Blender scene Claude left
    */
   files: {
     code: boolean;
@@ -142,6 +155,9 @@ export interface CadJob extends CadJobMeta {
     threemf: boolean;
     fix: boolean;
     views: boolean;
+    sides: boolean;
+    shaped: boolean;
+    blend: boolean;
   };
 }
 
@@ -156,6 +172,9 @@ export const CAD_FILES = {
   'report.json': { path: 'out/report.json', type: 'application/json; charset=utf-8' },
   'fix.py': { path: 'fix.py', type: 'text/x-python; charset=utf-8' },
   'views.png': { path: 'out/views.png', type: 'image/png' },
+  'sides.png': { path: 'sides.png', type: 'image/png' },
+  'shaped.png': { path: 'source/preview.png', type: 'image/png' },
+  'scene.blend': { path: 'out/scene.blend', type: 'application/x-blender' },
 } as const;
 export type CadFileName = keyof typeof CAD_FILES;
 
@@ -203,7 +222,7 @@ export class CadJobStore {
    */
   async create(
     meta: Omit<CadJobMeta, 'id' | 'created_at' | 'sent'>,
-    files: { request?: string; code?: string; image?: Uint8Array }
+    files: { request?: string; code?: string; image?: Uint8Array; views?: SideViews; attachments?: Attachment[] }
   ): Promise<CadJobMeta> {
     const id = newJobId();
     const dir = path.join(this.dir, id);
@@ -212,6 +231,15 @@ export class CadJobStore {
     if (files.request !== undefined) await fs.writeFile(path.join(dir, 'request.md'), files.request);
     if (files.code !== undefined) await fs.writeFile(path.join(dir, 'model.py'), files.code);
     if (files.image !== undefined) await fs.writeFile(path.join(dir, 'input.png'), files.image);
+    const sides = Object.entries(files.views ?? {}).filter((entry): entry is [string, Uint8Array] => !!entry[1]);
+    if (sides.length) {
+      await fs.mkdir(path.join(dir, 'views'), { recursive: true });
+      await Promise.all(sides.map(([side, data]) => fs.writeFile(path.join(dir, 'views', `${side}.png`), data)));
+    }
+    if (files.attachments?.length) {
+      await fs.mkdir(path.join(dir, ATTACHMENTS_DIR), { recursive: true });
+      await Promise.all(files.attachments.map((a) => fs.writeFile(path.join(dir, ATTACHMENTS_DIR, a.name), a.data)));
+    }
     await writeJson(path.join(dir, 'job.json'), full);
     return full;
   }
@@ -222,10 +250,9 @@ export class CadJobStore {
     const meta = await readJson<CadJobMeta>(path.join(dir, 'job.json'));
     if (!meta) return null;
     const status = await readJson<WorkerStatus>(path.join(dir, 'status.json'));
-    const [code, stl, step, preview, concept, threemf, fix, views] = await Promise.all(
-      (['model.py', 'model.stl', 'model.step', 'preview.png', 'concept.png', 'model.3mf', 'fix.py', 'views.png'] as const).map(
-        (name) => exists(path.join(dir, CAD_FILES[name].path))
-      )
+    const names = ['model.py', 'model.stl', 'model.step', 'preview.png', 'concept.png', 'model.3mf', 'fix.py', 'views.png', 'sides.png', 'shaped.png', 'scene.blend'] as const;
+    const [code, stl, step, preview, concept, threemf, fix, views, sides, shaped, blend] = await Promise.all(
+      names.map((name) => exists(path.join(dir, CAD_FILES[name].path)))
     );
     return {
       ...meta,
@@ -235,7 +262,9 @@ export class CadJobStore {
       steps: status?.steps ?? [],
       progress: status?.progress ?? null,
       input: status?.input ?? null,
+      maker: status?.maker ?? null,
       colour: status?.colour ?? false,
+      views: status?.views ?? null,
       notes: status?.notes ?? [],
       builds: status?.builds ?? 0,
       started_at: status?.started_at ?? null,
@@ -243,7 +272,8 @@ export class CadJobStore {
       error: status?.error ?? null,
       result: status?.result ?? null,
       report: status?.report ?? null,
-      files: { code, stl, step, preview, concept, threemf, fix, views },
+      // A fix's source/ is the version before it, already shown as such: only a figure Hunyuan3D shaped has its own
+      files: { code, stl, step, preview, concept, threemf, fix, views, sides, shaped: shaped && status?.maker === 'hunyuan', blend },
     };
   }
 
@@ -267,6 +297,24 @@ export class CadJobStore {
     return fs.readFile(path.join(dir, 'input.png')).catch(() => null);
   }
 
+  /** The other sides uploaded with a figure's picture, which "make again" reuses with it */
+  async views(id: string): Promise<SideViews> {
+    const dir = this.jobDir(id);
+    if (!dir) return {};
+    const found = await Promise.all(
+      FIGURE_SIDES.map(async (side) => [side, await fs.readFile(path.join(dir, 'views', `${side}.png`)).catch(() => null)] as const)
+    );
+    return Object.fromEntries(found.filter(([, data]) => data !== null));
+  }
+
+  /** The pictures pasted into a job's revisions so far, which its own revisions keep: its brief names them */
+  async attachments(id: string): Promise<Attachment[]> {
+    const dir = this.jobDir(id);
+    if (!dir) return [];
+    const names = await fs.readdir(path.join(dir, ATTACHMENTS_DIR)).catch(() => [] as string[]);
+    return Promise.all(names.sort().map(async (name) => ({ name, data: await fs.readFile(path.join(dir, ATTACHMENTS_DIR, name)) })));
+  }
+
   /** The brief Claude got for a job, which a revision builds on */
   async request(id: string): Promise<string | null> {
     const dir = this.jobDir(id);
@@ -282,6 +330,28 @@ export class CadJobStore {
     return (await exists(file)) ? file : null;
   }
 
+  /**
+   * Deletes a job's folder, with `family` also every job made from it (its fixes, revisions and remakes, and
+   * theirs). Alone, the jobs made from it move up to its own parent, so its versions stay together. Returns the ids
+   * deleted; [] when the job does not exist
+   */
+  async remove(id: string, family = false): Promise<string[]> {
+    const dir = this.jobDir(id);
+    const meta = dir ? await readJson<CadJobMeta>(path.join(dir, 'job.json')) : null;
+    if (!dir || !meta) return [];
+    const all = await this.list(Number.MAX_SAFE_INTEGER);
+    const ids = family ? lineageOf(id, all) : [id];
+    if (!family) {
+      for (const child of all.filter((job) => job.parent_id === id)) {
+        const file = path.join(this.dir, child.id, 'job.json');
+        const childMeta = await readJson<CadJobMeta>(file);
+        if (childMeta) await writeJson(file, { ...childMeta, parent_id: meta.parent_id });
+      }
+    }
+    await Promise.all(ids.map((one) => fs.rm(path.join(this.dir, one), { recursive: true, force: true })));
+    return ids;
+  }
+
   async markSent(id: string, name: string): Promise<void> {
     const dir = this.jobDir(id);
     if (!dir) return;
@@ -293,24 +363,61 @@ export class CadJobStore {
   }
 }
 
-/** Claude's brief for a new model, or for changing the model of `parent` (whose brief it was given) */
-export function buildRequest(prompt: string, parent?: { request: string | null; prompt: string }): string {
-  if (!parent) return `# Yêu cầu\n\n${prompt.trim()}\n`;
+/** `id` and every job descended from it (by parent_id), among `jobs` */
+export function lineageOf(id: string, jobs: Pick<CadJobMeta, 'id' | 'parent_id'>[]): string[] {
+  const ids = [id];
+  for (let i = 0; i < ids.length; i++) ids.push(...jobs.filter((job) => job.parent_id === ids[i]).map((job) => job.id));
+  return ids;
+}
+
+/** The sides of a figure besides its front picture (input.png), as Hunyuan3D-2mv names them */
+export const FIGURE_SIDES = ['left', 'back', 'right'] as const;
+export type FigureSide = (typeof FIGURE_SIDES)[number];
+export type SideViews = Partial<Record<FigureSide, Uint8Array>>;
+/** How a figure got its other sides: uploaded with its picture, or drawn by MV-Adapter */
+export type FigureViews = 'uploaded' | 'drawn';
+/** Who made a figure (see WorkerStatus.maker) */
+export type FigureMaker = 'claude' | 'hunyuan';
+
+/** A picture the user pasted into a revision: attachments/<name> in the job's folder */
+export interface Attachment {
+  name: string;
+  data: Uint8Array;
+}
+
+export const ATTACHMENTS_DIR = 'attachments';
+
+/** The line of a brief that points Claude at the pictures pasted with it (none: nothing) */
+function attachmentLine(names: string[]): string {
+  if (!names.length) return '';
+  const files = names.map((name) => `${ATTACHMENTS_DIR}/${name}`).join(', ');
+  return `\n\nẢnh người dùng gửi kèm yêu cầu này (mở bằng Read và xem kỹ trước khi sửa): ${files}`;
+}
+
+/**
+ * Claude's brief for a new model, or for changing the model of `parent` (whose brief it was given); `attached`
+ * names the pictures pasted with the prompt
+ */
+export function buildRequest(prompt: string, parent?: { request: string | null; prompt: string }, attached: string[] = []): string {
+  if (!parent) return `# Yêu cầu\n\n${prompt.trim()}${attachmentLine(attached)}\n`;
   const previous = parent.request?.trim() || `# Yêu cầu\n\n${parent.prompt.trim()}`;
-  return `${previous}\n\n# Sửa lại\n\n${prompt.trim()}\n\nmodel.py là mô hình hiện có: sửa nó theo yêu cầu này, giữ nguyên những gì không được nhắc tới.\n`;
+  return `${previous}\n\n# Sửa lại\n\n${prompt.trim()}${attachmentLine(attached)}\n\nmodel.py là mô hình hiện có: sửa nó theo yêu cầu này, giữ nguyên những gì không được nhắc tới.\n`;
 }
 
 /**
  * Claude's brief for reviewing and fixing a figure: what it is meant to be (or the brief of the fix it builds on),
- * its size and colours, and what the user wants changed, or nothing: then Claude looks for problems itself
+ * its size and colours, and what the user wants changed (words and/or the pictures named in `attached`), or nothing:
+ * then Claude looks for problems itself
  */
 export function buildFixRequest(
   instruction: string,
-  parent: { title: string | null; prompt: string; request: string | null; result: CadResult | null; report: CadBuildReport | null }
+  parent: { title: string | null; prompt: string; request: string | null; result: CadResult | null; report: CadBuildReport | null },
+  attached: string[] = []
 ): string {
-  const ask = instruction.trim()
-    ? `# Cần sửa\n\n${instruction.trim()}\n\nSửa đúng điều này trước, rồi những lỗi khác làm hỏng bản in nếu thấy.`
-    : '# Cần sửa\n\nKhông có yêu cầu cụ thể: tự xem mô hình, tìm và sửa những gì làm bản in hỏng (đổ, gãy, mảnh rời, lỗ hở, bề mặt sần) hoặc khác hẳn ảnh gốc.';
+  const ask =
+    instruction.trim() || attached.length
+      ? `# Cần sửa\n\n${instruction.trim() || 'Xem ảnh gửi kèm.'}${attachmentLine(attached)}\n\nSửa đúng điều này trước, rồi những lỗi khác làm hỏng bản in nếu thấy.`
+      : '# Cần sửa\n\nKhông có yêu cầu cụ thể: tự xem mô hình, tìm và sửa những gì làm bản in hỏng (đổ, gãy, mảnh rời, lỗ hở, bề mặt sần) hoặc khác hẳn ảnh gốc.';
   if (parent.request) return `${parent.request.trim()}\n\n# Sửa tiếp\n\nsource/ là bản đã sửa lần trước.\n\n${ask}\n`;
   const params = Object.fromEntries((parent.result?.parameters ?? []).map((p) => [p.name, p.value]));
   const size = parent.report?.size_mm?.join(' × ');
@@ -325,7 +432,7 @@ export function buildFixRequest(
       ? `- Tô ${parent.report.palette.length} màu filament (model.3mf): ${parent.report.palette.map((p) => p.label || p.hex).join(', ')}`
       : '- In một màu',
   ].filter(Boolean);
-  return `# Mô hình cần xem lại\n\nNhân vật do Hunyuan3D-2 dựng từ ảnh (concept.png).\n\n${facts.join('\n')}\n\n${ask}\n`;
+  return `# Mô hình cần xem lại\n\nNhân vật dựng từ ảnh (concept.png) hoặc mô tả.\n\n${facts.join('\n')}\n\n${ask}\n`;
 }
 
 export class CadWorkerError extends Error {
@@ -405,8 +512,8 @@ export class CadWorkerClient extends WorkerHttp implements CadWorkerApi {
 }
 
 export interface MeshWorkerHealth extends CadWorkerHealth {
-  /** Hunyuan3D-2 is in GPU memory (otherwise the next figure first loads it, ~2 minutes) */
-  loaded: boolean;
+  /** A Hunyuan3D-2 shape model is in GPU memory (the first figure after a while loads it, ~1 minute) */
+  loaded?: boolean;
 }
 
 /**
@@ -429,9 +536,14 @@ export interface MeshParams {
   prompt: string;
   height_mm: number;
   base: boolean;
-  seed: number;
-  /** null: one colour, no texture */
+  /** null: one colour */
   colour: MeshColour | null;
+  /** The Claude model that makes or finishes it */
+  model: string;
+  /** Hunyuan3D-2's random seed, for a figure from a picture: another seed, another shape */
+  seed: number;
+  /** "Dựng nhiều góc" without uploaded sides: MV-Adapter draws them (uploaded ones are always used) */
+  multiview: boolean;
 }
 
 /** The mesh worker's HTTP API (mesh3d/worker.py) */

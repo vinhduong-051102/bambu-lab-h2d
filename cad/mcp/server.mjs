@@ -83,21 +83,23 @@ const TOOLS = [
   {
     name: 'cad_make_figure',
     description:
-      'Make an organic model (character, animal, statue, decoration) with Hunyuan3D-2 on the gateway\'s GPU, from a ' +
-      'picture on this computer and/or a description, sized for printing. build123d cannot make such shapes. Best ' +
-      'from one subject in front three-quarter view on a plain background. Runs in the background for about a ' +
-      'minute (more when the model first loads): follow it with cad_get_job.',
+      'Make an organic model (character, animal, toy, decoration) in the gateway\'s mesh container, sized for ' +
+      'printing: from a picture on this computer Hunyuan3D-2 shapes it on the GPU and Claude finishes it in Blender ' +
+      '(fixes, plinth, the picture\'s colours); from a description alone Claude makes it in Blender. build123d ' +
+      'cannot make such shapes. Runs in the background for 5-15 minutes: follow it with cad_get_job.',
     inputSchema: {
       type: 'object',
       properties: {
-        prompt: { type: 'string', description: 'What to make; without image_path the picture is drawn from it' },
+        prompt: { type: 'string', description: 'What to make; with image_path, anything to add to the picture' },
         image_path: { type: 'string', description: 'A PNG, JPEG or WebP file on this computer' },
         height_mm: { type: 'number', minimum: 10, maximum: 300, description: 'Height of the figure, default 80' },
         base: { type: 'boolean', description: 'Add a round plinth so it stands steadily (default false)' },
-        colour: { type: 'boolean', description: 'Print it in several filaments: texture it, then paint a 3MF (adds 1-2 minutes)' },
+        colour: { type: 'boolean', description: 'Print it in several filaments: Claude paints its parts, in a 3MF' },
         colours: { type: 'integer', minimum: 2, maximum: 8, description: 'How many filaments, default 4' },
         palette: { type: 'string', enum: ['auto', 'ams'], description: 'ams: use the colours loaded in the AMS instead' },
-        parent_id: { type: 'string', description: 'A figure job to make again from its picture with a new seed' },
+        multiview: { type: 'boolean', description: 'With image_path: shape it from four sides, the AI drawing the other three' },
+        seed: { type: 'integer', minimum: 0, description: 'With a picture, Hunyuan3D-2\'s seed: another seed, another shape' },
+        parent_id: { type: 'string', description: 'A figure job to make again from its picture and description' },
       },
       additionalProperties: false,
     },
@@ -228,7 +230,7 @@ async function callTool(name, args) {
     }
     case 'cad_make_figure': {
       const form = new FormData();
-      for (const key of ['prompt', 'height_mm', 'base', 'parent_id', 'colour', 'colours', 'palette']) {
+      for (const key of ['prompt', 'height_mm', 'base', 'parent_id', 'colour', 'colours', 'palette', 'multiview', 'seed']) {
         if (args[key] !== undefined) form.append(key, String(args[key]));
       }
       if (args.image_path) {
@@ -243,7 +245,7 @@ async function callTool(name, args) {
       const res = await gateway('POST', '/api/cad/meshes', form);
       const data = await res.json().catch(() => null);
       if (!res.ok || !data) throw new GatewayError(data?.message || `Gateway answered HTTP ${res.status} for /api/cad/meshes.`);
-      return [text({ job_id: data.job.id, state: data.job.state, next: 'The GPU works in the background; check with cad_get_job.' })];
+      return [text({ job_id: data.job.id, state: data.job.state, next: 'It is made in the background; check with cad_get_job.' })];
     }
     case 'cad_fix_figure': {
       const { job_id: jobId, ...body } = args;
@@ -252,7 +254,7 @@ async function callTool(name, args) {
     }
     case 'cad_ask_claude': {
       const { job } = await gatewayJson('POST', '/api/cad/jobs', args);
-      return [text({ job_id: job.id, state: job.state, next: 'Claude works in the background; check with cad_get_job.' })];
+      return [text({ job_id: job.id, state: job.state, next: 'It is made in the background; check with cad_get_job.' })];
     }
     default:
       throw Object.assign(new Error(`Unknown tool: ${name}`), { rpcCode: -32602 });

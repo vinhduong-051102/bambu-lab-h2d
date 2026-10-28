@@ -199,6 +199,18 @@ describe('AI modelling API (/api/cad)', () => {
     expect((await create({ prompt: 'Cao gấp đôi', parent_id: 'missing-job' })).statusCode).toBe(404);
   });
 
+  it('puts the pictures pasted into a revision next to its brief', async () => {
+    const { job } = (await create({ prompt: 'Hộp vuông cạnh 10 mm' })).json();
+    await worker.finish(job.id);
+    const jpeg = Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0, 0x10]);
+
+    const revision = (await create({ prompt: 'Thêm rãnh như ảnh', parent_id: job.id, images: [jpeg.toString('base64')] })).json().job;
+    expect(await fs.readFile(path.join(jobsDir, revision.id, 'attachments', '1.jpg'))).toEqual(jpeg);
+    expect(await fs.readFile(path.join(jobsDir, revision.id, 'request.md'), 'utf8')).toContain(
+      '# Sửa lại\n\nThêm rãnh như ảnh\n\nẢnh người dùng gửi kèm yêu cầu này (mở bằng Read và xem kỹ trước khi sửa): attachments/1.jpg\n\nmodel.py'
+    );
+  });
+
   it('builds ready-made code (Antigravity) right away', async () => {
     const res = await app.inject({ method: 'POST', url: '/api/cad/builds', payload: { code: 'result = Box(10, 10, 10)', title: 'Khối thử' } });
     expect(res.statusCode).toBe(201);
@@ -214,6 +226,28 @@ describe('AI modelling API (/api/cad)', () => {
     expect(res.statusCode).toBe(200);
     expect(worker.cancelled).toEqual([job.id]);
     expect(res.json().job.state).toBe('cancelled');
+  });
+
+  it('deletes a version, keeping the ones made from it in the group, or a whole group', async () => {
+    const { job: first } = (await create({ prompt: 'Hộp vuông cạnh 10 mm' })).json();
+    await worker.finish(first.id);
+    const { job: second } = (await create({ prompt: 'Cao 20 mm', parent_id: first.id })).json();
+    await worker.finish(second.id);
+    const { job: third } = (await create({ prompt: 'Bo góc', parent_id: second.id })).json();
+
+    // Still being made: neither it nor its group can go
+    expect((await app.inject({ method: 'DELETE', url: `/api/cad/jobs/${first.id}?family=1` })).statusCode).toBe(409);
+    await worker.finish(third.id);
+
+    const one = await app.inject({ method: 'DELETE', url: `/api/cad/jobs/${second.id}` });
+    expect(one.json()).toEqual({ success: true, deleted: [second.id] });
+    const moved = (await app.inject({ method: 'GET', url: `/api/cad/jobs/${third.id}` })).json().job;
+    expect(moved.parent_id).toBe(first.id);
+
+    const all = await app.inject({ method: 'DELETE', url: `/api/cad/jobs/${first.id}?family=1` });
+    expect(all.json().deleted.sort()).toEqual([first.id, third.id].sort());
+    expect((await app.inject({ method: 'GET', url: '/api/cad/jobs' })).json().jobs).toEqual([]);
+    expect((await app.inject({ method: 'DELETE', url: `/api/cad/jobs/${first.id}` })).statusCode).toBe(404);
   });
 
   it('sends a finished model to Studio under its title, and refuses one still running', async () => {

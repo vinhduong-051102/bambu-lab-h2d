@@ -2,7 +2,7 @@
 
 The dashboard's **Thiết kế mô hình bằng AI** card turns a description ("giá đỡ điện thoại nghiêng 60°, rộng 80 mm, dày 3 mm") into a model ready to print. Claude writes the model as [build123d](https://build123d.readthedocs.io) Python code, builds it, looks at a preview, fixes what is off, and hands back STL, STEP, the code and a short summary. Antigravity can design models with the same tools through an MCP server.
 
-Characters, animals, statues and other organic shapes, which build123d can't make, come from a second container, `mesh3d` ([Figures](#figures-nhân-vật--trang-trí)): Tencent's Hunyuan3D-2 turns a picture into a 3D shape on the NVIDIA GPU.
+Characters, animals, statues and other organic shapes, which build123d can't make, come from a second container, `mesh3d` ([Figures](#figures-nhân-vật--trang-trí)): from a picture, Tencent's Hunyuan3D-2 shapes them on the NVIDIA GPU and Claude finishes them in Blender through [MCP for Blender](https://github.com/ahujasid/blender-mcp); from a description, Claude makes them there.
 
 Everything runs in its own containers, `cad` (`docker-compose.cad.yml`) and `mesh3d` (`docker-compose.mesh3d.yml`): the model code is untrusted, and Claude runs commands while it works. The gateway only stores jobs and passes them on.
 
@@ -43,72 +43,134 @@ Claude runs on your Claude subscription through `CLAUDE_CODE_OAUTH_TOKEN` (from 
 
 ## Figures (Nhân vật / trang trí)
 
-Pick **🧸 Nhân vật / trang trí** on the card. The `mesh3d` worker (`mesh3d/worker.py`) makes the model in about a minute:
+Pick **🧸 Nhân vật / trang trí** on the card. Claude works in a real Blender, as a 3D artist would:
 
-1. **The picture.** An uploaded picture (PNG, JPEG or WebP, up to 15 MB) gives the closest result: one subject, whole, front three-quarter view, plain background. Without one, Claude (Haiku, through `claude -p` on the same `CLAUDE_CODE_OAUTH_TOKEN`) turns the description into an English picture brief, and HunyuanDiT draws it in a clay-figure style on a white background. The background is then removed; the picture is kept as **🖼 Ảnh gốc**.
-2. **The shape.** Hunyuan3D-2mini (the turbo version, a few seconds on the GPU) turns the picture into a mesh.
-3. **Ready to print.** The worker turns it Z up with the front facing −Y, drops floating specks, reduces it to 200,000 faces, repairs non-manifold edges and closes holes, scales it to the height asked for (10–300 mm, the plinth not counted), centres it on the plate at Z = 0, and with **Thêm đế** adds a round plinth under it. It warns when the figure stands on very little without a plinth, or is so small that fine details won't print.
+```
+                 the request
+               /             \
+         a picture        a description
+             |                  |
+   Hunyuan3D-2 on the GPU   Claude chooses: generate_3d (Hunyuan3D-2, organic)
+   (Dựng nhiều góc: 4 sides)        or Python in Blender (mechanical)
+               \             /
+          the Blender scene (MCP for Blender)
+                      |
+     look from every side, measure, fix, plinth, colours
+                      |
+        check (the export's print check), export
+```
+
+**From a picture.** The job queues for the GPU (`mesh3d/shape.py`, one at a time):
+
+1. **Tách nền ảnh**: rembg cuts the subject out of the picture (**🖼 Ảnh gốc** shows it).
+2. **Dựng nhiều góc** (optional): the figure seen from four sides, so the back is not guessed from one picture:
+   the sides you upload (**Trái**, **Sau**, **Phải**), or else MV-Adapter (SDXL) draws them from the front
+   (~1–2 minutes, nearly all of a 16 GB GPU). **🧭 4 góc** shows them.
+3. **Dựng hình 3D từ ảnh**: Hunyuan3D-2mini (one picture) or Hunyuan3D-2mv (four sides), turbo, 5 denoising
+   steps, with the seed. Loading a model the first time after a while takes ~1 minute.
+4. **Sửa lưới, chỉnh kích thước**: duplicate and broken faces, floating specks, holes; Z up, the height asked,
+   on the plate; kept as `source/` (its preview is the **Hunyuan3D dựng** picture beside the result). With colour,
+   every face takes the picture's colour where the camera saw it (`mesh3d/picture.py`, a depth test hides what
+   is behind; the back from the nearest seen face, or from the back view with four sides).
+5. **Claude finishes it** in Blender (`mesh3d/finish_prompt.md`): fixes what stops it printing (feet cut off,
+   specks, sheets, slits), adds the plinth, chooses the filaments for the picture's main colours and paints each
+   face in the nearest one, then corrects what came out wrong (shadows, eyes), and checks it. It keeps the AI's
+   shape, which is what makes it look like the picture.
+
+**From a description.** Claude makes it from nothing (`mesh3d/create_prompt.md`): `generate_3d` for organic forms
+(HunyuanDiT draws a picture from Claude's English prompt, Hunyuan3D-2 shapes it), Python for mechanical ones, or
+both together.
+
+**How Claude works in Blender.** Each run starts its own Blender 4.5 with its interface on a virtual display
+(`xvfb-run`; the add-on's server needs Blender's main loop, which `blender -b` does not have), set up by
+`mesh3d/blender_session.py`: 1 unit = 1 mm, Z up, front towards −Y, the job's figure loaded as **Figure**, the
+add-on serving on a free port with its local Hunyuan3D-2 on. `claude -p` (`mesh3d/review.py`) gets two MCP
+servers and the guide `mesh3d/figure_guide.md`:
+
+- **`blender`**, MCP for Blender (`mcp-for-blender` 2.2.4): `execute_blender_code` (Python in Blender),
+  `generate_3d` (one object from the worker's `POST /generate`, which runs Hunyuan3D-2 on the same GPU queue),
+  `look` (the scene as an image: several sides, solid or material shading), `get_scene_info`. Its asset libraries
+  (Poly Haven, Sketchfab), other generators and telemetry are off; Blender gets no Claude token.
+- **`figure`** (`mesh3d/figure_mcp.py`): `set_palette` (the filaments as materials F1…Fn), `paint_from_picture`,
+  and `check`: exports what is visible in the scene (modifiers applied, each face's filament from its F<n>
+  material) and runs the print check (`mesh3d/refine.py`), with the six sides in colour.
+
+When Claude is done the scene is exported the same way: `out/model.stl`, `out/model.3mf` with every face painted,
+the preview, `views.png` and the report, and the scene itself as `out/scene.blend` (**⬇ Blender**). A run takes
+5–15 minutes and counts against the Claude plan like a technical model (the model chosen on the card); it is
+stopped after 20 minutes (`MESH_FIX_TIMEOUT_S`) or 100 turns.
 
 ### Colour
 
-With **Tô màu**, the figure is printed in several filaments (the AMS changes them while printing):
+With **Tô màu**, the figure is printed in several filaments (the AMS changes them while printing), up to the
+number chosen (2–8):
 
-1. Hunyuan3D-Paint textures a 40,000-face copy of the shape from the picture (shading removed first, so the texture holds the subject's own colours).
-2. Every face of the printable mesh takes the texture's colour under it. The colours are then cut down to the filaments: **Tự chọn màu theo ảnh** finds the given number (2–8) by k-means in Lab colour space, weighted by area, the most used becoming filament 1; **Màu đang nạp trong AMS** gives each face the nearest of the colours loaded in the AMS, in the order Studio lists them after syncing the AMS (unit by unit, slot by slot, empty slots left out). Specks and one-face fringes take the colour around them. The plinth takes the figure's main colour.
-   - **Màu Bambu chính hãng** does the same as the first, then moves each colour to the nearest of Bambu's own colours of one material (e.g. PLA Basic) or a whole family (**Mọi dòng PLA**: Basic, Matte, Silk, Lite … print together and offer far more colours); colours landing on the same filament merge. The palette names each filament with its spool code, e.g. "PLA Basic Orange (10300)". The colours come from Bambu Studio's `filaments_color_codes.json`, downloaded once into `data/bambu/`.
-   - **Filament của tôi** does the same with filaments you saved: other brands, or colours Bambu doesn't make. Add them under **🎨 Filament của tôi** (name, brand, material, colour), then tick the ones to paint with. They are kept in `data/filaments/custom.json`.
+- **Tự chọn màu theo ảnh**: Claude chooses the colours that suit the picture (one per main colour of it) or the
+  description.
+- **Màu đang nạp trong AMS**: exactly the filaments loaded in the AMS, in the order Studio lists them after syncing
+  (unit by unit, slot by slot, empty slots left out), so filament *n* of the 3MF is tray *n*.
+- **Màu Bambu chính hãng**: Claude picks from Bambu's own colours of one material (e.g. PLA Basic) or a whole
+  family (**Mọi dòng PLA**), named with their spool codes, from Bambu Studio's `filaments_color_codes.json`
+  (downloaded once into `data/bambu/`).
+- **Filament của tôi**: from the filaments you saved under **🎨 Filament của tôi** (other brands, or colours Bambu
+  doesn't make; kept in `data/filaments/custom.json`), the ticked ones.
+- **Ưu tiên màu có sẵn**: the AMS's first, then yours, then Bambu's to buy; the palette says which is which.
 
-   For every filament the palette shows the model's own colour there and how far the filament is from it (Lab ΔE: giống, gần đúng, hơi lệch, lệch rõ); the card warns about one that is plainly off. When a filament is off by more than ΔE 6, the palette suggests the Bambu Studio mixing recipe that prints closest to the model's colour: two or three PLA Basic primaries (Cyan, Magenta, Yellow, White or Red, Yellow, Blue, White) in 20–80 % shares, from Studio's measured `standard_color_recipes.json`. Mixing itself is set up in Studio.
-3. `out/model.3mf` holds the mesh with every triangle painted (Bambu's `paint_color`: paint state *n* is filament *n* in Studio). **📤 Gửi sang Studio (có màu)** sends it; in Studio, set filaments 1–n to the colours the card lists, or sync the AMS when the colours came from it. The preview shows the figure in its filaments.
+`out/model.3mf` holds the mesh with every triangle painted (Bambu's `paint_color`: paint state *n* is filament *n*
+in Studio). **📤 Gửi sang Studio (có màu)** sends it; in Studio, set filaments 1–n to the colours the card lists,
+or sync the AMS when the colours came from it.
 
-Colour adds 1–2 minutes and, the first time, an 18 GB download (Hunyuan3D-Paint turbo and its de-lighting model). The texture stage needs a CUDA rasterizer compiled into the image (`TORCH_CUDA_ARCH_LIST`, by default RTX 30xx, 40xx and 50xx). Fine details under about 0.5 mm (pupils, whiskers) may be lost or smudged, and every colour change costs purge filament and time; the card warns when the AMS colours mix materials (PLA with PETG bonds poorly).
-
-The result has an STL (and with colour a 3MF) and a preview, no STEP or code. **🎲 Tạo lại** makes it again from the same picture or description, size and plinth with another seed: a different take on the same subject. The height is right; the rest of the shape is the model's own guess, so check the preview before printing.
-
-The models take GPU memory only while there is work: they load with the first figure (about 2 minutes, shown as its own step) and leave the GPU after 10 minutes without one (`MESH_IDLE_UNLOAD_S`). Shape generation needs about 5 GB of VRAM; drawing a picture moves HunyuanDiT's parts onto the GPU one at a time. Figures are made one at a time; others wait in the queue.
+The result has an STL (and with colour a 3MF), a preview and the Blender scene, no STEP. **🎲 Tạo lại** makes
+it again from the same picture (and sides) or description, size, plinth and colours: from a picture with another
+seed, so another shape.
 
 ### Claude review & sửa
 
-Hunyuan3D-2 guesses what the picture doesn't show, and a busy picture leaves its marks: feet cut off at the ankle,
-a figure standing on two points, loose specks, clothes crumpled by a glow or aura in the picture, slits between an
-arm and the body. **🔍 Claude review & sửa** on a finished figure has Claude fix it:
+A figure can still come out wrong: a part too thin, feet that do not stand, a seam, a colour in the wrong place.
+**🔍 Claude review & sửa** on a finished figure has Claude fix it:
 
 1. Say what is wrong ("chân bị cụt, đứng không vững"), or leave it empty and Claude looks for problems itself.
-   The model is the one the card offers for technical models (Opus or Sonnet).
+   The model is the one the card offers (Opus or Sonnet).
 2. The gateway makes a new job (`request.md`: what the figure is, its size and colours, what to fix); the mesh
-   worker copies the figure into its `source/` and its picture to `concept.png`, and runs `claude -p` with
-   `mesh3d/fix_prompt.md`, at once: it needs no GPU, so it doesn't wait behind figures being made.
-3. Claude reads `mesh3d/fix_guide.md` (what goes wrong with these figures, and the toolkit), looks at the
-   picture, and writes `fix.py` with `mesh3d/meshkit.py`: cross-sections, wall thickness and close-ups to find
-   the problems; smoothing a region, closing gaps (a voxel closing that only adds material, so the surface
-   elsewhere keeps its detail), dropping loose bits, primitives joined with manifold3d (a foot, a support), a flat
-   sole, a plinth. `python /opt/mesh3d/refine.py fix.py` runs it and writes the STL, the 3MF with every face
-   keeping its filament (new material takes the main one), the preview, `views.png` (six sides, which Claude
-   reads to check its work) and the report. It repeats until the figure is right, at most 6 runs.
-4. The card shows each problem Claude found, fixed (✓) or not (✗), and its notes; **👁 6 phía** and
-   **📄 fix.py** open what it looked at and what it did. The figure it fixed stays as it was; a fix can be fixed
-   again, and **🎲 Tạo lại** is offered on the figure Hunyuan3D made, not on fixes.
+   worker copies the figure into its `source/` and its picture to `concept.png`, and Claude
+   (`mesh3d/fix_prompt.md`) works on it in Blender as above: the figure is **Figure**, its filaments the
+   materials F1…Fn.
+3. The fix is a new version of the same model: the list shows one card per model, with a strip of its versions
+   (v1 Gốc, v2 Claude sửa, …: fixes, revisions and remakes, oldest first; the newest shown until another is
+   picked). A version made from another shows that one's preview beside its own, **Trước** and **Sau**. The card
+   shows each problem Claude found, fixed (✓) or not (✗), and its notes; **👁 6 phía** opens the sides Claude
+   checked. The figure it fixed stays as it was; a fix can be fixed again, and **🎲 Tạo lại** is offered on the
+   figure as first made, not on fixes. 🗑 deletes one version (the ones made from it move up to its parent),
+   **Xóa cả nhóm** the model with all its versions (`DELETE /api/cad/jobs/:id[?family=1]`).
 
 Claude keeps the size, pose and proportions and changes what is broken. What it can't rebuild (a face that came
-out flat, a missing arm) it says so in the warnings: a new figure from another picture or seed is the better way
-then. A review takes a few minutes and counts against the Claude plan like a technical model; it is stopped
-after 20 minutes (`MESH_FIX_TIMEOUT_S`).
+out flat, a missing arm) it says so in the warnings: making the figure again (another seed, **Dựng nhiều góc**)
+is the better way then.
 
 ### Setup
 
-The host needs an NVIDIA GPU that Docker can use (Docker Desktop with WSL 2 passes it through with `gpus: all`). The image uses PyTorch 2.7 with CUDA 12.8, the first with kernels for RTX 50xx cards.
+The host needs an NVIDIA GPU with ~16 GB (an RTX 5070 Ti or better; "Dựng nhiều góc" uses nearly all of it), and
+Docker passing it through (`gpus: all`; Docker Desktop with WSL 2 does).
 
 ```bash
 docker compose -f docker-compose.mesh3d.yml up -d --build
 ```
 
-The image is about 15 GB (PyTorch with the CUDA compiler, for the texture stage). The first figure downloads the model weights into `data/mesh3d/models`: about 8 GB for Hunyuan3D-2mini, for the first figure made from a description 14.5 GB for HunyuanDiT, and for the first coloured one 18 GB for Hunyuan3D-Paint. A Hugging Face read token in `HF_TOKEN` (free) makes the downloads faster. Then add to `.env` and restart the gateway:
+The image is about 31 GB: PyTorch 2.7 with CUDA 12.8 (the first with RTX 50xx kernels), Hunyuan3D-2, MV-Adapter,
+Blender 4.5 LTS with Xvfb and Mesa, MCP for Blender and Claude Code. The models (Hunyuan3D-2mini, Hunyuan3D-2mv,
+HunyuanDiT, MV-Adapter with SDXL, the background remover, ~25 GB) download on first use into `MESH_MODELS_DIR`
+(a volume, so they survive rebuilds; put it on a roomy drive); `HF_TOKEN` makes the downloads faster. Models leave
+the GPU after 10 minutes without a job (`MESH_IDLE_UNLOAD_S`). It needs `CLAUDE_CODE_OAUTH_TOKEN`
+(`claude setup-token`; `CLAUDE_CODE_OAUTH_TOKEN_FALLBACK` for a second subscription). Then add to `.env` and
+restart the gateway:
 
 ```env
 MESH_WORKER_URL=http://127.0.0.1:3103
+MESH_MODELS_DIR=F:/bambu-lab-h2d/mesh3d-models
 ```
 
-Hunyuan3D-2 and HunyuanDiT come under Tencent's own licences, which restrict commercial use: read them before selling prints or models made with them.
+Hunyuan3D-2, HunyuanDiT and MV-Adapter's SDXL are under their makers' licences (Tencent's restricts commercial
+use); MCP for Blender is MIT.
 
 ## Antigravity (MCP)
 
@@ -120,7 +182,7 @@ Hunyuan3D-2 and HunyuanDiT come under Tencent's own licences, which restrict com
 | `cad_build` | Builds code that assigns `result`: report and preview image back, as a new job (`parent_id` links a revision) |
 | `cad_get_job` | One job: state, report, Claude's summary, `model.py` and the preview |
 | `cad_list_jobs` | Recent jobs |
-| `cad_make_figure` | A figure from a picture on this computer (`image_path`) and/or a description, with Hunyuan3D-2 |
+| `cad_make_figure` | A figure from a picture on this computer (`image_path`, Hunyuan3D-2 then Claude; `multiview`, `seed`) and/or a description (Claude in Blender) |
 | `cad_fix_figure` | Claude reviews a finished figure and fixes it (`prompt`: what to fix, or nothing) |
 | `cad_send_to_studio` | Puts a finished model into Studio's `/imports` |
 | `cad_ask_claude` | Hands the request to Claude in the container instead (runs on the Claude subscription) |
@@ -152,15 +214,16 @@ Set `GATEWAY_API_KEY` when the gateway has one. Then ask the agent, for example:
 | GET | `/api/cad/jobs?limit=30` | Jobs, newest first |
 | POST | `/api/cad/jobs` | `{prompt, model?, parent_id?}`: Claude designs a model, or changes `parent_id`'s. 202 with the job |
 | POST | `/api/cad/jobs/:id/fix` | `{prompt?, model?}`: Claude reviews the finished figure `:id` and fixes it, as a new job. 202 with the job; 409 `MODEL_NOT_READY` before the figure is done |
-| POST | `/api/cad/meshes` | Multipart with `image` and/or the fields `prompt`, `height_mm` (default 80), `base`, `seed`, `parent_id` (make that figure again), `colour` with `colours` (2–8, default 4) and `palette`: `auto`, `ams`, `bambu` with `material` (a material or `family:PLA`), or `custom` with `filaments` (saved ids, comma-separated), or the same as JSON without a picture: a figure. 202 with the job; 409 `AMS_TOO_FEW_COLOURS` when the AMS holds fewer than two filaments |
+| POST | `/api/cad/meshes` | Multipart with `image` (and its other sides `image_left`, `image_back`, `image_right`) and/or the fields `prompt`, `height_mm` (default 80), `base`, `model` (the Claude model), `seed`, `multiview`, `parent_id` (make that figure again), `colour` with `colours` (2–8, default 4) and `palette`: `auto`, `ams`, `bambu` with `material` (a material or `family:PLA`), or `custom` with `filaments` (saved ids, comma-separated), or the same as JSON without a picture: a figure. 202 with the job; 409 `AMS_TOO_FEW_COLOURS` when the AMS holds fewer than two filaments |
 | POST | `/api/cad/builds` | `{code, title?, prompt?, parent_id?}`: builds ready-made code now. 201 with the job |
 | GET | `/api/cad/jobs/:id` | One job: `state` (queued, running, done, failed, cancelled), `step`, `notes`, `result`, `report`, `files`, `sent` |
-| POST | `/api/cad/jobs/:id/cancel` | Stops Claude, or drops a figure from the queue (a figure being made stops at its next step) |
+| POST | `/api/cad/jobs/:id/cancel` | Stops Claude, or drops a figure from the GPU queue (one being shaped stops at its next step) |
 | POST | `/api/cad/jobs/:id/studio` | `{format?: "stl" \| "step" \| "3mf"}`: into Studio's `/imports`, named after the model's title (`3mf`: a coloured figure, painted) |
 | GET | `/api/filaments/colors` | Bambu's colour catalogue (`?material=` for one material), its materials and families |
 | GET, POST | `/api/filaments/custom` | Filament của tôi: list, or save `{name, brand?, material, hex}` |
 | DELETE | `/api/filaments/custom/:id` | Removes a saved filament |
-| GET | `/api/cad/jobs/:id/files/:name` | `model.py`, `model.stl`, `model.step`, `preview.png`, `concept.png` (a figure's picture), `model.3mf` (a coloured figure), `report.json`, or a fix's `fix.py` and `views.png`; `?download=1` as an attachment |
+| DELETE | `/api/cad/jobs/:id` | Deletes a model; `?family=1` also every fix, revision and remake made from it. 409 `JOB_BUSY` while one of them is being made |
+| GET | `/api/cad/jobs/:id/files/:name` | `model.py`, `model.stl`, `model.step`, `preview.png`, `concept.png` (a figure's picture), `model.3mf` (a coloured figure), `report.json`, `views.png`, `sides.png`, `shaped.png` (as Hunyuan3D shaped it), `scene.blend`, or an older fix's `fix.py`; `?download=1` as an attachment |
 
 ## Limits
 
