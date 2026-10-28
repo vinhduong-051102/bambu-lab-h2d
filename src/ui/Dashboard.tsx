@@ -6,7 +6,7 @@ import viVN from 'antd/locale/vi_VN';
 import { useEffect, useState } from 'react';
 import { DashboardProvider } from './DashboardContext';
 import { Shell } from './Shell';
-import { dashboardTheme } from './theme';
+import { dashboardModal, dashboardTheme } from './theme';
 
 type AuthState = 'checking' | 'required' | 'ready';
 
@@ -22,7 +22,7 @@ export function Dashboard() {
   }, []);
 
   return (
-    <ConfigProvider theme={dashboardTheme} locale={viVN}>
+    <ConfigProvider theme={dashboardTheme} locale={viVN} modal={dashboardModal}>
       <App>
         {auth === 'ready' ? (
           <DashboardProvider>
