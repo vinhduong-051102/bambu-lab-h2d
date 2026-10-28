@@ -14,6 +14,7 @@ import { TemperatureCard } from './printer/TemperatureCard';
 import { PrintHistoryCard } from './prints/PrintHistoryCard';
 import { SimCard } from './sim/SimCard';
 import { StudioCard } from './studio/StudioCard';
+import { ClaudeLimitsCard } from './system/ClaudeLimitsCard';
 import { ConsoleCard } from './system/ConsoleCard';
 import { DiagnosticsCard } from './system/DiagnosticsCard';
 import { ApiModal, CapabilitiesModal } from './system/InfoModals';
@@ -208,7 +209,11 @@ export function Shell() {
     },
     features.sim && { key: 'sim', label: '⚙️ Mô phỏng', children: page === 'sim' ? <SimCard /> : null },
     { key: 'prints', label: '🕘 Lịch sử in', children: <PrintHistoryCard /> },
-    { key: 'system', label: '🛠️ Hệ thống', children: grid([<ConsoleCard key="console" />, {}], [<DiagnosticsCard key="diag" />, {}]) },
+    {
+      key: 'system',
+      label: '🛠️ Hệ thống',
+      children: grid([<ClaudeLimitsCard key="claude" />, {}], [<ConsoleCard key="console" />, {}], [<DiagnosticsCard key="diag" />, {}]),
+    },
   ].filter((p) => p !== false);
 
   return (

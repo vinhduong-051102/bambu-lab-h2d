@@ -520,3 +520,8 @@ body {
     display: none;
   }
 }
+
+/* ---------- Claude plans ---------- */
+.limits-active {
+  border-color: var(--primary-accent) !important;
+}

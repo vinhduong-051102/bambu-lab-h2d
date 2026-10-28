@@ -116,6 +116,9 @@ export const GATEWAY_ROUTES: RouteDoc[] = [
   { method: 'POST', path: '/api/sim/live/:id/stop', category: 'Mô phỏng tương tác', description: 'Dừng phiên tương tác', body: '{}' },
   { method: 'GET', path: '/api/sim/live/:id/mesh/:body', category: 'Mô phỏng tương tác', description: 'File mesh của một body, cho viewer' },
 
+  // Claude subscriptions
+  { method: 'GET', path: '/api/ai/limits', category: 'Hệ thống', description: 'Hạn mức còn lại của các gói Claude (CLAUDE_CODE_OAUTH_TOKEN và _FALLBACK): % đã dùng 5 giờ và 7 ngày, lúc reset, có gọi được không. Lưu 5 phút; ?refresh=1 để kiểm tra lại', exampleUrl: '/api/ai/limits' },
+
   // Engineering analysis of printed parts (docs/engineering-analysis.md): mesh3d container, one POST per MCP tool
   { method: 'POST', path: '/api/eng/:tool', category: 'Phân tích kỹ thuật', description: 'inspect (nhập STL/3MF/OBJ/PLY/.blend, đo hình học), validate (lỗi lưới, giao nhau), assembly (đồng trục, khớp đề xuất/xác nhận), clearance (lắp ghép, khe hở, thành, răng, va chạm khi chuyển động), motion/configure + motion/run (Chrono), fea/configure + fea/run (gmsh + CalculiX), printability, report (Markdown + HTML), visualize (Blender)', body: '{"sources": [{"file": "jobs/<job id>/out/model.stl"}], "units": "mm"}' },
   { method: 'GET', path: '/api/eng/:resource', category: 'Phân tích kỹ thuật', description: 'models, models/<id>, analyses (?model_id=&kind=), analyses/<id> (AnalysisResult), analyses/<id>/files/<file> (report.html, result.png, result.blend, job.inp…)', exampleUrl: '/api/eng/analyses' },
