@@ -415,3 +415,37 @@ body {
   background: #f59e0b;
   color: #111;
 }
+
+/* ---------- Mechanism simulation ---------- */
+.sim-chart {
+  width: 100%;
+  height: auto;
+  display: block;
+}
+.sim-chart-grid {
+  stroke: var(--card-border);
+  stroke-width: 1;
+}
+.sim-chart-label {
+  fill: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+.sim-chart-line {
+  fill: none;
+  stroke: var(--primary-accent);
+  stroke-width: 2;
+  stroke-linejoin: round;
+}
+.sim-video {
+  width: 100%;
+  border-radius: var(--radius-sm);
+  background: #000;
+}
+.sim-row,
+.sim-row-picked {
+  cursor: pointer;
+}
+.sim-row-picked > td {
+  background: rgba(59, 130, 246, 0.12) !important;
+}

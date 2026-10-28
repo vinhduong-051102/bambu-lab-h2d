@@ -65,6 +65,16 @@ RUN apt-get update \
       /opt/blender-mcp/addons/blender_mcp.py \
  && mcp-for-blender --help > /dev/null
 
+# Mechanism simulation (sim/, docs/mechanical-simulation.md): Project Chrono's Python in its own conda environment,
+# /opt/chrono (Python 3.12), apart from the PyTorch above; the worker runs sim/chrono_run.py with it. CPU only
+ARG MICROMAMBA_VERSION=2.10.0
+ARG PYCHRONO_VERSION=10.0.0
+RUN curl -fsSL "https://micro.mamba.pm/api/micromamba/linux-64/${MICROMAMBA_VERSION}" | tar -xj -C /usr/local bin/micromamba \
+ && MAMBA_ROOT_PREFIX=/tmp/mamba micromamba create -y -p /opt/chrono -c projectchrono -c conda-forge \
+      "projectchrono::pychrono=${PYCHRONO_VERSION}" python=3.12 \
+ && rm -rf /tmp/mamba \
+ && /opt/chrono/bin/python -c "import pychrono; pychrono.ChSystemNSC(); print('pychrono ok')"
+
 RUN useradd --create-home --uid 1000 mesh
 USER mesh
 # Model weights download here on first use (~25 GB): a volume (MESH_MODELS_DIR), so they survive rebuilds

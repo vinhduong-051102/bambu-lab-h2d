@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "bambu-cad": {
+      "command": "node",
+      "args": ["cad/mcp/server.mjs"],
+      "env": { "GATEWAY_URL": "http://localhost:3000" }
+    }
+  }
+}

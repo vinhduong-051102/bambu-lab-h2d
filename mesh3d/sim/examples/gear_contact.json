@@ -1,0 +1,69 @@
+{
+  "schema_version": 1,
+  "name": "Cặp bánh răng 20/40 tiếp xúc răng (PLA, khe hở 0.2 mm, ma sát 0.2)",
+  "units": { "length": "mm", "mass": "kg", "angle": "deg" },
+  "bodies": [
+    {
+      "id": "frame",
+      "name": "Giá",
+      "fixed": true,
+      "geometry": { "type": "box", "size": [140, 70, 6] },
+      "position": [30, 0, -10],
+      "visual": { "color": "#5A6270" }
+    },
+    {
+      "id": "pinion",
+      "name": "Bánh nhỏ 20 răng",
+      "geometry": { "type": "gear", "teeth": 20, "module": 2, "width": 10 },
+      "density": 1240,
+      "position": [0, 0, 0],
+      "visual": { "color": "#E4572E" }
+    },
+    {
+      "id": "wheel",
+      "name": "Bánh lớn 40 răng",
+      "geometry": { "type": "gear", "teeth": 40, "module": 2, "width": 10 },
+      "density": 1240,
+      "position": [60, 0, 0],
+      "orientation": { "euler_xyz": [0, 0, 4.5] },
+      "visual": { "color": "#29335C" }
+    }
+  ],
+  "joints": [
+    { "id": "pinion_bearing", "type": "revolute", "body_a": "frame", "body_b": "pinion", "position": [0, 0, 0], "axis": [0, 0, 1] },
+    { "id": "wheel_bearing", "type": "revolute", "body_a": "frame", "body_b": "wheel", "position": [60, 0, 0], "axis": [0, 0, 1] },
+    {
+      "id": "mesh",
+      "type": "gear",
+      "model": "contact",
+      "joint_a": "pinion_bearing",
+      "joint_b": "wheel_bearing",
+      "teeth_a": 20,
+      "teeth_b": 40,
+      "backlash": 0.2,
+      "friction": 0.2,
+      "young_modulus_Pa": 3.5e9
+    }
+  ],
+  "actuators": [
+    {
+      "id": "motor",
+      "type": "rotational_motor",
+      "mode": "speed",
+      "body_a": "frame",
+      "body_b": "pinion",
+      "position": [0, 0, 0],
+      "axis": [0, 0, 1],
+      "law": { "type": "table", "points": [[0, 0], [0.2, 360], [1, 360]] }
+    }
+  ],
+  "forces": [
+    { "id": "load", "type": "torque", "body": "wheel", "vector": [0, 0, 0.2], "frame": "world" }
+  ],
+  "simulation": {
+    "duration": 1,
+    "time_step": 0.00001,
+    "output_interval": 0.002,
+    "gravity": [0, 0, -9.81]
+  }
+}

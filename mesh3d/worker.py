@@ -20,6 +20,20 @@ They write concept.png, sides.png, source/ (the shape as Hunyuan3D made it), req
   POST /analyze                {file, key, target}: the parts of a model in Studio's import folder (analyze.py)
   POST /generate               {"image": base64} or {"text"}: one object from Hunyuan3D-2 as GLB bytes, for MCP for
                                Blender's generate_3d (its local Hunyuan3D API) in the jobs' Blender
+
+Mechanism simulation (sim/, docs/mechanical-simulation.md): Project Chrono in its own Python, played back in Blender
+  POST /sim/mechanisms                  {"mechanism", "mechanism_id"?}: stores (or replaces) a mechanism → its id and
+                                        validation
+  GET  /sim/mechanisms[/<id>]           The stored mechanisms, or one with its validation
+  POST /sim/mechanisms/<id>/joints      {"joint"} · /actuators {"actuator"} · /forces {"force"}: adds one part
+  POST /sim/validate                    {"mechanism"} or {"mechanism_id"}: errors, warnings, assumptions
+  POST /sim/runs                        {"mechanism_id"} or {"mechanism"}, "simulation"?: queues a run → its sim_id
+  GET  /sim/runs[/<id>]                 The runs, or one run's state and progress
+  GET  /sim/runs/<id>/results           summary.json, metadata.json and the files
+  POST /sim/runs/<id>/cancel · /play    Stops a run (or its playback) · Blender playback {"render", "fps", "speed",
+                                        "width", "height"}
+  GET  /sim/runs/<id>/files/<name>      A result file (CSV, JSON, log, .blend, MP4, PNG)
+  GET  /sim/guide                       The mechanism format and rules, for the agent (sim/guide.md)
 """
 
 import json
@@ -47,6 +61,7 @@ sys.path.insert(0, os.environ.get("CAD_DIR", "/opt/cad"))
 import analyze  # noqa: E402 - the parts of a model, for Studio's "AI tối ưu"
 import review  # noqa: E402 - Claude making and fixing figures
 import shape  # noqa: E402 - Hunyuan3D-2 shaping figures from pictures
+from sim import runs as sim  # noqa: E402 - mechanism simulation with Project Chrono
 
 
 def claude_ready():
@@ -77,8 +92,73 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         if self.path == "/health":
             return self.reply(200, {"ok": True, "claude": claude_ready(), "running": shape.ids() + review.ids(),
-                                    "loaded": shape.loaded()})
+                                    "loaded": shape.loaded(), "chrono": sim.ready()})
+        if self.path.startswith("/sim/"):
+            return self.simulation("GET")
         self.reply(404, {"ok": False, "error": "NOT_FOUND"})
+
+    def simulation(self, method):
+        """The /sim routes: SimError answers with its status, other errors are the worker's (500)"""
+        path = self.path.split("?", 1)[0]
+        try:
+            if method == "GET" and path == "/sim/guide":
+                return self.send_file(Path(__file__).resolve().parent / "sim" / "guide.md", "text/markdown; charset=utf-8")
+            if method == "GET":
+                match = re.fullmatch(r"/sim/runs/([^/]+)/files/(.+)", path)
+                if match:
+                    return self.send_file(*sim.file_path(*match.groups()))
+            status, body = self.sim_route(method, path)
+        except sim.SimError as err:
+            return self.reply(err.status, {"ok": False, "error": err.code, "message": err.message,
+                                           **({"details": err.details} if err.details is not None else {})})
+        except Exception as err:  # noqa: BLE001 - the worker keeps serving
+            traceback.print_exc()
+            return self.reply(500, {"ok": False, "error": "SIM_ERROR", "message": str(err)[:500]})
+        self.reply(status, {"ok": True, **body})
+
+    def sim_route(self, method, path):
+        parts = path.strip("/").split("/")[1:]
+        body = self.body() if method == "POST" else {}
+        if method == "GET":
+            if parts == ["mechanisms"]:
+                return 200, {"mechanisms": sim.list_mechanisms()}
+            if len(parts) == 2 and parts[0] == "mechanisms":
+                mechanism = sim.load_mechanism(parts[1])
+                return 200, {"mechanism_id": parts[1], "mechanism": mechanism, "validation": sim.validate(mechanism)}
+            if parts == ["runs"]:
+                return 200, {"runs": sim.list_runs()}
+            if len(parts) == 2 and parts[0] == "runs":
+                return 200, {"status": sim.status(parts[1])}
+            if len(parts) == 3 and parts[0] == "runs" and parts[2] == "results":
+                return 200, sim.results(parts[1])
+        else:
+            if parts == ["mechanisms"]:
+                return 201, sim.create_mechanism(body.get("mechanism"), body.get("mechanism_id"))
+            if len(parts) == 3 and parts[0] == "mechanisms" and parts[2] in ("joints", "actuators", "forces"):
+                key = {"joints": "joint", "actuators": "actuator", "forces": "force"}[parts[2]]
+                return 201, sim.add_part(parts[1], parts[2], body.get(key))
+            if parts == ["validate"]:
+                mechanism = body.get("mechanism")
+                if mechanism is None:
+                    mechanism = sim.load_mechanism(str(body.get("mechanism_id") or ""))
+                return 200, {"validation": sim.validate(mechanism)}
+            if parts == ["runs"]:
+                return 202, sim.start_run(body.get("mechanism"), body.get("mechanism_id"), body.get("simulation"))
+            if len(parts) == 3 and parts[0] == "runs" and parts[2] == "cancel":
+                if not sim.cancel(parts[1]):
+                    raise sim.SimError(409, "SIM_NOT_RUNNING", "Mô phỏng không còn chạy.")
+                return 200, {}
+            if len(parts) == 3 and parts[0] == "runs" and parts[2] == "play":
+                return 202, sim.start_playback(parts[1], body)
+        raise sim.SimError(404, "NOT_FOUND", f"Không có {method} {path}.")
+
+    def send_file(self, path, content_type):
+        data = path.read_bytes()
+        self.send_response(200)
+        self.send_header("Content-Type", content_type)
+        self.send_header("Content-Length", str(len(data)))
+        self.end_headers()
+        self.wfile.write(data)
 
     def analyse(self):
         """POST /analyze {file, key, target}: the parts of /imports/<file> placed as Studio's `target` describes it"""
@@ -114,6 +194,8 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(glb)
 
     def do_POST(self):
+        if self.path.startswith("/sim/"):
+            return self.simulation("POST")
         if self.path == "/analyze":
             return self.analyse()
         if self.path == "/generate":
@@ -161,5 +243,6 @@ class Handler(BaseHTTPRequestHandler):
 if __name__ == "__main__":
     JOBS_DIR.mkdir(parents=True, exist_ok=True)
     shape.start()
+    sim.start()
     print(f"[mesh-worker] listening on :{PORT}, jobs in {JOBS_DIR}", flush=True)
     ThreadingHTTPServer(("0.0.0.0", PORT), Handler).serve_forever()

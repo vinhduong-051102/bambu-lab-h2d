@@ -92,6 +92,22 @@ export const GATEWAY_ROUTES: RouteDoc[] = [
   { method: 'POST', path: '/api/cad/jobs/:id/studio', category: 'Thiết kế AI', description: 'Gửi mô hình vào thư mục /imports của Bambu Studio (STL được tự sửa lưới)', body: '{"format": "stl"}' },
   { method: 'GET', path: '/api/cad/jobs/:id/files/:name', category: 'Thiết kế AI', description: 'File của mô hình: model.py, model.stl, model.step, model.3mf, preview.png, concept.png, report.json, fix.py, views.png (?download=1 để tải về)', exampleUrl: '/api/cad/jobs/<id>/files/preview.png' },
 
+  // Mechanism simulation (docs/mechanical-simulation.md): Project Chrono + Blender in the mesh3d container
+  { method: 'GET', path: '/api/sim/guide', category: 'Mô phỏng cơ cấu', description: 'Định dạng cơ cấu (schema_version 1), đơn vị, hệ trục và quy tắc cho agent (Markdown)', exampleUrl: '/api/sim/guide' },
+  { method: 'GET', path: '/api/sim/mechanisms', category: 'Mô phỏng cơ cấu', description: 'Các cơ cấu đã lưu (mới nhất trước)', exampleUrl: '/api/sim/mechanisms' },
+  { method: 'POST', path: '/api/sim/mechanisms', category: 'Mô phỏng cơ cấu', description: 'Lưu cơ cấu (JSON schema_version 1: bodies, joints, actuators, forces, simulation), kể cả chưa đủ; mechanism_id để thay bản cũ. Trả mã và kết quả kiểm tra', body: '{"mechanism": {"schema_version": 1, "units": {"length": "mm"}, "bodies": [...]}}' },
+  { method: 'GET', path: '/api/sim/mechanisms/:id', category: 'Mô phỏng cơ cấu', description: 'Một cơ cấu và kết quả kiểm tra của nó', exampleUrl: '/api/sim/mechanisms/<id>' },
+  { method: 'POST', path: '/api/sim/mechanisms/:id/:part', category: 'Mô phỏng cơ cấu', description: 'Thêm một khớp (joints {"joint"}), động cơ (actuators {"actuator"}) hoặc lực/lò xo (forces {"force"}); từ chối khi chính phần đó sai (body không có, trục 0…)', body: '{"joint": {"id": "j1", "type": "revolute", "body_a": "base", "body_b": "shaft", "position": [0, 0, 10], "axis": [0, 0, 1]}}' },
+  { method: 'POST', path: '/api/sim/validate', category: 'Mô phỏng cơ cấu', description: 'Kiểm tra cơ cấu: lỗi (đường dẫn trường + lý do), cảnh báo, giả định, bậc tự do ước tính', body: '{"mechanism_id": "m-..."}' },
+  { method: 'GET', path: '/api/sim/runs', category: 'Mô phỏng cơ cấu', description: 'Các lần mô phỏng (mới nhất trước)', exampleUrl: '/api/sim/runs' },
+  { method: 'POST', path: '/api/sim/runs', category: 'Mô phỏng cơ cấu', description: 'Chạy mô phỏng bằng Project Chrono (nền, lần lượt từng lần); simulation ghi đè thời gian/bước cho lần này. Trả sim_id', body: '{"mechanism_id": "m-...", "simulation": {"duration": 2}}' },
+  { method: 'GET', path: '/api/sim/runs/:id', category: 'Mô phỏng cơ cấu', description: 'Trạng thái, tiến độ, cảnh báo, lỗi của một lần mô phỏng và lần phát lại Blender', exampleUrl: '/api/sim/runs/<id>' },
+  { method: 'GET', path: '/api/sim/runs/:id/results', category: 'Mô phỏng cơ cấu', description: 'Tóm tắt (summary.json: hành trình, vận tốc, phản lực, kiểm tra so với lý thuyết), metadata.json và danh sách file', exampleUrl: '/api/sim/runs/<id>/results' },
+  { method: 'POST', path: '/api/sim/runs/:id/cancel', category: 'Mô phỏng cơ cấu', description: 'Dừng mô phỏng đang chạy hoặc đang chờ (hoặc lần phát lại Blender)', body: '{}' },
+  { method: 'POST', path: '/api/sim/runs/:id/play', category: 'Mô phỏng cơ cấu', description: 'Phát lại kết quả trong Blender: animation từ body_transforms.csv, tự kiểm tra vị trí/chiều quay, lưu .blend, render MP4 (render=false chỉ dựng .blend)', body: '{"render": true, "fps": 30, "speed": 1}' },
+  { method: 'GET', path: '/api/sim/runs/:id/files/:name', category: 'Mô phỏng cơ cấu', description: 'File kết quả: body_transforms.csv, joint_results.csv, summary.json, metadata.json, model.json, mechanism.json, simulation.log', exampleUrl: '/api/sim/runs/<id>/files/summary.json' },
+  { method: 'GET', path: '/api/sim/runs/:id/files/blender/:name', category: 'Mô phỏng cơ cấu', description: 'File của lần phát lại: playback.mp4, playback.blend, preview.png, check.json, blender.log', exampleUrl: '/api/sim/runs/<id>/files/blender/playback.mp4' },
+
   // Timelapse
   { method: 'GET', path: '/api/timelapse', category: 'Lịch sử in', description: 'Video timelapse trên máy in (mới nhất trước), kèm bản in tương ứng trong lịch sử', exampleUrl: '/api/timelapse' },
   { method: 'GET', path: '/api/timelapse/:name', category: 'Lịch sử in', description: 'Phát/tải video timelapse (lấy từ máy in lần đầu xem, hỗ trợ tua)' },

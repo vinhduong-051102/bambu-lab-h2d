@@ -1,0 +1,33 @@
+{
+  "schema_version": 1,
+  "name": "Con lắc vật lý (thanh nhôm 200 mm), lệch 5°",
+  "units": { "length": "mm", "mass": "kg", "angle": "deg" },
+  "bodies": [
+    {
+      "id": "support",
+      "name": "Giá treo",
+      "fixed": true,
+      "geometry": { "type": "box", "size": [40, 40, 10] },
+      "position": [0, 0, 310],
+      "visual": { "color": "#5A6270" }
+    },
+    {
+      "id": "rod",
+      "name": "Thanh nhôm 10 × 10 × 200",
+      "geometry": { "type": "box", "size": [10, 10, 200] },
+      "density": 2700,
+      "position": [-8.715574274765817, 0, 200.38053019082544],
+      "orientation": { "euler_xyz": [0, 5, 0] },
+      "visual": { "color": "#3C8DBC" }
+    }
+  ],
+  "joints": [
+    { "id": "pivot", "type": "revolute", "body_a": "support", "body_b": "rod", "position": [0, 0, 300], "axis": [0, 1, 0] }
+  ],
+  "simulation": {
+    "duration": 3,
+    "time_step": 0.0005,
+    "output_interval": 0.005,
+    "gravity": [0, 0, -9.81]
+  }
+}

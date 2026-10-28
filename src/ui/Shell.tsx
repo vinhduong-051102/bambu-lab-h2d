@@ -12,6 +12,7 @@ import { FanCard } from './printer/FanCard';
 import { JobCard } from './printer/JobCard';
 import { TemperatureCard } from './printer/TemperatureCard';
 import { PrintHistoryCard } from './prints/PrintHistoryCard';
+import { SimCard } from './sim/SimCard';
 import { StudioCard } from './studio/StudioCard';
 import { ConsoleCard } from './system/ConsoleCard';
 import { DiagnosticsCard } from './system/DiagnosticsCard';
@@ -23,9 +24,10 @@ const WS_BADGE: Record<WsStatus, { status: 'success' | 'error' | 'processing'; t
   offline: { status: 'error', text: 'WS Disconnected' },
 };
 
-/** Which optional pages the gateway has set up: Studio (STUDIO_URL) and AI modelling (CAD_WORKER_URL / mesh3d) */
+/** Which optional pages the gateway has set up: Studio (STUDIO_URL), AI modelling (CAD_WORKER_URL / mesh3d) and
+ * mechanism simulation (MESH_WORKER_URL, whose worker answers /sim) */
 function useFeatures() {
-  const [features, setFeatures] = useState({ studio: false, cad: false });
+  const [features, setFeatures] = useState({ studio: false, cad: false, sim: false });
   useEffect(() => {
     let cancelled = false;
     const enabled = (url: string) =>
@@ -33,8 +35,11 @@ function useFeatures() {
         .then((res) => (res.ok ? res.json() : null))
         .then((data) => Boolean(data?.enabled))
         .catch(() => false);
-    Promise.all([enabled('/api/studio'), enabled('/api/cad')]).then(([studio, cad]) => {
-      if (!cancelled) setFeatures({ studio, cad });
+    const simulates = fetch('/api/sim/runs')
+      .then((res) => res.ok)
+      .catch(() => false);
+    Promise.all([enabled('/api/studio'), enabled('/api/cad'), simulates]).then(([studio, cad, sim]) => {
+      if (!cancelled) setFeatures({ studio, cad, sim });
     });
     return () => {
       cancelled = true;
@@ -164,7 +169,14 @@ export function Shell() {
   const { printer } = useLive();
   const { compact } = useActions();
   const features = useFeatures();
-  const available = ['printer', ...(features.studio ? ['studio'] : []), ...(features.cad ? ['cad'] : []), 'prints', 'system'];
+  const available = [
+    'printer',
+    ...(features.studio ? ['studio'] : []),
+    ...(features.cad ? ['cad'] : []),
+    ...(features.sim ? ['sim'] : []),
+    'prints',
+    'system',
+  ];
   const [page, go] = usePage(available);
   const [apiOpen, setApiOpen] = useState(false);
   const [capOpen, setCapOpen] = useState(false);
@@ -194,6 +206,7 @@ export function Shell() {
       forceRender: true,
       children: <CadCard onBusyChange={setCadBusy} />,
     },
+    features.sim && { key: 'sim', label: '⚙️ Mô phỏng', children: page === 'sim' ? <SimCard /> : null },
     { key: 'prints', label: '🕘 Lịch sử in', children: <PrintHistoryCard /> },
     { key: 'system', label: '🛠️ Hệ thống', children: grid([<ConsoleCard key="console" />, {}], [<DiagnosticsCard key="diag" />, {}]) },
   ].filter((p) => p !== false);

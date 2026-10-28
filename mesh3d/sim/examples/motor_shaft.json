@@ -1,0 +1,53 @@
+{
+  "schema_version": 1,
+  "name": "Trục quay có động cơ (MVP)",
+  "units": { "length": "mm", "mass": "kg", "angle": "deg" },
+  "bodies": [
+    {
+      "id": "base",
+      "name": "Đế",
+      "fixed": true,
+      "geometry": { "type": "box", "size": [80, 80, 10] },
+      "position": [0, 0, 5],
+      "visual": { "color": "#5A6270" }
+    },
+    {
+      "id": "shaft",
+      "name": "Trục thép Ø10 × 100",
+      "geometry": { "type": "cylinder", "radius": 5, "length": 100, "axis": "z" },
+      "density": 7850,
+      "position": [0, 0, 60],
+      "visual": { "color": "#D9A441" }
+    },
+    {
+      "id": "arm",
+      "name": "Tay quay nhôm 60 × 10 × 6",
+      "geometry": { "type": "box", "size": [60, 10, 6] },
+      "density": 2700,
+      "position": [25, 0, 113],
+      "visual": { "color": "#3C8DBC" }
+    }
+  ],
+  "joints": [
+    { "id": "bearing", "type": "revolute", "body_a": "base", "body_b": "shaft", "position": [0, 0, 10], "axis": [0, 0, 1] },
+    { "id": "arm_fix", "type": "fixed", "body_a": "shaft", "body_b": "arm", "position": [0, 0, 110] }
+  ],
+  "actuators": [
+    {
+      "id": "motor",
+      "type": "rotational_motor",
+      "mode": "speed",
+      "body_a": "base",
+      "body_b": "shaft",
+      "position": [0, 0, 10],
+      "axis": [0, 0, 1],
+      "law": { "type": "constant", "value": 360 }
+    }
+  ],
+  "simulation": {
+    "duration": 3,
+    "time_step": 0.001,
+    "output_interval": 0.01,
+    "gravity": [0, 0, -9.81]
+  }
+}
