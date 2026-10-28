@@ -21,7 +21,9 @@ assigns the finished solid to a variable named `result`. The build runner execut
   - holes print about 0.2 mm small: add 0.2 mm to the diameter of holes for screws, pins and shafts;
   - parts that fit together need 0.2–0.3 mm clearance per side;
   - text embossed or engraved at least 0.6 mm deep and 5 mm tall.
-- No imports beyond build123d, math and the standard library. No file or network access.
+- No imports beyond build123d, math and the standard library. No file or network access. The one exception:
+  for a tolerance calibration print (holes, pins and fit slots to measure the printer's real tolerances), use
+  `from calibration import calibration_plate` and `result = calibration_plate()` rather than drawing one.
 
 ## build123d in brief
 

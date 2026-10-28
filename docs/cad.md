@@ -202,6 +202,73 @@ The worker's Python tests (`cad/tests/`) run in the image, on the scripts of a c
 docker run --rm -v "$PWD/cad:/opt/cad:ro" -e PYTHONDONTWRITEBYTECODE=1 -w /opt/cad bambu-lab-h2d/cad:latest   python -m unittest discover -s tests -t .
 ```
 
+## Hiệu chuẩn dung sai
+
+Fit analysis needs what the printer really does to sizes, not the nominal model: how much smaller holes come out,
+how much larger pins, how far outer sizes are off, and the smallest gap at which two printed parts still slide.
+`cad/calibration.py` is a print that measures all four with a caliper.
+
+| Body | What it has |
+| --- | --- |
+| Plate (4 mm) | Front edge: 5 U-slots, each the loose pin's Ø6 + 2 × a clearance of **0.1 … 0.5 mm** (6.2 … 7.0 mm wide, 12 mm deep). Middle: vertical holes **Ø3 … Ø12**. Back: pins **Ø3 … Ø12**, 10 mm tall. The number of each is engraved behind it (towards +Y): diameters in mm, clearances as 0.1 … 0.5. |
+| Loose pin | Ø6 × 12 mm, standing. It is tried in each slot. |
+| XY block | 20 × 20 × 10 mm. |
+| Horizontal holes | Ø6 and Ø10 along Y through a 16 mm tall block (engraved 6 and 10 on top), printed on their side as axle holes in a part lying down would be. |
+
+### Printing it
+
+1. Build it as a job, from the API or Antigravity (`cad_build`):
+   ```bash
+   curl -s localhost:3000/api/cad/builds -H 'Content-Type: application/json' \
+     -d '{"title": "Hiệu chuẩn dung sai", "code": "from calibration import calibration_plate\nresult = calibration_plate()"}'
+   ```
+   `calibration_plate()` takes the parameters in `DEFAULTS` at the top of `cad/calibration.py`, e.g.
+   `calibration_plate(clearances=[0.15, 0.2, 0.25, 0.3])` for finer steps, or `fit_pin_diameter=8`.
+2. **📤 Gửi sang Studio** on the job, and print it as it lies, **with the filament, nozzle, layer height and process
+   profile of the parts you will fit together**: every one of them changes the numbers. No supports.
+3. In Studio, note **X-Y hole compensation**, **X-Y contour compensation** and **Elephant foot compensation**
+   (Quality tab). The numbers measured include whatever they are set to. Leave them at 0 when the fit analysis
+   corrects the model itself; otherwise keep them as they will be for the real parts.
+4. Let the print cool before taking it off the plate; measure the next day if the material absorbs water (PA, TPU).
+
+### Measuring
+
+A digital caliper, 0.01 mm resolution. Measure each size twice at 90° to each other (along X and along Y) and use
+the mean. Away from the bottom layer (elephant foot): pins at mid-height, holes from the top face.
+
+| Number | Measure | Formula |
+| --- | --- | --- |
+| `hole_shrink_mm` | The 10 vertical holes, inner jaws (a drill bit or gauge pin that just slides through is more exact, especially below Ø5) | median over the holes of **(nominal − measured)**. Positive: holes come out small |
+| `shaft_growth_mm` | The 10 pins, outer jaws, at mid-height | median over the pins of **(measured − nominal)**. Positive: pins come out large |
+| `xy_tolerance_mm` | The XY block, X and Y (outer jaws, mid-height) | **max(\|X − 20\|, \|Y − 20\|)**: the ± error on an outer size. (Z − 10 says how far the first layer is squashed; not one of the four) |
+| `min_clearance_mm` | Push the loose pin into each slot from the front edge, by hand | the **smallest clearance whose slot the pin slides into all the way and turns in, without force**. All too tight: more than 0.5 mm, print with larger `clearances`. 0.1 already free: 0.1 or less |
+
+The median rather than the mean, so one bad hole (a blob, a hole too small for the jaws) does not move the
+number. If the differences grow with the diameter instead of staying about the same, the printer's scale is off
+(steps/mm, shrinkage of the material): the offsets then describe only the sizes near the middle of the range.
+
+**Horizontal holes.** Measure the Ø6 and Ø10 holes in the side block across (X) and up (Z). Up is usually the
+smaller one: the top of a hole printed on its side sags as it bridges. When `nominal − Z` is clearly larger than
+`hole_shrink_mm`, use it (as `hole_shrink_horizontal_mm`) for holes whose axis lies flat on the plate.
+
+**Check.** A pin slides when the gap left per side is still positive:
+`clearance − (hole_shrink_mm + shaft_growth_mm) / 2 > 0`, plus a little for roughness. A slot is a hole: if
+`min_clearance_mm` is far from `(hole_shrink_mm + shaft_growth_mm) / 2 + 0.05`, measure again, or trust the slots:
+they test the fit itself.
+
+**Example.** Holes measured 2.82, 3.85, 4.86, 5.84, 6.85, 7.86, 8.85, 9.84, 10.86, 11.85 → nominal − measured
+0.18, 0.15, 0.14, 0.16, 0.15, 0.14, 0.15, 0.16, 0.14, 0.15 → `hole_shrink_mm` = 0.15. Pins 3.05 … 12.04, median
+growth 0.05 → `shaft_growth_mm` = 0.05. Block 20.07 × 19.96 → `xy_tolerance_mm` = 0.07. The pin is stuck in 0.1,
+slides in 0.2 → `min_clearance_mm` = 0.2 (check: 0.2 − (0.15 + 0.05) / 2 = 0.1 > 0).
+
+```json
+{ "hole_shrink_mm": 0.15, "shaft_growth_mm": 0.05, "xy_tolerance_mm": 0.07, "min_clearance_mm": 0.2 }
+```
+
+To make parts fit, model a hole for a Ø*D* pin at *D* + 2 × `min_clearance_mm`, or, sized from the numbers,
+*D* + `hole_shrink_mm` + `shaft_growth_mm` + 2 × the gap you want. These hold for one printer, filament and
+profile: print the plate again for another.
+
 ## Antigravity (MCP)
 
 `cad/mcp/server.mjs` is an MCP server (stdio, no dependencies) that gives an agent the same tools. In Antigravity, the agent writes the build123d code itself, on Antigravity's own plan, and the gateway builds it:
