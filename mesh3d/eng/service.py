@@ -5,6 +5,7 @@ warnings, status and files; the slow ones (FEA) run in the background and are po
 """
 
 import base64
+import re
 import time
 
 from . import assembly, clearance, fea, geometry, motion, printability, report, schema, visualize
@@ -158,6 +159,56 @@ def generate_report(body):
     model = model_of(body)
     result, text = report.build(model, body.get("analysis_ids"))
     return {"result": result, "markdown": text}
+
+
+JOB_ID_RE = re.compile(r"^[a-z0-9][a-z0-9-]{5,63}$")
+SUMMARY_KEYS = ("analysis_id", "kind", "status", "checks", "assumptions", "missing", "warnings", "files", "data")
+
+
+def job_model_id(job_id):
+    """The engineering model of a design job: one model per job, a new version per check"""
+    return f"job-{job_id}"
+
+
+def check_job(body):
+    """The dashboard's "Kiểm tra kỹ thuật" on one finished design job: its model.stl imported as a new version of the
+    job's model, then the checks that need no loads or joints (mesh, walls, printability) for the print setup given,
+    the wall thickness in Blender, and the report. FEA and motion need the user's loads and joints: through MCP."""
+    job_id = str(body.get("job_id") or "")
+    if not JOB_ID_RE.match(job_id):
+        raise EngError(400, "BAD_JOB", "Mã job không hợp lệ.")
+    source = resolve_input(f"jobs/{job_id}/out/model.stl")
+    pc = print_config(body)
+    model = geometry.import_model([{"path": str(source), "label": "model.stl"}], body.get("name") or job_id,
+                                  model_id=job_model_id(job_id))
+    results = {}
+    for kind, run in (("inspect", lambda: geometry.inspect(model)),
+                      ("validate", lambda: geometry.validate(model, None, pc)),
+                      ("clearance", lambda: clearance.analyze(model, pc, pairs=[])),
+                      ("printability", lambda: printability.analyze(model, pc))):
+        stamp = begin()
+        results[kind] = finish(run(), stamp)
+    if body.get("render", True) is not False:
+        results["visualize"] = visualize.visualize(model, "thickness", print_config=pc)
+    report_result, _ = report.build(model)
+    return {"model": public(model), "report": report_result,
+            "results": {k: {key: r.get(key) for key in SUMMARY_KEYS} for k, r in results.items()}}
+
+
+def last_job_check(job_id):
+    """The latest report of a job's checks, or None"""
+    if not JOB_ID_RE.match(str(job_id or "")):
+        raise EngError(400, "BAD_JOB", "Mã job không hợp lệ.")
+    reports = list_analyses(job_model_id(job_id), "report", limit=1)
+    if not reports:
+        return {"report": None, "results": {}}
+    rep = load_analysis(reports[0]["analysis_id"])
+    results = {}
+    for kind, ids in (rep.get("data") or {}).get("analyses", {}).items():
+        r = load_analysis(ids[0]) if ids else None
+        if r:
+            results[kind] = {key: r.get(key) for key in SUMMARY_KEYS}
+    return {"report": rep, "results": results}
 
 
 def visualize_results(body):

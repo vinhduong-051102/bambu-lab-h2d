@@ -63,6 +63,21 @@ gives NOT_EVALUATED and its error, never numbers.
   Datasheet numbers of moulded specimens overstate printed strength: a safety factor from them stays a WARNING.
 - Loads, supports, required safety factor, allowed displacement, masses or densities.
 
+## Dashboard: "Kiểm tra kỹ thuật"
+
+Every finished model in **✨ Thiết kế AI** has a **🔬 Kiểm tra kỹ thuật** button (`src/ui/cad/EngCheck.tsx`). It
+asks for the print setup (printer, filament, nozzle, layer height, walls, infill, overhang limit, and the tolerances
+measured with the calibration print; empty means unknown, remembered in this browser) and runs `POST /api/eng/check`
+on the job's `out/model.stl`: a new version of the model `job-<job id>`, the mesh checks, wall thickness,
+printability, a Blender render of the walls, and the report. The dialog lists the checks worst first, the report's
+sections, what data is still missing, and links the HTML report and the `.blend`; opening it again shows the latest
+check (`GET /api/eng/checks/<job id>`). About 20 s for a 15-part CAD model or a 250k-face figure. Strength (FEA)
+and motion need loads, supports and joints, so they stay with Claude through MCP.
+
+Ray casting (wall thickness, overhangs) uses Embree (`embreex` in the image): on a 250k-face figure the walls take
+0.5 s instead of 104 s. The thickness render measures at most 60 000 faces and gives the rest their nearest measured
+value, so a dense mesh cannot exhaust memory (one ray per face of that figure without Embree reached 18 GB).
+
 ## Setup
 
 ```

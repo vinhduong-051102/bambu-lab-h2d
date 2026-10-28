@@ -20,6 +20,28 @@ from .schema import PASS, WARNING, check
 from .store import EngError, analysis_dir, new_analysis, now, read_json, write_json, BLENDER_CMD
 
 GREY = np.array([170, 175, 185, 255])
+# The thickness view measures this many faces, give or take: enough to show a thin plate, quick to render
+THICKNESS_FACES = 60000
+
+
+def refine(mesh, budget):
+    """A copy whose long triangles are split until it has about `budget` faces: each round halves the edges of the
+    longest ones (CAD exports have slivers hundreds of mm long; splitting them all to one size would run out of
+    memory)"""
+    v, f = np.asarray(mesh.vertices), np.asarray(mesh.faces)
+    for _ in range(16):
+        tri = v[f]
+        longest = np.max(np.linalg.norm(tri - np.roll(tri, 1, axis=1), axis=2), axis=1)
+        room = (budget - len(f)) // 3  # a split face becomes four
+        if room <= 0:
+            break
+        order = np.argsort(longest)[::-1][:room]
+        # Only faces clearly longer than the typical one
+        pick = order[longest[order] > 2 * np.median(longest)]
+        if not len(pick):
+            break
+        v, f = trimesh.remesh.subdivide(v, f, face_index=pick)
+    return trimesh.Trimesh(v, f, process=False)
 
 
 def ramp(values, lo, hi):
@@ -139,15 +161,24 @@ def visualize(model, mode, analysis_id=None, sim_id=None, print_config=None, def
         for cid, mesh in geometry.meshes(model).items():
             # Each face of a finer copy measured by its own ray straight in, and coloured whole (its own vertices),
             # so a thin plate is not tinted by a thick neighbour sharing its corners
-            v, f = trimesh.remesh.subdivide_to_size(mesh.vertices, mesh.faces, max_edge=float(max(mesh.extents)) / 80,
-                                                    max_iter=12)
-            fine = trimesh.Trimesh(v, f, process=False)
-            inward = -fine.face_normals
-            hits, rays, _ = mesh.ray.intersects_location(fine.triangles_center + inward * 1e-4, inward,
-                                                         multiple_hits=False)
-            d = np.full(len(fine.faces), np.nan)
+            fine = refine(mesh, THICKNESS_FACES)
+            # A dense mesh (a 250k-face figure) is measured on THICKNESS_FACES of its faces, the rest taking their
+            # nearest measured neighbour's value: one ray per face would take minutes and gigabytes without Embree
+            measured = np.arange(len(fine.faces))
+            if len(measured) > THICKNESS_FACES:
+                measured = np.random.default_rng(7).choice(measured, THICKNESS_FACES, replace=False)
+            starts, inward = fine.triangles_center[measured], -fine.face_normals[measured]
+            hits, rays, _ = mesh.ray.intersects_location(starts + inward * 1e-4, inward, multiple_hits=False)
+            depth = np.full(len(measured), np.nan)
             if len(rays):
-                d[rays] = np.linalg.norm(np.asarray(hits).reshape(-1, 3) - fine.triangles_center[rays], axis=1)
+                depth[rays] = np.linalg.norm(np.asarray(hits).reshape(-1, 3) - starts[rays], axis=1)
+            d = np.full(len(fine.faces), np.nan)
+            d[measured] = depth
+            if len(measured) < len(fine.faces):
+                from scipy.spatial import cKDTree
+
+                _, near = cKDTree(starts).query(fine.triangles_center)
+                d = depth[near]
             found = d[~np.isnan(d)]
             top = max(top, float(np.percentile(found, 95)) if len(found) else 0)
             hi = limit * 3 if limit else top
@@ -178,7 +209,7 @@ def visualize(model, mode, analysis_id=None, sim_id=None, print_config=None, def
         raise EngError(400, "BAD_MODE", "mode phải là fea, interference, thickness hoặc motion.")
     result["files"] = {"result.png": "result.png", "result.blend": "result.blend", "blender.log": "blender.log"}
     result["checks"].append(check("render", PASS, "Hình kết quả trong Blender", "result.png, result.blend"))
-    result.update(status=PASS, finished_at=now(), engine={"blender": blender_version()})
+    result.update(status=PASS, state="completed", finished_at=now(), engine={"blender": blender_version()})
     write_json(folder / "result.json", result)
     return result
 

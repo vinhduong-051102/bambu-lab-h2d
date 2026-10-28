@@ -20,6 +20,7 @@ import { useEffect, useMemo, useState, type ClipboardEvent, type ReactNode } fro
 import { deltaLabel } from '../../domain/filaments/colourMixing';
 import { fileUrl, formatDuration, formatProgress, formatSize, isBusy, jobSteps, modelName, ORIGINS, REVISE_PLACEHOLDERS, STATE_LABELS, STEP_LABELS, versionLabel } from '../cad';
 import { formatPrintTime } from '../prints';
+import { EngCheckButton } from './EngCheck';
 
 /** As many pictures as the gateway takes with one revision */
 const MAX_PASTED_IMAGES = 4;
@@ -445,6 +446,7 @@ export function CadJobCard(props: {
             {done && job.files?.threemf && link('model.3mf', '3MF màu', { download: true, icon: <DownloadOutlined /> })}
             {done && link('model.stl', 'STL', { download: true, icon: <DownloadOutlined /> })}
             {done && job.files?.step && link('model.step', 'STEP', { download: true, icon: <DownloadOutlined /> })}
+            {done && <EngCheckButton job={job} />}
             {job.files?.code && link('model.py', 'Code', { icon: <FileTextOutlined /> })}
             {!busy && job.files?.code && (
               <Button size="small" icon={<EditOutlined />} onClick={() => setRevising(!revising)}>

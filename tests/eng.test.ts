@@ -32,6 +32,8 @@ function fakeWorker() {
       return res.end(PNG);
     }
     if (req.url === '/eng/analyses?model_id=m-20261028-120000-ab12') return reply(200, { ok: true, analyses: [] });
+    if (req.url === '/eng/check' && req.method === 'POST') return reply(200, { ok: true, report: { status: 'WARNING' }, results: {} });
+    if (req.url === '/eng/checks/20261028-101211-01bd') return reply(200, { ok: true, report: null, results: {} });
     reply(404, { ok: false, error: 'NOT_FOUND', message: 'Không có.' });
   });
   return { server, seen };
@@ -80,6 +82,15 @@ describe('Engineering analysis (/api/eng)', () => {
     expect(Array.from(png.rawBody)).toEqual(Array.from(PNG));
     const list = await app.inject({ method: 'GET', url: '/api/eng/analyses?model_id=m-20261028-120000-ab12' });
     expect(list.json()).toMatchObject({ success: true, analyses: [] });
+  });
+
+  it('runs and reads the design tab\'s check of a job', async () => {
+    const run = await app.inject({ method: 'POST', url: '/api/eng/check', payload: { job_id: '20261028-101211-01bd', print: { nozzle_mm: 0.4 } } });
+    expect(run.json()).toMatchObject({ success: true, report: { status: 'WARNING' } });
+    expect(worker.seen[0]).toMatchObject({ method: 'POST', url: '/eng/check', body: { job_id: '20261028-101211-01bd' } });
+    const last = await app.inject({ method: 'GET', url: '/api/eng/checks/20261028-101211-01bd' });
+    expect(last.json()).toEqual({ success: true, report: null, results: {} });
+    expect(engGetPath(['checks', '../jobs'])).toBeNull();
   });
 
   it('refuses unknown tools and paths that leave the analysis folder', async () => {
