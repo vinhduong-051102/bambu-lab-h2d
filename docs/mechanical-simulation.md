@@ -3,6 +3,7 @@
 An agent describes a mechanism in JSON: bodies, joints, motors, springs. **Project Chrono** simulates it on this
 computer, and **Blender** plays the motion back as an animation. Nothing goes to a cloud service or a paid
 simulator. The design and its risks are in [mechanical-simulation-plan.md](mechanical-simulation-plan.md).
+The same mechanisms also run live, acted on while they run (drag, push, motors): [interactive-physics.md](interactive-physics.md).
 
 ```
 Agent (Claude Code, Antigravity …) ── MCP: cad/mcp/server.mjs, tools sim_*

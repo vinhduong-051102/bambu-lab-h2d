@@ -93,6 +93,7 @@ const envSchema = z.object({
   // Mesh worker container (docker-compose.mesh3d.yml): figures shaped by Hunyuan3D-2 from a picture, or made from a
   // description, and finished by Claude in Blender (MCP for Blender)
   MESH_WORKER_URL: z.preprocess((val) => (typeof val === 'string' && val.trim() === '' ? undefined : val), z.string().url().optional()),
+  SIM_LIVE_URL: z.preprocess((val) => (typeof val === 'string' && val.trim() === '' ? undefined : val), z.string().url().optional()),
   // Bambu Lab's filament colour catalogue (from Bambu Studio's repository), cached here after the first download
   BAMBU_COLOR_CODES_FILE: z.preprocess((val) => (typeof val === 'string' && val.trim() === '' ? undefined : val), z.string().default('./data/bambu/filaments_color_codes.json')),
   // Bambu Studio's colour mixing recipes, cached here after the first download

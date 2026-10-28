@@ -20,6 +20,7 @@ services:
       # in .env are the host's, not this container's
       - CAD_WORKER_URL=http://bambu-cad:8000
       - MESH_WORKER_URL=http://bambu-mesh3d:8000
+      - SIM_LIVE_URL=http://bambu-sim-live:8000
       # Studio runs next to the gateway, so the dashboard points it at the host it was opened from
       - STUDIO_ON_GATEWAY_HOST=true
     volumes:

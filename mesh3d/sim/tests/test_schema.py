@@ -44,8 +44,9 @@ class Examples(unittest.TestCase):
         for path in EXAMPLES.glob("*.json"):
             with self.subTest(path.name):
                 result = schema.normalise(json.loads(path.read_text(encoding="utf-8")))
-                # The pendulum swings freely; the contact gears' wheel turns only as the teeth push it
-                free = {"pendulum": 1, "gear_contact": 1}
+                # The pendulum swings freely; the contact gears' wheel turns only as the teeth push it; the drop's
+                # box and ball are free bodies (6 each)
+                free = {"pendulum": 1, "gear_contact": 1, "drop_box": 12}
                 self.assertEqual(result["model"]["dof_estimate"], free.get(path.stem, 0))
 
     def test_si_units(self):

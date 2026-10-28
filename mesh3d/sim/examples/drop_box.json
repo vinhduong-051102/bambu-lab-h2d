@@ -1,0 +1,45 @@
+{
+  "schema_version": 1,
+  "name": "Hộp và bi rơi xuống nền (va chạm)",
+  "units": { "length": "mm", "mass": "kg", "angle": "deg" },
+  "bodies": [
+    {
+      "id": "ground",
+      "name": "Nền",
+      "fixed": true,
+      "geometry": { "type": "box", "size": [600, 600, 20] },
+      "position": [0, 0, -10],
+      "collision": true,
+      "material": { "friction": 0.5 },
+      "visual": { "color": "#4B5563" }
+    },
+    {
+      "id": "box",
+      "name": "Hộp PLA 40 × 30 × 20",
+      "geometry": { "type": "box", "size": [40, 30, 20] },
+      "density": 1240,
+      "position": [0, 0, 150],
+      "orientation": { "euler_xyz": [20, 10, 0] },
+      "collision": true,
+      "material": { "friction": 0.5 },
+      "visual": { "color": "#3B82F6" }
+    },
+    {
+      "id": "ball",
+      "name": "Bi thép Ø20",
+      "geometry": { "type": "sphere", "radius": 10 },
+      "density": 7850,
+      "position": [80, 40, 250],
+      "collision": true,
+      "material": { "friction": 0.3, "restitution": 0.4 },
+      "visual": { "color": "#D9A441" }
+    }
+  ],
+  "simulation": {
+    "duration": 3,
+    "time_step": 0.001,
+    "output_interval": 0.01,
+    "gravity": [0, 0, -9.81],
+    "collision": { "enabled": true }
+  }
+}

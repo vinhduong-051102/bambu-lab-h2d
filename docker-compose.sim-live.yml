@@ -1,0 +1,40 @@
+# Interactive simulation (docs/interactive-physics.md): Project Chrono kept running while the dashboard's viewer
+# drags bodies, pushes them, changes motors and gravity. The mesh3d image already has Chrono, so this only starts
+# its own process (sim/live.py) next to the mesh worker; the mesh worker and its offline runs are not touched.
+#   docker compose -f docker-compose.sim-live.yml up -d
+# Then in .env: SIM_LIVE_URL=http://127.0.0.1:3104 (the gateway's own compose file already points it here)
+# Stop it (and roll it back) with: docker compose -f docker-compose.sim-live.yml down
+services:
+  sim-live:
+    image: bambu-lab-h2d/mesh3d:latest
+    container_name: bambu-sim-live
+    restart: unless-stopped
+    entrypoint: ["/opt/chrono/bin/python", "/opt/mesh3d/sim/live.py"]
+    command: []
+    environment:
+      - SIM_DIR=/sim
+      - JOBS_DIR=/jobs
+      - ENG_DIR=/eng
+      - PYTHONUNBUFFERED=1
+      - PYTHONDONTWRITEBYTECODE=1
+      # Sessions at once, and how long one nobody watches or touches keeps running
+      - SIM_LIVE_MAX_SESSIONS=${SIM_LIVE_MAX_SESSIONS:-2}
+      - SIM_LIVE_IDLE_S=${SIM_LIVE_IDLE_S:-600}
+      - TZ=Asia/Ho_Chi_Minh
+    volumes:
+      # The simulation code, shared with the mesh worker
+      - ./mesh3d:/opt/mesh3d:ro
+      # Stored mechanisms and runs (a session can open a run exactly as it ran), read only
+      - ./data/sim:/sim:ro
+      # Meshes the mechanisms name (jobs/…, eng/models/…), read only
+      - ./data/cad/jobs:/jobs:ro
+      - ./data/eng:/eng:ro
+    ports:
+      # Only the gateway talks to it: the dashboard reaches sessions through /api/sim/live
+      - "127.0.0.1:3104:8000"
+    # The CPU only: no GPU, and a session's memory is small
+    mem_limit: 2g
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL

@@ -563,6 +563,117 @@ const ENG_TOOLS = [
   },
 ];
 
+// Interactive simulation (docs/interactive-physics.md): a live Chrono session the user drags and pushes in the
+// dashboard while it runs. Everything is SI: m, kg, s, rad, N, N·m, positions and vectors in the world (Z up).
+const sessionId = { type: 'string', description: 'From sim_start_interactive' };
+const LIVE_TOOLS = [
+  {
+    name: 'sim_start_interactive',
+    description:
+      'Start a live simulation: Chrono keeps running in real time (when it can: the state says behind and the ' +
+      'real-time factor otherwise) and the user acts on it in the dashboard (tab ⚙️ Mô phỏng: drag bodies with the ' +
+      'mouse, push them, change motors and gravity), or you do with sim_control_interactive and sim_act_interactive. ' +
+      'From a stored mechanism (mechanism_id), a run as it ran (sim_id), an example (drop_box, motor_shaft, pendulum, ' +
+      "gear_pair, gear_contact) or a mechanism in sim_guide's format. Returns session_id, the bodies (which are " +
+      'fixed or held by joints), the motors with their SI units, and the state. Tell the user to open the dashboard ' +
+      'tab to interact; for full results and a video, run the same mechanism with sim_run_simulation.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        mechanism_id: { type: 'string' },
+        sim_id: { type: 'string', description: 'A run: its model exactly as it ran (meshes that collide need this)' },
+        example: { type: 'string', enum: ['drop_box', 'motor_shaft', 'pendulum', 'gear_pair', 'gear_contact'] },
+        mechanism: { type: 'object', description: 'A mechanism (sim_guide)' },
+        paused: { type: 'boolean', description: 'Start paused (default: running)' },
+      },
+      additionalProperties: false,
+    },
+  },
+  {
+    name: 'sim_control_interactive',
+    description:
+      "Control a live session's time: pause, resume, step (count steps of its fixed time step, then paused), reset " +
+      '(to the start; overrides changes the initial conditions for this reset: gravity [m/s²], friction ' +
+      '{body: μ}, position {body: [m]} or velocity {body: [m/s]} of free bodies), or speed (value: 0.01–100 × real time).',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        session_id: sessionId,
+        action: { type: 'string', enum: ['pause', 'resume', 'step', 'reset', 'speed'] },
+        count: { type: 'integer', minimum: 1, maximum: 100000 },
+        value: { type: 'number' },
+        overrides: { type: 'object' },
+      },
+      required: ['session_id', 'action'],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: 'sim_act_interactive',
+    description:
+      'Act on a live session while it runs, through Chrono (joints, motors and contacts still apply): push (force ' +
+      '[N] on body, at point [m] or its centre of mass, for duration s, default 0.1), twist (torque [N·m]), motor ' +
+      '(id, value in its SI unit: rad/s, rad, N·m, m/s, m or N; enabled true/false), gravity (vector [m/s²]), spring ' +
+      '(id, stiffness, damping), drag (body, point grabbed [m], target [m]: a hand pulling that point with a finite ' +
+      'force; then release), teleport (a body no joint holds to position [m], velocity zeroed: not physical), select ' +
+      '(the body whose mass, velocity, contact and applied forces the state then shows).',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        session_id: sessionId,
+        action: { type: 'string', enum: ['push', 'twist', 'motor', 'gravity', 'spring', 'drag', 'release', 'teleport', 'select'] },
+        body: { type: 'string' },
+        id: { type: 'string', description: 'motor or spring id' },
+        force: vec3,
+        torque: vec3,
+        point: vec3,
+        target: vec3,
+        position: vec3,
+        vector: vec3,
+        duration: { type: 'number' },
+        value: { type: 'number' },
+        enabled: { type: 'boolean' },
+        stiffness: { type: 'number' },
+        damping: { type: 'number' },
+      },
+      required: ['session_id', 'action'],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: 'sim_get_live_state',
+    description:
+      "A live session's latest state: time, running, real-time factor (behind when it cannot keep up), contacts, " +
+      "gravity, each body's position, each motor's coordinate, rate and effort, the drag and the selected body. " +
+      'One snapshot: do not poll it in a loop; the dashboard streams it to the user.',
+    inputSchema: { type: 'object', properties: { session_id: sessionId }, required: ['session_id'], additionalProperties: false },
+  },
+  {
+    name: 'sim_stop_interactive',
+    description: 'End a live session (it also ends by itself after 10 minutes nobody watches or acts on it).',
+    inputSchema: { type: 'object', properties: { session_id: sessionId }, required: ['session_id'], additionalProperties: false },
+  },
+];
+
+/** A live state for the agent: body positions in mm next to the SI rest */
+function liveSummary(state) {
+  if (!state) return state;
+  const mm = (v) => v.map((x) => Math.round(x * 1e5) / 100);
+  return {
+    t_s: Math.round(state.t * 1e6) / 1e6,
+    running: state.running,
+    failed: state.failed,
+    real_time_factor: state.rtf,
+    behind_real_time: state.behind,
+    contacts: state.contacts,
+    gravity: state.gravity,
+    bodies_mm: Object.fromEntries(Object.entries(state.bodies).map(([id, b]) => [id, mm(b.p)])),
+    motors: state.motors,
+    drag: state.drag,
+    selected: state.selected,
+  };
+}
+
 const TOOLS = [
   {
     name: 'cad_guide',
@@ -821,6 +932,7 @@ const TOOLS = [
       additionalProperties: false,
     },
   },
+  ...LIVE_TOOLS,
   ...ENG_TOOLS,
 ];
 
@@ -1043,6 +1155,34 @@ async function callTool(name, args) {
       const image = play.files?.['blender/preview.png'] ? await simImage(id) : null;
       return image ? [text(out), image] : [text(out)];
     }
+    case 'sim_start_interactive': {
+      const started = await simJson('POST', '/api/sim/live', args);
+      const { scene } = started;
+      return [text({
+        session_id: started.session_id,
+        name: scene.name,
+        time_step_s: scene.time_step,
+        bodies: scene.bodies.map((b) => ({ id: b.id, name: b.name, fixed: b.fixed, held_by_joint: b.held, mass_kg: b.mass })),
+        motors: scene.motors.map((m) => ({ id: m.id, type: m.type, mode: m.mode, unit: m.unit })),
+        warnings: scene.warnings,
+        assumptions: scene.assumptions,
+        state: liveSummary(started.state),
+        next: 'Ask the user to open the dashboard, tab ⚙️ Mô phỏng: the session shows there (drag with the left mouse button).',
+      })];
+    }
+    case 'sim_control_interactive':
+    case 'sim_act_interactive': {
+      const { session_id: sid, ...action } = args;
+      const done = await simJson('POST', `/api/sim/live/${encodeURIComponent(sid)}/actions`, action);
+      return [text({ t_s: Math.round(done.t * 1e6) / 1e6, state: liveSummary(done.state) })];
+    }
+    case 'sim_get_live_state': {
+      const { state } = await simJson('GET', `/api/sim/live/${encodeURIComponent(args.session_id)}/state`);
+      return [text(liveSummary(state))];
+    }
+    case 'sim_stop_interactive':
+      await simJson('POST', `/api/sim/live/${encodeURIComponent(args.session_id)}/stop`, {});
+      return [text({ stopped: args.session_id })];
     case 'inspect_3d_model': {
       const { files = [], gateway_files: gatewayFiles = [], ...rest } = args;
       const sources = gatewayFiles.map((file) => ({ file }));
@@ -1118,7 +1258,9 @@ async function handle(message) {
           'when the preview shows problems. Send the accepted ' +
           'model with cad_send_to_studio. Mechanisms (linkages, gears, motors, springs): call sim_guide once, describe ' +
           'the mechanism with sim_create_mechanism (and sim_add_*), sim_run_simulation (Project Chrono, on this ' +
-          'computer), sim_get_simulation_results, then sim_play_simulation_in_blender. Engineering checks of a printed ' +
+          'computer), sim_get_simulation_results, then sim_play_simulation_in_blender. To let the user act on a mechanism ' +
+          'while it runs (drag, push, change motors), sim_start_interactive and point them to the dashboard. ' +
+          'Engineering checks of a printed ' +
           'part or assembly (local, no cloud): inspect_3d_model, validate_mesh, analyze_assembly (confirm joints with ' +
           'the user), check_clearance, configure/run_motion_simulation, configure/run_fea_analysis, ' +
           'analyze_printability, visualize_results_in_blender, generate_engineering_report. Ask the user for material, ' +
