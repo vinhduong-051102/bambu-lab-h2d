@@ -494,6 +494,7 @@ export function CadCard({ onBusyChange }: { onBusyChange?: (busy: boolean) => vo
           onChange={(e) => setPrompt(e.target.value)}
           onPaste={figure ? pasteImage : undefined}
         />
+        {/* The picture the figure is made from, on its own line */}
         {figure && (
           <Flex wrap gap={12} align="center">
             <Upload
@@ -522,6 +523,53 @@ export function CadCard({ onBusyChange }: { onBusyChange?: (busy: boolean) => vo
                 }}
               />
             )}
+            <Checkbox
+              checked={multiview}
+              disabled={!image}
+              onChange={(e) => setMultiview(e.target.checked)}
+              title="Hunyuan3D-2mv dựng từ 4 góc thay vì đoán mặt sau từ 1 ảnh: dùng ảnh các góc bạn tải lên, không có thì AI vẽ thêm (chậm hơn 1–4 phút, cần gần hết VRAM). Cần ảnh mặt trước."
+            >
+              Dựng nhiều góc
+            </Checkbox>
+          </Flex>
+        )}
+        {/* The other sides for "Dựng nhiều góc": with the front picture only */}
+        {figure && multiview && image && (
+          <Flex wrap gap={10} align="center">
+            <Typography.Text type="secondary">Ảnh các góc khác (không bắt buộc):</Typography.Text>
+            {SIDES.map((side) => (
+              <Space.Compact key={side}>
+                <Upload
+                  accept="image/png,image/jpeg,image/webp"
+                  showUploadList={false}
+                  beforeUpload={(file) => {
+                    setSides((prev) => ({ ...prev, [side]: file }));
+                    return false;
+                  }}
+                >
+                  <Button size="small" icon={<PictureOutlined />} title={sides[side]?.name ?? `Ảnh nhìn từ ${SIDE_LABELS[side].toLowerCase()}`}>
+                    {SIDE_LABELS[side]}
+                    {sides[side] ? ' ✓' : ''}
+                  </Button>
+                </Upload>
+                {sides[side] && (
+                  <Button
+                    size="small"
+                    icon={<CloseOutlined />}
+                    title={`Bỏ ảnh ${SIDE_LABELS[side].toLowerCase()}`}
+                    onClick={() => setSides(({ [side]: _dropped, ...rest }) => rest)}
+                  />
+                )}
+              </Space.Compact>
+            ))}
+            <Typography.Text type="secondary">
+              {SIDES.some((side) => sides[side]) ? 'Dựng từ ảnh trước và các góc đã chọn' : 'Không chọn góc nào: AI vẽ thêm trái, sau, phải từ ảnh trước'}
+            </Typography.Text>
+          </Flex>
+        )}
+        {/* Size, plinth and colours */}
+        {figure && (
+          <Flex wrap gap={12} align="center">
             <Space>
               Cao
               <InputNumber min={10} max={300} step={1} value={height} onChange={setHeight} suffix="mm" style={{ width: 110 }} />
@@ -537,14 +585,6 @@ export function CadCard({ onBusyChange }: { onBusyChange?: (busy: boolean) => vo
               }}
             >
               Tô màu
-            </Checkbox>
-            <Checkbox
-              checked={multiview}
-              disabled={!image}
-              onChange={(e) => setMultiview(e.target.checked)}
-              title="Hunyuan3D-2mv dựng từ 4 góc thay vì đoán mặt sau từ 1 ảnh: dùng ảnh các góc bạn tải lên, không có thì AI vẽ thêm (chậm hơn 1–4 phút, cần gần hết VRAM). Cần ảnh mặt trước."
-            >
-              Dựng nhiều góc
             </Checkbox>
             {colour && (
               <>
@@ -582,40 +622,6 @@ export function CadCard({ onBusyChange }: { onBusyChange?: (busy: boolean) => vo
                 )}
               </>
             )}
-          </Flex>
-        )}
-        {/* The other sides for "Dựng nhiều góc": with the front picture only */}
-        {figure && multiview && image && (
-          <Flex wrap gap={10} align="center">
-            <Typography.Text type="secondary">Ảnh các góc khác (không bắt buộc):</Typography.Text>
-            {SIDES.map((side) => (
-              <Space.Compact key={side}>
-                <Upload
-                  accept="image/png,image/jpeg,image/webp"
-                  showUploadList={false}
-                  beforeUpload={(file) => {
-                    setSides((prev) => ({ ...prev, [side]: file }));
-                    return false;
-                  }}
-                >
-                  <Button size="small" icon={<PictureOutlined />} title={sides[side]?.name ?? `Ảnh nhìn từ ${SIDE_LABELS[side].toLowerCase()}`}>
-                    {SIDE_LABELS[side]}
-                    {sides[side] ? ' ✓' : ''}
-                  </Button>
-                </Upload>
-                {sides[side] && (
-                  <Button
-                    size="small"
-                    icon={<CloseOutlined />}
-                    title={`Bỏ ảnh ${SIDE_LABELS[side].toLowerCase()}`}
-                    onClick={() => setSides(({ [side]: _dropped, ...rest }) => rest)}
-                  />
-                )}
-              </Space.Compact>
-            ))}
-            <Typography.Text type="secondary">
-              {SIDES.some((side) => sides[side]) ? 'Dựng từ ảnh trước và các góc đã chọn' : 'Không chọn góc nào: AI vẽ thêm trái, sau, phải từ ảnh trước'}
-            </Typography.Text>
           </Flex>
         )}
         {/* "Filament của tôi" to paint with: ticked ones only */}
