@@ -31,6 +31,9 @@ const IDLE_REFRESH_MS = 30_000;
 const LIST_LIMIT = 100;
 
 type Kind = 'technical' | 'figure';
+
+/** Figures are made in the mesh container; everything else (Claude's build123d, Antigravity's code) is technical */
+const kindOf = (job: CadJob): Kind => (job.source === 'mesh' ? 'figure' : 'technical');
 type Palette = 'prefer' | 'auto' | 'ams' | 'bambu' | 'custom';
 
 interface Worker {
@@ -441,6 +444,17 @@ export function CadCard({ onBusyChange }: { onBusyChange?: (busy: boolean) => vo
 
   if (!config) return null;
 
+  // With both kinds set up, each tab lists its own models (a model and its versions are always of one kind)
+  const split = !!(config.worker && config.mesh);
+  const families: { root: string; versions: CadJob[] }[] = jobs ? groupVersions(jobs) : [];
+  const ofKind = (k: Kind) => families.filter(({ versions }) => kindOf(versions[0]) === k);
+  const shown = split ? ofKind(kind) : families;
+  const tabLabel = (k: Kind, label: string) => {
+    const mine = ofKind(k);
+    const making = mine.some(({ versions }) => versions.some(isBusy));
+    return `${label}${mine.length ? ` (${mine.length})` : ''}${making ? ' ⏳' : ''}`;
+  };
+
   return (
     <Card
       title={
@@ -467,8 +481,8 @@ export function CadCard({ onBusyChange }: { onBusyChange?: (busy: boolean) => vo
             value={kind}
             onChange={(e) => setKind(e.target.value)}
             options={[
-              { value: 'technical', label: '🔧 Kỹ thuật' },
-              { value: 'figure', label: '🧸 Nhân vật / trang trí' },
+              { value: 'technical', label: tabLabel('technical', '🔧 Kỹ thuật') },
+              { value: 'figure', label: tabLabel('figure', '🧸 Nhân vật / trang trí') },
             ]}
           />
         )}
@@ -657,11 +671,13 @@ export function CadCard({ onBusyChange }: { onBusyChange?: (busy: boolean) => vo
           ) : (
             <Spin />
           )
-        ) : jobs.length === 0 ? (
-          <Empty description="Chưa có mô hình nào. Mô tả mô hình ở trên rồi bấm ✨ Tạo mô hình." />
+        ) : shown.length === 0 ? (
+          <Empty
+            description={`Chưa có mô hình ${!split ? '' : figure ? 'nhân vật / trang trí ' : 'kỹ thuật '}nào. Mô tả mô hình ở trên rồi bấm ✨ Tạo mô hình.`}
+          />
         ) : (
           <Flex vertical gap={14}>
-            {groupVersions(jobs).map(({ root, versions }: { root: string; versions: CadJob[] }) => (
+            {shown.map(({ root, versions }) => (
               <CadFamily
                 key={root}
                 versions={versions}
