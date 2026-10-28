@@ -31,7 +31,8 @@ export const dashboardTheme: ThemeConfig = {
 export const dashboardModal: ConfigProviderProps['modal'] = {
   styles: {
     container: { display: 'flex', flexDirection: 'column', maxHeight: 'calc(100dvh - 140px)' },
-    body: { flex: '1 1 auto', minHeight: 0, overflowY: 'auto', overscrollBehavior: 'contain' },
+    // The scrollbar sits by the modal's edge (into the container's 24 px padding) rather than against the content
+    body: { flex: '1 1 auto', minHeight: 0, overflowY: 'auto', overscrollBehavior: 'contain', marginRight: -16, paddingRight: 16 },
   },
 };
 
