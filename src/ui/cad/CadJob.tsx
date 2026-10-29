@@ -416,10 +416,19 @@ export function CadJobCard(props: {
               )}
               {before?.files?.preview ? (
                 <figcaption>Sau · {versionLabel(job)}</figcaption>
+              ) : job.files?.shaped ? (
+                <figcaption>Claude hoàn thiện</figcaption>
               ) : (
-                job.files?.shaped && <figcaption>Claude hoàn thiện</figcaption>
+                job.files?.assembly && <figcaption>Bày in</figcaption>
               )}
             </figure>
+            {job.files?.assembly && (
+              // The parts in their places: what ⚙️ Mô phỏng runs, where the preview is laid out for printing
+              <figure className="cad-compare">
+                <Image src={url('assembly.png')} alt="Lắp ráp" width={160} height={160} style={{ objectFit: 'contain' }} />
+                <figcaption>Lắp ráp · dùng để mô phỏng</figcaption>
+              </figure>
+            )}
           </Flex>
         </Image.PreviewGroup>
         <Flex vertical gap={8} flex={1} style={{ minWidth: 260 }}>

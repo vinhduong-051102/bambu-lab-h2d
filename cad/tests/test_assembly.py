@@ -59,8 +59,10 @@ class AssemblyTest(unittest.TestCase):
         low, high = stl_bounds(out / "components" / "arm.stl")
         for got, want in zip(low + high, [10, -5, 12, 70, 5, 18]):
             self.assertAlmostEqual(got, want, places=3)
-        # The print layout is still what model.stl holds
+        # The print layout is still what model.stl holds; assembly.png draws the assembled one
         self.assertEqual(report["solids"], 2)
+        self.assertIn("assembly.png", report["files"])
+        self.assertTrue((out / "assembly.png").stat().st_size > 0)
 
     def test_mechanism_naming_no_component_fails(self):
         done, out = build(HINGE.replace('"part_b": "arm"', '"part_b": "lid"'))
@@ -72,6 +74,7 @@ class AssemblyTest(unittest.TestCase):
         done, out = build("from build123d import Box\nresult = Box(20, 20, 20)\n")
         self.assertEqual(done.returncode, 0)
         self.assertFalse((out / "assembly.json").exists())
+        self.assertFalse((out / "assembly.png").exists())
         self.assertEqual(json.loads((out / "report.json").read_text(encoding="utf-8"))["components"], [])
 
 

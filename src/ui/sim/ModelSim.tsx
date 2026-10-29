@@ -457,6 +457,11 @@ export function ModelSim({ jobId, modelId: givenModelId }: { jobId?: string; mod
         )}
       </Flex>
       {status.reason && <Alert type={status.state === 'INVALID' ? 'error' : 'warning'} showIcon title={status.reason} />}
+      {jobId && status.components.length > 1 && (
+        <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+          Mô phỏng các chi tiết ở vị trí lắp ráp (ảnh «Lắp ráp» trên thẻ mẫu), không phải cách bày ra để in («Bày in»).
+        </Typography.Text>
+      )}
       {status.components.length === 1 && (
         <Alert type="info" showIcon title="Mô hình chỉ có một khối" description="Không có chi tiết riêng để chuyển động với nhau: chỉ mô phỏng được nó như một vật rắn (cố định, rơi, va chạm). Muốn cơ cấu chuyển động, yêu cầu Claude dựng lại với các chi tiết tách rời (components)." />
       )}

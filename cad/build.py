@@ -7,7 +7,8 @@ it also prints. Exits 1 when the model could not be built; report.json then says
 
 An assembly keeps its parts: a model that assigns `components` ({name: solid}, in their assembled places), or whose
 `result` holds several solids, also gets components/<name>.stl and assembly.json (each component's file, volume and
-centre, and the model's `mechanism` dict when it has one: what moves, how, and what is fixed, for simulation).
+centre, and the model's `mechanism` dict when it has one: what moves, how, and what is fixed, for simulation). With
+`components`, assembly.png shows them assembled: what is simulated, where preview.png shows the print layout.
 """
 
 import json
@@ -207,7 +208,15 @@ def write_components(components, mechanism, out, from_solids):
     (out / "assembly.json").write_text(json.dumps({
         "components": listed, "mechanism": mechanism,
         "from": "solids of result" if from_solids else "components"}, indent=2, ensure_ascii=False))
-    return [entry["file"] for entry in listed] + ["assembly.json"]
+    files = [entry["file"] for entry in listed] + ["assembly.json"]
+    if not from_solids:
+        # Assembled, unlike `result` (laid out to print): the model as the dashboard simulates it
+        triangles = [t for entry in listed for t in read_stl(out / entry["file"])]
+        lows = [min(v[a] for t in triangles for v in t) for a in range(3)]
+        highs = [max(v[a] for t in triangles for v in t) for a in range(3)]
+        render_preview(triangles, tuple(h - lo for h, lo in zip(highs, lows)), out / "assembly.png")
+        files.append("assembly.png")
+    return files
 
 
 def build(model, out):
@@ -282,7 +291,7 @@ def main():
     model = Path(sys.argv[1]).resolve()
     out = Path(sys.argv[2]).resolve() if len(sys.argv) > 2 else model.parent / "out"
     out.mkdir(parents=True, exist_ok=True)
-    for stale in ("model.stl", "model.step", "preview.png", "report.json", "assembly.json"):
+    for stale in ("model.stl", "model.step", "preview.png", "report.json", "assembly.json", "assembly.png"):
         (out / stale).unlink(missing_ok=True)
     for stale in (out / "components").glob("*.stl") if (out / "components").is_dir() else []:
         stale.unlink()

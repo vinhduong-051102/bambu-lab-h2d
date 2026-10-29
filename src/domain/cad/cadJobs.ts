@@ -158,6 +158,8 @@ export interface CadJob extends CadJobMeta {
     sides: boolean;
     shaped: boolean;
     blend: boolean;
+    /** The parts assembled (components declared in model.py): what is simulated, where preview is the print layout */
+    assembly: boolean;
   };
 }
 
@@ -175,6 +177,7 @@ export const CAD_FILES = {
   'sides.png': { path: 'sides.png', type: 'image/png' },
   'shaped.png': { path: 'source/preview.png', type: 'image/png' },
   'scene.blend': { path: 'out/scene.blend', type: 'application/x-blender' },
+  'assembly.png': { path: 'out/assembly.png', type: 'image/png' },
 } as const;
 export type CadFileName = keyof typeof CAD_FILES;
 
@@ -250,8 +253,8 @@ export class CadJobStore {
     const meta = await readJson<CadJobMeta>(path.join(dir, 'job.json'));
     if (!meta) return null;
     const status = await readJson<WorkerStatus>(path.join(dir, 'status.json'));
-    const names = ['model.py', 'model.stl', 'model.step', 'preview.png', 'concept.png', 'model.3mf', 'fix.py', 'views.png', 'sides.png', 'shaped.png', 'scene.blend'] as const;
-    const [code, stl, step, preview, concept, threemf, fix, views, sides, shaped, blend] = await Promise.all(
+    const names = ['model.py', 'model.stl', 'model.step', 'preview.png', 'concept.png', 'model.3mf', 'fix.py', 'views.png', 'sides.png', 'shaped.png', 'scene.blend', 'assembly.png'] as const;
+    const [code, stl, step, preview, concept, threemf, fix, views, sides, shaped, blend, assembly] = await Promise.all(
       names.map((name) => exists(path.join(dir, CAD_FILES[name].path)))
     );
     return {
@@ -273,7 +276,7 @@ export class CadJobStore {
       result: status?.result ?? null,
       report: status?.report ?? null,
       // A fix's source/ is the version before it, already shown as such: only a figure Hunyuan3D shaped has its own
-      files: { code, stl, step, preview, concept, threemf, fix, views, sides, shaped: shaped && status?.maker === 'hunyuan', blend },
+      files: { code, stl, step, preview, concept, threemf, fix, views, sides, shaped: shaped && status?.maker === 'hunyuan', blend, assembly },
     };
   }
 
