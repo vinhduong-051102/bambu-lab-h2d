@@ -98,6 +98,43 @@ describe('Studio & printer files API', () => {
       env.STUDIO_URL = undefined;
       env.STUDIO_IMPORT_DIR = undefined;
       await fs.rm(importDir, { recursive: true, force: true });
+      await fs.rm(`${importDir}-removed`, { recursive: true, force: true });
+    });
+
+    it('lists, downloads and removes the models in /imports, moving them aside', async () => {
+      await send('Bracket.stl', 'one');
+      await send('Gear.3mf', 'two');
+      await fs.mkdir(path.join(importDir, 'ai'));
+      await fs.mkdir(path.join(importDir, '.originals'));
+      await fs.writeFile(path.join(importDir, '.originals', 'Bracket.stl'), 'as sent');
+
+      const list = (await app.inject({ method: 'GET', url: '/api/studio/imports' })).json();
+      expect(list.files.map((f: { name: string }) => f.name).sort()).toEqual(['Bracket.stl', 'Gear.3mf']);
+      expect(list.files.find((f: { name: string }) => f.name === 'Bracket.stl')).toMatchObject({ size: 3, original: true });
+
+      const download = await app.inject({ method: 'GET', url: '/api/studio/imports/Gear.3mf' });
+      expect(download.body).toBe('two');
+      expect(download.headers.get('content-disposition')).toContain('Gear.3mf');
+
+      const removed = await app.inject({ method: 'DELETE', url: '/api/studio/imports/Bracket.stl' });
+      expect(removed.statusCode).toBe(200);
+      const moved = path.resolve(removed.json().removedTo as string);
+      expect(await fs.readFile(path.join(moved, 'Bracket.stl'), 'utf8')).toBe('one');
+      expect(await fs.readFile(path.join(moved, '.originals', 'Bracket.stl'), 'utf8')).toBe('as sent');
+      expect(await fs.readdir(importDir)).not.toContain('Bracket.stl');
+
+      // Nothing outside the folder, no folders, no dot files
+      for (const name of ['..%2Fsecret.stl', 'ai', '.originals', 'Missing.stl']) {
+        expect((await app.inject({ method: 'DELETE', url: `/api/studio/imports/${name}` })).statusCode, name).toBe(404);
+      }
+
+      await send('Bracket.stl', 'three');
+      const all = (await app.inject({ method: 'DELETE', url: '/api/studio/imports' })).json();
+      expect(all.removed.sort()).toEqual(['Bracket.stl', 'Gear.3mf']);
+      expect((await app.inject({ method: 'GET', url: '/api/studio/imports' })).json().files).toEqual([]);
+      // The second Bracket.stl of the day kept beside the first
+      expect(await fs.readFile(path.join(path.resolve(all.removedTo), 'Bracket (2).stl'), 'utf8')).toBe('three');
+      expect(await fs.readdir(importDir)).toEqual(expect.arrayContaining(['ai']));
     });
 
     it('reports the stream URL and whether files can be sent in', async () => {

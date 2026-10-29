@@ -1,3 +1,4 @@
+import { promises as fs } from 'fs';
 import os from 'os';
 import path from 'path';
 import Anthropic from '@anthropic-ai/sdk';
@@ -18,7 +19,7 @@ import {
   type StudioRequest,
 } from '../../domain/studio/aiOptimize';
 import { AiSessionStore, appliedSchema, feedbackSchema, PRINT_ISSUE_LABELS, PRINT_OUTCOME_LABELS } from '../../domain/studio/aiSessions';
-import { safeFileName, saveStudioImport, STUDIO_FILE_RE, type StudioImport } from '../../domain/studio/studioImports';
+import { listStudioImports, removedDir, removeStudioImport, safeFileName, saveStudioImport, STUDIO_FILE_RE, type StudioImport } from '../../domain/studio/studioImports';
 import { handler, json, readJsonBody } from '../http';
 import { partsSection } from './parts';
 import { claudeEntry, recordAiUsage } from '../../domain/ai/aiUsage';
@@ -100,6 +101,55 @@ export const importToStudio = handler(async ({ request }) => {
     return json({ success: false, error: 'WRITE_FAILED', message: `Không lưu được file: ${err instanceof Error ? err.message : String(err)}` }, 500);
   }
   return json({ success: true, name: saved.name, studioPath: `/imports/${saved.name}`, ...(saved.repair && { repair: saved.repair }) }, 201);
+});
+
+/** A folder as the user knows it: relative to where the gateway runs (data/... in Docker and on the host alike) */
+const shown = (dir: string) => path.relative(process.cwd(), dir).replace(/\\/g, '/') || dir;
+
+const importsDisabled = () =>
+  json({ success: false, error: 'STUDIO_IMPORTS_DISABLED', message: 'Chưa cấu hình STUDIO_IMPORT_DIR.' }, 501);
+
+// GET /api/studio/imports - The models in Studio's /imports, newest first, with where removed ones go
+export const listStudioImportFiles = handler(async () => {
+  const dir = importDir();
+  if (!dir) return importsDisabled();
+  return json({ success: true, files: await listStudioImports(dir), removedTo: shown(path.dirname(removedDir(dir))) });
+});
+
+// DELETE /api/studio/imports - Takes every model out of /imports (moved to <imports>-removed/<day>, not deleted)
+export const removeAllStudioImports = handler(async () => {
+  const dir = importDir();
+  if (!dir) return importsDisabled();
+  const removed: string[] = [];
+  for (const file of await listStudioImports(dir)) {
+    if (await removeStudioImport(dir, file.name)) removed.push(file.name);
+  }
+  return json({ success: true, removed, removedTo: shown(removedDir(dir)) });
+});
+
+// GET /api/studio/imports/:name - Downloads one model from /imports
+export const getStudioImportFile = handler<{ name: string }>(async ({ params }) => {
+  const dir = importDir();
+  if (!dir) return importsDisabled();
+  const name = params.name;
+  const found = (await listStudioImports(dir)).some((f) => f.name === name);
+  if (!found || safeFileName(name) !== name) return json({ success: false, error: 'FILE_NOT_FOUND', message: 'Không có file này trong /imports.' }, 404);
+  return new Response(new Uint8Array(await fs.readFile(path.join(dir, name))), {
+    headers: {
+      'Content-Type': 'application/octet-stream',
+      'Cache-Control': 'no-cache',
+      'Content-Disposition': `attachment; filename*=UTF-8''${encodeURIComponent(name)}`,
+    },
+  });
+});
+
+// DELETE /api/studio/imports/:name - Takes one model out of /imports (moved to <imports>-removed/<day>, not deleted)
+export const removeStudioImportFile = handler<{ name: string }>(async ({ params }) => {
+  const dir = importDir();
+  if (!dir) return importsDisabled();
+  const moved = await removeStudioImport(dir, params.name);
+  if (!moved) return json({ success: false, error: 'FILE_NOT_FOUND', message: 'Không có file này trong /imports.' }, 404);
+  return json({ success: true, name: params.name, removedTo: shown(path.dirname(moved)) });
 });
 
 let proposalSourceOverride: ProposalSource | null = null;

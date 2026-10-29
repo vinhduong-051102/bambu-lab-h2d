@@ -76,3 +76,53 @@ export async function saveStudioImport(dir: string, name: string, original: Uint
   }
   return { name: stored, repair };
 }
+
+export interface StudioImportFile {
+  name: string;
+  size: number;
+  modified_at: string;
+  /** The import repaired its mesh and kept the file as sent in .originals */
+  original: boolean;
+}
+
+/** The models in the import folder (what Studio's File → Import shows), newest first; dot files and folders left out */
+export async function listStudioImports(dir: string): Promise<StudioImportFile[]> {
+  const entries = await fs.readdir(dir, { withFileTypes: true }).catch(() => []);
+  const files = await Promise.all(
+    entries
+      .filter((e) => e.isFile() && !e.name.startsWith('.'))
+      .map(async (e) => {
+        const stat = await fs.stat(path.join(dir, e.name));
+        const original = await fs.access(path.join(dir, ORIGINALS_DIR, e.name)).then(() => true, () => false);
+        return { name: e.name, size: stat.size, modified_at: stat.mtime.toISOString(), original };
+      })
+  );
+  return files.sort((a, b) => b.modified_at.localeCompare(a.modified_at) || a.name.localeCompare(b.name));
+}
+
+/** Where removed imports go: <import dir>-removed/<day>, beside the import folder, so a removal can be undone by hand */
+export function removedDir(dir: string, now = new Date()): string {
+  const day = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+  return path.join(`${path.resolve(dir)}-removed`, day);
+}
+
+/**
+ * Takes a model out of the import folder (with its .originals copy): moved to removedDir, not deleted. Returns where
+ * it went, or null when there is no such file. `name` must be a plain file name in the folder.
+ */
+export async function removeStudioImport(dir: string, name: string, now = new Date()): Promise<string | null> {
+  if (!name || safeFileName(name) !== name || name.startsWith('.')) return null;
+  const file = path.join(dir, name);
+  const stat = await fs.stat(file).catch(() => null);
+  if (!stat?.isFile()) return null;
+  const target = removedDir(dir, now);
+  await fs.mkdir(target, { recursive: true });
+  const stored = await freeName(target, name);
+  await fs.rename(file, path.join(target, stored));
+  const original = path.join(dir, ORIGINALS_DIR, name);
+  if (await fs.access(original).then(() => true, () => false)) {
+    await fs.mkdir(path.join(target, ORIGINALS_DIR), { recursive: true });
+    await fs.rename(original, path.join(target, ORIGINALS_DIR, stored));
+  }
+  return path.join(target, stored);
+}
