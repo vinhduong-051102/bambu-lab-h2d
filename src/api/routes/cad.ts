@@ -605,7 +605,7 @@ export const sendCadToStudio = handler<{ id: string }>(async ({ request, params 
     return json({ success: false, error: 'NO_STEP', message: 'Mô hình này chỉ có STL (dựng từ ảnh nên không có STEP).' }, 409);
   }
   if (body.data.format === '3mf' && job.state === 'done' && !job.files.threemf) {
-    return json({ success: false, error: 'NO_3MF', message: 'Mô hình này không tô màu nên không có 3MF.' }, 409);
+    return json({ success: false, error: 'NO_3MF', message: 'Mô hình này không tô màu và không chia bàn in nên không có 3MF.' }, 409);
   }
   const formatFile = { stl: 'model.stl', step: 'model.step', '3mf': 'model.3mf' } as const;
   const file = await store().filePath(job.id, formatFile[body.data.format]);

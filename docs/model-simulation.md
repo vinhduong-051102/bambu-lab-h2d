@@ -86,6 +86,15 @@ components arrive unconfigured, removed ones are dropped with their joints, the 
   farthest along a shared shaft first; a part fixed to another goes in along the axis its own parts turn about.
   The way in is not checked for collisions, and the view is the one of sixteen that shows most of the parts inside
   the fixed ones.
+- **Printing an assembly:** build.py lays the components out itself (`cad/print_layout.py`): each printed part on
+  the face with the least overhang for the most area on the plate (hull faces and the six axes; tall-and-thin is
+  penalised; then turned about Z to the smallest footprint), packed (MaxRects, 4 mm apart) into the area both H2D
+  nozzles reach (X 25–325, Y 0–320 mm), as many plates as it takes. Metal parts in `mechanism` and those in
+  `not_printed` are left out (bought). model.stl/model.step hold the plates side by side; model.3mf has each part on
+  its plate (`Metadata/model_settings.config`, plates where Studio puts them: a fifth of a plate apart, in rows of
+  ⌈√n⌉) and is what *Gửi sang Studio (n bàn in)* sends. The card lists the plates, the parts not printed and the
+  ones likely to need support. `print_layout = "manual"` keeps the model's own `result`. Checked with Bambu Studio's
+  CLI (`--arrange 0 --orient 0`) on its default 200 mm bed: the plates and their parts load as written.
 - **Dashboard, imported model:** ⚙️ Mô phỏng → 📦 Mô hình 3D đã nhập → *Nhập mô hình* (STL, 3MF, OBJ, PLY, GLB/glTF),
   then the same panel.
 - **Claude (MCP):** `cad_ask_claude` (the CAD guide tells it to keep `components` and declare `mechanism` for a

@@ -64,8 +64,12 @@ When the request is a mechanism or several parts that work together (a hinge, ge
 slider…), keep every part separate so the dashboard can simulate the model as it is:
 
 - Assign `components = {"name": solid, ...}`: each part on its own, **in its assembled place** (shafts in their
-  holes, gears meshing). Names: letters, digits, `_`, `-`. `result` is then the print layout (parts laid flat,
-  apart), or leave it out to print the assembly as it stands.
+  holes, gears meshing). Names: letters, digits, `_`, `-`. Don't lay the parts out for printing: build.py does
+  it, each part on the face it prints best on, packed onto as many H2D plates as it takes (report.json
+  `print_layout`; model.3mf has the plates), so leave `result` out. Parts that are bought, not printed (a steel
+  shaft, a screw, a spring): list them in `not_printed = ["shaft"]` (a `mechanism` part of metal is left out by
+  itself). Only when a part must print in a particular way the build can't guess, lay everything out yourself in
+  `result` and set `print_layout = "manual"`.
 - When the user said how it moves, also assign `mechanism`, naming parts by their component name (mm, degrees,
   kg, N, N·m; positions and axes in the assembled frame):
 

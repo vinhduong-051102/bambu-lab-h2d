@@ -11,6 +11,13 @@ centre, and the model's `mechanism` dict when it has one: what moves, how, and w
 `components`, assembly.png shows them assembled: what is simulated, where preview.png shows the print layout; the
 model's `assembly_steps` (the order a person puts the parts together) go in assembly.json too, for the assembly guide
 the worker draws after the last build (assembly_guide.py).
+
+With `components`, the print layout is made here, not by the model (print_layout.py): every component that is printed
+lies on the face it prints best on, packed onto as many H2D plates as it takes. model.stl and model.step hold the
+plates side by side, model.3mf the same with each part on its own plate for Bambu Studio, and report.json's
+"print_layout" says which part is on which plate. Not printed: the components named in `not_printed`, and those
+`mechanism` makes of metal (steel shafts, brass pins…), bought instead. `print_layout = "manual"` keeps the model's
+own `result` instead.
 """
 
 import json
@@ -22,6 +29,7 @@ import struct
 import sys
 import time
 import traceback
+import zipfile
 from pathlib import Path
 
 # Build plate of the H2D for one part (mm), and how far below Z = 0 a part may start before it counts as
@@ -250,12 +258,69 @@ def write_components(components, mechanism, out, from_solids, steps=None):
     return files
 
 
+METALS = ("steel", "stainless", "aluminium", "aluminum", "brass", "bronze", "copper", "iron", "metal")
+
+
+def bought(namespace, components):
+    """{name: why} of the components that are not printed"""
+    named = namespace.get("not_printed") or []
+    if not isinstance(named, (list, tuple)) or not all(isinstance(n, str) for n in named):
+        raise ValueError("`not_printed` must be a list of component names.")
+    unknown = [n for n in named if n not in components]
+    if unknown:
+        raise ValueError(f"`not_printed` names parts that are not components: {unknown}.")
+    out = {n: "not_printed" for n in named}
+    parts = (namespace.get("mechanism") or {}).get("parts") or {}
+    for name, part in parts.items():
+        material = str((part or {}).get("material") or "").lower() if isinstance(part, dict) else ""
+        if name in components and name not in out and any(m in material for m in METALS):
+            out[name] = material
+    return out
+
+
+def lay_out(namespace, components, out):
+    """The printed components on their plates: (the layout as one shape, report["print_layout"])"""
+    import numpy as np
+    from build123d import Compound, Location
+    from OCP.gp import gp_Trsf
+
+    import print_layout
+
+    skipped = bought(namespace, components)
+    printed = [n for n in components if n not in skipped]
+    if not printed:
+        raise ValueError("Every component is `not_printed` or metal: there is nothing to print.")
+    meshes = {n: np.array(read_stl(out / "components" / f"{n}.stl"), dtype=float) for n in printed}
+    layout = print_layout.plan(meshes)
+    placed = []
+    for name in printed:
+        m = layout["parts"][name]["matrix"]
+        trsf = gp_Trsf()
+        trsf.SetValues(*m[0, :4], *m[1, :4], *m[2, :4])
+        placed.append(components[name].moved(Location(trsf)))
+    print_layout.write_3mf(out / "model.3mf", meshes, layout, title=Path(out).parent.name)
+    report = {
+        "plates": layout["plates"],
+        "parts": {n: {k: v for k, v in p.items() if k != "matrix"} for n, p in layout["parts"].items()},
+        "not_printed": skipped,
+        "warnings": layout["warnings"],
+    }
+    return Compound(children=placed), report
+
+
 def build(model, out):
     from build123d import Compound, Shape, export_step, export_stl
 
     namespace = runpy.run_path(str(model), run_name="__model__")
     shape = namespace.get("result")
-    if shape is None and isinstance(namespace.get("components"), dict):
+    layout = None
+    if isinstance(namespace.get("components"), dict) and namespace.get("print_layout") != "manual":
+        # Laid out for printing from the components, whatever `result` holds
+        components = read_components(namespace, [])
+        assembly_files = write_components(components, namespace.get("mechanism"), out, False,
+                                          namespace.get("assembly_steps"))
+        shape, layout = lay_out(namespace, components, out)
+    elif shape is None and isinstance(namespace.get("components"), dict):
         # An assembly with no separate print layout: printed as it stands
         shape = list(namespace["components"].values())
     if shape is None:
@@ -274,8 +339,9 @@ def build(model, out):
     box = shape.bounding_box()
     size = (box.size.X, box.size.Y, box.size.Z)
     volume = sum(s.volume for s in solids)
-    warnings = []
-    if any(s > m for s, m in zip(size, MAX_SIZE)):
+    warnings = list(layout["warnings"]) if layout else []
+    # A layout's plates lie side by side, each within the plate
+    if not layout and any(s > m for s, m in zip(size, MAX_SIZE)):
         warnings.append(f"Larger than the H2D's {MAX_SIZE[0]:.0f} × {MAX_SIZE[1]:.0f} × {MAX_SIZE[2]:.0f} mm.")
     if abs(box.min.Z) > PLATE_TOLERANCE:
         warnings.append(f"The lowest point is at Z = {box.min.Z:.2f} mm, not on the build plate (Z = 0).")
@@ -296,12 +362,18 @@ def build(model, out):
                         f"{mesh['non_manifold_edges']} non-manifold edges).")
     render_preview(triangles, size, preview)
     files = ["model.stl", "model.step", "preview.png"]
-    components = read_components(namespace, solids)
-    if components:
-        files += write_components(components, namespace.get("mechanism"), out, namespace.get("components") is None,
-                                  namespace.get("assembly_steps"))
-    elif namespace.get("mechanism") is not None:
-        warnings.append("`mechanism` is ignored: a single part has nothing to move against (give `components`).")
+    if layout:
+        files += ["model.3mf"] + assembly_files
+        if namespace.get("result") is not None:
+            warnings.append("`result` is ignored: the print layout is made from `components` "
+                            '(print_layout = "manual" keeps it).')
+    else:
+        components = read_components(namespace, solids)
+        if components:
+            files += write_components(components, namespace.get("mechanism"), out, namespace.get("components") is None,
+                                      namespace.get("assembly_steps"))
+        elif namespace.get("mechanism") is not None:
+            warnings.append("`mechanism` is ignored: a single part has nothing to move against (give `components`).")
 
     return {
         "size_mm": [round(v, 2) for v in size],
@@ -313,6 +385,7 @@ def build(model, out):
         "warnings": warnings,
         "components": list(components),
         "files": files,
+        **({"print_layout": layout} if layout else {}),
     }
 
 
@@ -325,6 +398,9 @@ def main():
     out.mkdir(parents=True, exist_ok=True)
     for stale in ("model.stl", "model.step", "preview.png", "report.json", "assembly.json", "assembly.png"):
         (out / stale).unlink(missing_ok=True)
+    # A print layout's 3MF, not a coloured figure's (mesh3d writes those)
+    if (out / "model.3mf").exists() and b"build.py" in zipfile.ZipFile(out / "model.3mf").read("3D/3dmodel.model")[:600]:
+        (out / "model.3mf").unlink()
     for stale in (out / "components").glob("*.stl") if (out / "components").is_dir() else []:
         stale.unlink()
     # The assembly guide is of the model built before; the worker draws it again after the last build

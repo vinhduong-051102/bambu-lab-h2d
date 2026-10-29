@@ -12,6 +12,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+import zipfile
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent.parent
@@ -131,6 +132,50 @@ class AssemblyTest(unittest.TestCase):
         done, result = guide(out)
         self.assertEqual(done.returncode, 1)
         self.assertIn("components", result["error"])
+
+
+    def test_print_layout_turns_and_packs_parts(self):
+        # A plate standing on its edge lies down; six 200 mm plates need several H2D plates; the steel pin is bought
+        code = (
+            "from build123d import Box, Cylinder, Pos\n"
+            "components = {f'panel_{k}': Pos(0, 0, 100 + 300 * k) * Box(4, 200, 200) for k in range(6)}\n"
+            "components['pin'] = Pos(500, 0, 0) * Cylinder(2, 40)\n"
+            "components['knob'] = Pos(600, 0, 0) * Box(10, 10, 10)\n"
+            "not_printed = ['knob']\n"
+            "mechanism = {'parts': {'panel_0': {'fixed': True}, 'pin': {'material': 'steel'}}}\n"
+            "result = Box(1, 1, 1)\n"
+        )
+        done, out = build(code)
+        report = json.loads((out / "report.json").read_text(encoding="utf-8"))
+        self.assertEqual(done.returncode, 0, report.get("error"))
+        layout = report["print_layout"]
+        self.assertEqual(layout["not_printed"], {"knob": "not_printed", "pin": "steel"})
+        self.assertGreaterEqual(len(layout["plates"]), 2)
+        self.assertEqual(sorted(n for p in layout["plates"] for n in p["parts"]), [f"panel_{k}" for k in range(6)])
+        for part in layout["parts"].values():
+            self.assertAlmostEqual(part["height_mm"], 4, places=2)
+        self.assertTrue(any("`result` is ignored" in w for w in report["warnings"]))
+        # Each part of the 3MF on its plate, for Bambu Studio
+        with zipfile.ZipFile(out / "model.3mf") as z:
+            config = z.read("Metadata/model_settings.config").decode()
+        self.assertEqual(config.count("<plate>"), len(layout["plates"]))
+        self.assertEqual(config.count("<model_instance>"), 6)
+        # Every part within the plate both nozzles reach, at its plate's place
+        self.assertEqual(report["solids"], 6)
+        self.assertAlmostEqual(report["min_mm"][2], 0, places=2)
+
+    def test_manual_print_layout_keeps_result(self):
+        done, out = build(HINGE + 'print_layout = "manual"\n')
+        report = json.loads((out / "report.json").read_text(encoding="utf-8"))
+        self.assertEqual(done.returncode, 0, report.get("error"))
+        self.assertNotIn("print_layout", report)
+        self.assertFalse((out / "model.3mf").exists())
+        self.assertEqual(report["max_mm"][1], 45)
+
+    def test_nothing_to_print_fails(self):
+        done, out = build(HINGE + 'not_printed = ["base", "arm"]\n')
+        self.assertEqual(done.returncode, 1)
+        self.assertIn("nothing to print", json.loads((out / "report.json").read_text(encoding="utf-8"))["error"])
 
 
 if __name__ == "__main__":

@@ -65,9 +65,58 @@ export interface CadJob {
     warnings?: string[];
     palette?: PaletteEntry[];
     colour_request?: Record<string, unknown>;
+    /** An assembly laid out for printing by build.py (cad/print_layout.py): its plates, and what is bought instead */
+    print_layout?: PrintLayout;
   } | null;
   files?: Record<string, boolean>;
   guide?: { ok: boolean; steps?: number; video?: string | null; error?: string | null } | null;
+}
+
+export interface PrintLayout {
+  plates: { n: number; parts: string[] }[];
+  parts: Record<string, { plate: number; footprint_mm: number[]; height_mm: number; overhang_mm2: number; contact_mm2: number }>;
+  not_printed: Record<string, string>;
+}
+
+/** "In 2 bàn: bàn 1 · 12 chi tiết…; không in (mua sẵn): trục (steel)" */
+function PrintPlates({ layout }: { layout: PrintLayout }) {
+  const bought = Object.entries(layout.not_printed);
+  const supports = Object.entries(layout.parts).filter(([, p]) => p.overhang_mm2 > 100);
+  return (
+    <Collapse
+      size="small"
+      items={[
+        {
+          key: 'plates',
+          label: `🖨 Tự chia để in: ${layout.plates.length} bàn in · ${Object.keys(layout.parts).length} chi tiết${bought.length ? ` · ${bought.length} không in` : ''}`,
+          children: (
+            <Flex vertical gap={4}>
+              {layout.plates.map((plate) => (
+                <div key={plate.n}>
+                  <Typography.Text strong>Bàn {plate.n}:</Typography.Text>{' '}
+                  {plate.parts.map((name) => `${name} (cao ${layout.parts[name]?.height_mm ?? '?'} mm)`).join(', ')}
+                </div>
+              ))}
+              {bought.length > 0 && (
+                <Typography.Text type="secondary">
+                  Không in, dùng đồ mua sẵn: {bought.map(([name, why]) => (why === 'not_printed' ? name : `${name} (${why})`)).join(', ')}
+                </Typography.Text>
+              )}
+              {supports.length > 0 && (
+                <Typography.Text type="secondary">
+                  Có thể cần support: {supports.map(([name, p]) => `${name} (${Math.round(p.overhang_mm2)} mm² nhô ra)`).join(', ')}
+                </Typography.Text>
+              )}
+              <Typography.Text type="secondary">
+                Mỗi chi tiết được đặt nằm trên mặt in tốt nhất (ít phần nhô cần support nhất), xếp trong vùng cả hai đầu phun H2D in
+                tới. File 3MF mở trong Studio đã chia sẵn từng bàn.
+              </Typography.Text>
+            </Flex>
+          ),
+        },
+      ]}
+    />
+  );
 }
 
 export interface PaletteEntry {
@@ -242,6 +291,8 @@ export function CadJobCard(props: {
 
   const busy = isBusy(job);
   const done = job.state === 'done';
+  // An assembly laid out on plates: its 3MF has them, where its STL is every plate side by side
+  const plates = job.report?.print_layout?.plates.length ?? 0;
   const figure = job.source === 'mesh';
   // Claude reviewing and fixing a figure
   const fix = figure && job.input === 'fix';
@@ -480,6 +531,7 @@ export function CadJobCard(props: {
                 .join(' · ')}
             </Typography.Text>
           )}
+          {job.report?.print_layout && <PrintPlates layout={job.report.print_layout} />}
           {warnings.length > 0 && <Alert type="warning" title={warnings.map((w, i) => <div key={i}>⚠️ {w}</div>)} />}
           {!!job.report?.palette?.length && (
             <div className="cad-palette">
@@ -509,16 +561,20 @@ export function CadJobCard(props: {
                   icon={<SendOutlined />}
                   loading={acting === 'studio-3mf'}
                   onClick={() => sendToStudio('studio-3mf')}
-                  title="3MF đã tô sẵn màu: filament n trong Studio là màu số n"
+                  title={
+                    plates
+                      ? 'File 3MF có các chi tiết đã đặt sẵn trên từng bàn in'
+                      : '3MF đã tô sẵn màu: filament n trong Studio là màu số n'
+                  }
                 >
-                  Gửi sang Studio (có màu)
+                  {plates ? `Gửi sang Studio (${plates} bàn in)` : 'Gửi sang Studio (có màu)'}
                 </Button>
               ) : (
                 <Button size="small" type="primary" icon={<SendOutlined />} loading={acting === 'studio-stl'} onClick={() => sendToStudio('studio-stl')}>
                   Gửi sang Studio
                 </Button>
               ))}
-            {done && job.files?.threemf && link('model.3mf', '3MF màu', { download: true, icon: <DownloadOutlined /> })}
+            {done && job.files?.threemf && link('model.3mf', plates ? '3MF' : '3MF màu', { download: true, icon: <DownloadOutlined /> })}
             {done && link('model.stl', 'STL', { download: true, icon: <DownloadOutlined /> })}
             {done && job.files?.step && link('model.step', 'STEP', { download: true, icon: <DownloadOutlined /> })}
             {done && <EngCheckButton job={job} onRevise={onRevise ? (comment) => onRevise(comment, []) : undefined} />}
