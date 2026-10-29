@@ -88,8 +88,10 @@ components arrive unconfigured, removed ones are dropped with their joints, the 
   the fixed ones.
 - **Printing an assembly:** build.py lays the components out itself (`cad/print_layout.py`): each printed part on
   the face with the least overhang for the most area on the plate (hull faces and the six axes; tall-and-thin is
-  penalised; then turned about Z to the smallest footprint), packed (MaxRects, 4 mm apart) into the area both H2D
-  nozzles reach (X 25–325, Y 0–320 mm), as many plates as it takes. Metal parts in `mechanism` and those in
+  penalised; then turned about Z to the smallest footprint, or diagonally when it is longer than the plate), packed
+  (MaxRects) at least 12 mm apart and 8 mm in from the edge (room for the automatic 5 mm brim) into the area both H2D
+  nozzles reach short of the wrapping-detection strip (X 25–325, Y 0–310 mm), spread over each plate with room and
+  centred, as many plates as it takes. Metal parts in `mechanism` and those in
   `not_printed` are left out (bought). model.stl/model.step hold the plates side by side; model.3mf has each part on
   its plate (`Metadata/model_settings.config`, plates where Studio puts them: a fifth of a plate apart, in rows of
   ⌈√n⌉) and is what *Gửi sang Studio (n bàn in)* sends. The card lists the plates, the parts not printed and the

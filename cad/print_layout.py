@@ -7,7 +7,7 @@ onto as many H2D plates as it takes.
   standing much taller than it is wide pays for it, and the part as modelled wins a tie. Then it turns about Z to
   the smallest footprint.
 - Packing: footprints (rectangles, a gap apart, turned 90° when that fits better) go on the plate area both nozzles
-  reach (H2D: X 25–325, Y 0–320 mm), biggest first, each where it leaves the shortest side free (MaxRects); a part
+  reach (H2D: X 25–325, Y 0–310 mm), at least GAP apart and MARGIN in from the edge, biggest first, each where it leaves the shortest side free (MaxRects); a part
   that fits on no plate starts a new one, one larger than a plate gets a plate of its own and a warning.
 - Spreading: a plate's parts then move apart to use the whole area (each one's distance from the packed corner
   scaled up, which only widens the gaps), and the group is centred on the plate.
@@ -22,11 +22,14 @@ import numpy as np
 
 # H2D: the bed, and the part of it both nozzles reach (Bambu Studio's machine profile, extruder_printable_area)
 BED = (350.0, 320.0)
-REACH = ((25.0, 325.0), (0.0, 320.0))
+# Y stops short of 320: the back strip (wrapping_exclude_area, X 145–256, Y 310–326) is kept clear for the wrapping
+# detection, so nothing goes past Y 310 anywhere
+REACH = ((25.0, 325.0), (0.0, 310.0))
 MAX_HEIGHT = 320.0
-# Least room between parts, and from the edge of the reach (a long part may need nearly all of it); a plate with room
-# to spare spreads its parts further apart and centres them, which leaves wider edges
-MARGIN, GAP = 3.0, 8.0
+# Least room from the edge of the reach and between parts. Studio's H2D process adds an automatic brim up to 5 mm wide
+# (brim_width): a part 3 mm from the edge had its brim past what the right nozzle reaches, and parts 8 mm apart had
+# their paths flagged as colliding. A plate with room to spare spreads its parts further apart and centres them.
+MARGIN, GAP = 8.0, 12.0
 # At most this many times the packed spacing, so a few small parts don't fly to the plate's corners
 SPREAD_MAX = 3.0
 # Studio's LOGICAL_PART_PLATE_GAP: plates are a fifth of a plate apart
@@ -183,6 +186,22 @@ def spread(placed, footprints, usable):
     return out
 
 
+def fit_turn(tris, rotation, usable):
+    """A part longer than the plate is wide or deep, turned about Z until it fits across it (a 310 mm arm lies
+    diagonally); the rotation unchanged when it fits as it is, or fits nowhere"""
+    flat = (tris.reshape(-1, 3) @ rotation.T)[:, :2]
+    fits = lambda size: (size[0] + GAP <= usable[0] + GAP and size[1] + GAP <= usable[1] + GAP) or (  # noqa: E731
+        size[1] + GAP <= usable[0] + GAP and size[0] + GAP <= usable[1] + GAP)
+    if fits(np.ptp(flat, axis=0)):
+        return rotation
+    best = None
+    for degrees in range(1, 180):
+        size = np.ptp(flat @ rotation_z(math.radians(degrees))[:2, :2].T, axis=0)
+        if fits(size) and (best is None or size[0] * size[1] < best[0]):
+            best = (size[0] * size[1], degrees)
+    return rotation if best is None else rotation_z(math.radians(best[1])) @ rotation
+
+
 def plan(meshes):
     """{name: triangles (n, 3, 3) as assembled} → {"parts": {name: {matrix (4×4, assembled → plate), plate,
     footprint_mm, contact_mm2, overhang_mm2, height_mm}}, "plates": [{n, parts}], "warnings": [...]}"""
@@ -190,6 +209,7 @@ def plan(meshes):
     turned = {}
     for name, tris in meshes.items():
         rotation, measures = orient(tris)
+        rotation = fit_turn(tris, rotation, usable)
         points = tris.reshape(-1, 3) @ rotation.T
         low, high = points.min(axis=0), points.max(axis=0)
         turned[name] = {"rotation": rotation, "low": low, "size": high - low, **measures}

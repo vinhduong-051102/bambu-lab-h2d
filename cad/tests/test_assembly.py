@@ -234,6 +234,21 @@ class SpacingTest(unittest.TestCase):
                             boxes[b][1][1] - boxes[a][2][1], boxes[a][1][1] - boxes[b][2][1])
                 self.assertGreaterEqual(apart, pl.GAP - 1e-6, (a, b))
 
+    def test_a_part_longer_than_the_plate_lies_diagonally(self):
+        sys.path.insert(0, str(HERE))
+        import print_layout as pl
+
+        meshes = {"forearm": box(310, 60, 40), "pin": box(15, 15, 30)}
+        layout = pl.plan(meshes)
+        self.assertEqual(layout["warnings"], [])
+        _, lo, hi = self.footprints(meshes, layout)["forearm"]
+        self.assertGreaterEqual(lo[0], pl.REACH[0][0] + pl.MARGIN - 1e-6)
+        self.assertLessEqual(hi[0], pl.REACH[0][1] - pl.MARGIN + 1e-6)
+        self.assertGreaterEqual(lo[1], pl.REACH[1][0] + pl.MARGIN - 1e-6)
+        self.assertLessEqual(hi[1], pl.REACH[1][1] - pl.MARGIN + 1e-6)
+        # Not along an axis: turned to fit, its footprint far wider than the part
+        self.assertGreater(min(layout["parts"]["forearm"]["footprint_mm"]), 100)
+
     def test_few_parts_spread_and_centred(self):
         sys.path.insert(0, str(HERE))
         import print_layout as pl
