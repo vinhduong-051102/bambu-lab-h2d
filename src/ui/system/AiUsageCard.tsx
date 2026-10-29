@@ -4,6 +4,7 @@ import { BarChartOutlined, ReloadOutlined } from '@ant-design/icons';
 import { Alert, Button, Card, Flex, Segmented, Space, Table, Tag, Tooltip, Typography } from 'antd';
 import { useCallback, useEffect, useState } from 'react';
 import { formatPlanUse, formatShare, formatTokens, formatUsd, USAGE_PERIODS } from '../aiUsage';
+import { AiUsageCharts } from './AiUsageCharts';
 
 /**
  * What each AI task cost (GET /api/ai/usage): tokens, the price Claude Code puts on them at API list prices, its
@@ -95,6 +96,7 @@ export function AiUsageCard() {
             <b>{formatUsd(totals.cost_usd)}</b> theo giá API · hạn mức gói dùng cộng dồn: <b>{Math.round(totals.plan_five_hour * 100)} %</b> (5 giờ),{' '}
             <b>{Math.round(totals.plan_seven_day * 100)} %</b> (7 ngày)
           </Typography.Text>
+          <AiUsageCharts tasks={data.tasks} tokens={totals.tokens} days={days} labels={labels} />
           <Table
             size="small"
             pagination={false}

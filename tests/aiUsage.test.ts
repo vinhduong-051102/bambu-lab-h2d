@@ -8,7 +8,7 @@ import { PrinterCommandService } from '../src/domain/commands/PrinterCommandServ
 import { PrinterService } from '../src/domain/PrinterService';
 import { env } from '../src/config/env';
 import { claudeEntry, fromClaude, planUse, readStream, recordAiUsage, setAiUsageFile, summarize, type AiUsageEntry } from '../src/domain/ai/aiUsage';
-import { formatPlanUse, formatShare, formatTokens, formatUsd } from '../src/ui/aiUsage';
+import { dailyCost, formatPlanUse, formatShare, formatTokens, formatUsd, niceScale, planTimeline, tokenParts, topTasks } from '../src/ui/aiUsage';
 import { createTestApp, type TestApp } from './helpers/testApp';
 
 /** A result line as Claude Code writes it (`claude -p --output-format stream-json`) */
@@ -130,5 +130,43 @@ describe('AI usage API (/api/ai/usage)', () => {
       ['cad', 0.75],
       ['timelapse', 0.25],
     ]);
+  });
+});
+
+describe('AI usage charts data', () => {
+  const task = (at: string, feature: string, cost: number, plan: object | null = null, duration = 60000) => ({
+    id: at, feature, title: at, at, cost_usd: cost, cost_share: null, total_tokens: 1, duration_ms: duration, plan,
+  });
+
+  it('has a bar for every day of the period, stacked by feature in a fixed order', () => {
+    const now = new Date(2026, 9, 29, 15, 0);
+    const data = dailyCost([task(new Date(2026, 9, 29, 9).toISOString(), 'timelapse', 0.25), task(new Date(2026, 9, 29, 10).toISOString(), 'cad', 1), task(new Date(2026, 9, 27, 10).toISOString(), 'cad', 0.5)], 7, now);
+    expect(data.days).toHaveLength(7);
+    expect(data.days.at(-1)).toMatchObject({ label: '29/10', total: 1.25, parts: { cad: 1, timelapse: 0.25 } });
+    expect(data.days.at(-3)?.total).toBe(0.5);
+    expect(data.features).toEqual(['cad', 'timelapse']);
+  });
+
+  it('follows the plan use through each task, oldest first', () => {
+    const points = planTimeline([
+      task('2026-10-29T03:11:00Z', 'cad', 1, { five_hour: { from: 0.09, to: 0.18, used: 0.09 } }, 600000),
+      task('2026-10-29T01:59:00Z', 'cad', 1, { five_hour: { from: 0, to: 0.02, used: 0.02 }, seven_day: { from: 0.25, to: 0.25, used: 0 } }),
+      task('2026-10-29T02:30:00Z', 'cad', 1, null),
+    ]);
+    expect(points.map((p) => p.five)).toEqual([0, 0.02, 0.09, 0.18]);
+    expect(points[2].seven).toBeNull();
+    expect(points[3].t - points[2].t).toBe(600000);
+  });
+
+  it('ranks tasks by cost and splits the tokens by kind', () => {
+    expect(topTasks([task('a', 'cad', 0.2), task('b', 'cad', 0.9), task('c', 'cad', 0)], 8).map((t) => t.id)).toEqual(['b', 'a']);
+    const parts = tokenParts({ input: 10, output: 90, cache_read: 800, cache_write: 100, thinking: 40 });
+    expect(parts.map((p) => [p.key, p.share])).toEqual([['input', 0.01], ['output', 0.09], ['cache_read', 0.8], ['cache_write', 0.1]]);
+  });
+
+  it('rounds the axis up to a step', () => {
+    expect(niceScale(0.73)).toEqual({ max: 0.8, ticks: [0, 0.2, 0.4, 0.6, 0.8] });
+    expect(niceScale(5.35).max).toBe(6);
+    expect(niceScale(0).max).toBe(1);
   });
 });
