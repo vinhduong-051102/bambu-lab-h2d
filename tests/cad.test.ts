@@ -31,6 +31,7 @@ class FakeWorker implements CadWorkerApi {
   generated: { id: string; model: string }[] = [];
   built: string[] = [];
   cancelled: string[] = [];
+  guided: string[] = [];
   running: string[] = [];
   fail: CadWorkerError | null = null;
 
@@ -58,6 +59,19 @@ class FakeWorker implements CadWorkerApi {
     this.cancelled.push(id);
     this.running = this.running.filter((r) => r !== id);
     await this.status(id, { state: 'cancelled', error: 'Đã hủy.' });
+  }
+
+  async guide(id: string) {
+    this.guided.push(id);
+    const folder = path.join(this.dir, id, 'out', 'guide');
+    await fs.mkdir(folder, { recursive: true });
+    const steps = [{ n: 1, parts: ['base'], text: 'Đặt base làm khung.', given: false, onto: null, joints: [], image: 'step-01.png' }];
+    await fs.writeFile(path.join(folder, 'guide.json'), JSON.stringify({ ok: true, order: 'mechanism', steps, video: 'assembly.mp4' }));
+    await fs.writeFile(path.join(folder, 'step-01.png'), Buffer.from([0x89, 0x50, 0x4e, 0x47]));
+    await fs.writeFile(path.join(folder, 'assembly.mp4'), Buffer.from('0123456789'));
+    const guide = { ok: true, steps: 1, video: 'assembly.mp4', error: null };
+    await this.status(id, { guide });
+    return guide;
   }
 
   /** Claude finishing the job */
@@ -280,6 +294,33 @@ describe('AI modelling API (/api/cad)', () => {
 
     expect((await app.inject({ method: 'GET', url: `/api/cad/jobs/${job.id}/files/job.json` })).statusCode).toBe(404);
     expect((await app.inject({ method: 'GET', url: `/api/cad/jobs/..%2F..%2Fetc/files/model.py` })).statusCode).toBe(404);
+  });
+
+  it('draws and serves the assembly guide of a model with components', async () => {
+    const { job } = (await create({ prompt: 'Bản lề hai chi tiết' })).json();
+    await worker.finish(job.id);
+    // A single part has nothing to put together
+    expect((await app.inject({ method: 'POST', url: `/api/cad/jobs/${job.id}/guide` })).statusCode).toBe(409);
+
+    await fs.writeFile(path.join(jobsDir, job.id, 'out', 'assembly.png'), Buffer.from([0x89, 0x50, 0x4e, 0x47]));
+    const drawn = await app.inject({ method: 'POST', url: `/api/cad/jobs/${job.id}/guide` });
+    expect(drawn.statusCode).toBe(200);
+    expect(drawn.json()).toMatchObject({ success: true, guide: { steps: 1 }, job: { files: { guide: true }, guide: { ok: true, steps: 1 } } });
+    expect(worker.guided).toEqual([job.id]);
+
+    const step = await app.inject({ method: 'GET', url: `/api/cad/jobs/${job.id}/guide/step-01.png` });
+    expect(step.statusCode).toBe(200);
+    expect(step.headers.get('content-type')).toBe('image/png');
+    expect((await app.inject({ method: 'GET', url: `/api/cad/jobs/${job.id}/guide/guide.json` })).statusCode).toBe(404);
+    expect((await app.inject({ method: 'GET', url: `/api/cad/jobs/${job.id}/guide/..%2Fmodel.png` })).statusCode).toBe(404);
+    const steps = (await app.inject({ method: 'GET', url: `/api/cad/jobs/${job.id}/files/guide.json` })).json();
+    expect(steps.steps[0].parts).toEqual(['base']);
+
+    // The video seeks with Range requests
+    const part = await app.inject({ method: 'GET', url: `/api/cad/jobs/${job.id}/files/assembly.mp4`, headers: { range: 'bytes=2-5' } });
+    expect(part.statusCode).toBe(206);
+    expect(part.headers.get('content-range')).toBe('bytes 2-5/10');
+    expect(Buffer.from(part.rawBody).toString()).toBe('2345');
   });
 
   it('lists jobs newest first', async () => {

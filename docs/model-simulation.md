@@ -76,6 +76,16 @@ components arrive unconfigured, removed ones are dropped with their joints, the 
   (with a short history), rpm against the kinematic value, and its results from the latest recorded run. The joints
   table lists each joint's type, parts, DOF and checks. *Chạy ghi kết quả* = a recorded run (results per part,
   checks, Blender replay).
+- **Dashboard, assembly guide:** a job with `components` → **🔧 Hướng dẫn lắp**: a video (`assembly.mp4`, each part
+  sliding to its place, then a turn round the finished model; *Tải video*) and every step with its picture (what is
+  in place in grey, the part going on in orange where it starts, an arrow to where it goes), its text, the part it
+  goes onto and the joint. `cad/assembly_guide.py` draws it after the last build of every such job (status step
+  *Vẽ hướng dẫn lắp*, ~1 minute for twenty parts) or on *Vẽ lại* (`POST /api/cad/jobs/:id/guide`, for jobs built
+  before). The order is the model's `assembly_steps` (cad/guide.md) when it gives them, else worked out from
+  `mechanism`: fixed parts first, then each part after the part it is jointed to, along its joint's axis, the
+  farthest along a shared shaft first; a part fixed to another goes in along the axis its own parts turn about.
+  The way in is not checked for collisions, and the view is the one of sixteen that shows most of the parts inside
+  the fixed ones.
 - **Dashboard, imported model:** ⚙️ Mô phỏng → 📦 Mô hình 3D đã nhập → *Nhập mô hình* (STL, 3MF, OBJ, PLY, GLB/glTF),
   then the same panel.
 - **Claude (MCP):** `cad_ask_claude` (the CAD guide tells it to keep `components` and declare `mechanism` for a

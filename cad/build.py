@@ -8,13 +8,16 @@ it also prints. Exits 1 when the model could not be built; report.json then says
 An assembly keeps its parts: a model that assigns `components` ({name: solid}, in their assembled places), or whose
 `result` holds several solids, also gets components/<name>.stl and assembly.json (each component's file, volume and
 centre, and the model's `mechanism` dict when it has one: what moves, how, and what is fixed, for simulation). With
-`components`, assembly.png shows them assembled: what is simulated, where preview.png shows the print layout.
+`components`, assembly.png shows them assembled: what is simulated, where preview.png shows the print layout; the
+model's `assembly_steps` (the order a person puts the parts together) go in assembly.json too, for the assembly guide
+the worker draws after the last build (assembly_guide.py).
 """
 
 import json
 import math
 import re
 import runpy
+import shutil
 import struct
 import sys
 import time
@@ -180,7 +183,34 @@ def read_components(namespace, solids):
     return out
 
 
-def write_components(components, mechanism, out, from_solids):
+def read_steps(steps, components):
+    """`assembly_steps` as given, checked: [{"parts": [component names], "text"?: str, "direction"?: [x, y, z]}]"""
+    if steps is None:
+        return None
+    if not isinstance(steps, list) or not all(isinstance(step, dict) for step in steps):
+        raise ValueError('`assembly_steps` must be a list of {"parts": [...], "text": "...", "direction": [x, y, z]}.')
+    seen = set()
+    for k, step in enumerate(steps, 1):
+        parts = step.get("parts")
+        if not isinstance(parts, list) or not parts or not all(isinstance(p, str) for p in parts):
+            raise ValueError(f"assembly_steps[{k - 1}]: \"parts\" must be a list of component names.")
+        unknown = [p for p in parts if p not in components]
+        if unknown:
+            raise ValueError(f"assembly_steps[{k - 1}] names parts that are not components: {unknown}.")
+        again = [p for p in parts if p in seen]
+        if again:
+            raise ValueError(f"assembly_steps[{k - 1}] puts on {again} a second time.")
+        seen.update(parts)
+        if "text" in step and not isinstance(step["text"], str):
+            raise ValueError(f"assembly_steps[{k - 1}]: \"text\" must be a string.")
+        direction = step.get("direction")
+        if direction is not None and not (isinstance(direction, list) and len(direction) == 3
+                                          and all(isinstance(c, (int, float)) for c in direction) and any(direction)):
+            raise ValueError(f"assembly_steps[{k - 1}]: \"direction\" must be [x, y, z], not all 0.")
+    return [{key: step[key] for key in ("parts", "text", "direction") if key in step} for step in steps]
+
+
+def write_components(components, mechanism, out, from_solids, steps=None):
     """components/<name>.stl and assembly.json"""
     from build123d import export_stl
 
@@ -205,8 +235,9 @@ def write_components(components, mechanism, out, from_solids):
         unknown |= {ref for ref in (mechanism.get("parts") or {}) if ref not in components}
         if unknown:
             raise ValueError(f"`mechanism` names parts that are not components: {sorted(unknown)}.")
+    steps = read_steps(steps, components)
     (out / "assembly.json").write_text(json.dumps({
-        "components": listed, "mechanism": mechanism,
+        "components": listed, "mechanism": mechanism, "steps": steps,
         "from": "solids of result" if from_solids else "components"}, indent=2, ensure_ascii=False))
     files = [entry["file"] for entry in listed] + ["assembly.json"]
     if not from_solids:
@@ -267,7 +298,8 @@ def build(model, out):
     files = ["model.stl", "model.step", "preview.png"]
     components = read_components(namespace, solids)
     if components:
-        files += write_components(components, namespace.get("mechanism"), out, namespace.get("components") is None)
+        files += write_components(components, namespace.get("mechanism"), out, namespace.get("components") is None,
+                                  namespace.get("assembly_steps"))
     elif namespace.get("mechanism") is not None:
         warnings.append("`mechanism` is ignored: a single part has nothing to move against (give `components`).")
 
@@ -295,6 +327,8 @@ def main():
         (out / stale).unlink(missing_ok=True)
     for stale in (out / "components").glob("*.stl") if (out / "components").is_dir() else []:
         stale.unlink()
+    # The assembly guide is of the model built before; the worker draws it again after the last build
+    shutil.rmtree(out / "guide", ignore_errors=True)
 
     started = time.monotonic()
     try:

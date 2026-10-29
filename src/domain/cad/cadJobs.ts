@@ -122,6 +122,8 @@ interface WorkerStatus {
   error: string | null;
   result: CadResult | null;
   report: CadBuildReport | null;
+  /** The assembly guide drawn after the last build of a model with `components` (cad/assembly_guide.py) */
+  guide?: CadGuideOutcome | null;
 }
 
 export interface CadJob extends CadJobMeta {
@@ -140,6 +142,8 @@ export interface CadJob extends CadJobMeta {
   error: string | null;
   result: CadResult | null;
   report: CadBuildReport | null;
+  /** The assembly guide of a model with `components`, as last drawn */
+  guide: CadGuideOutcome | null;
   /**
    * threemf: a coloured figure's 3MF, its faces painted with the filaments in report.palette; fix: the fix.py
    * of an older Claude review; views: the six sides Claude checked the figure from; sides: the sides a figure was
@@ -160,6 +164,8 @@ export interface CadJob extends CadJobMeta {
     blend: boolean;
     /** The parts assembled (components declared in model.py): what is simulated, where preview is the print layout */
     assembly: boolean;
+    /** Its assembly guide: steps (guide.json, a picture each) and a video (assembly.mp4) */
+    guide: boolean;
   };
 }
 
@@ -178,10 +184,21 @@ export const CAD_FILES = {
   'shaped.png': { path: 'source/preview.png', type: 'image/png' },
   'scene.blend': { path: 'out/scene.blend', type: 'application/x-blender' },
   'assembly.png': { path: 'out/assembly.png', type: 'image/png' },
+  'guide.json': { path: 'out/guide/guide.json', type: 'application/json; charset=utf-8' },
+  'assembly.mp4': { path: 'out/guide/assembly.mp4', type: 'video/mp4' },
 } as const;
 export type CadFileName = keyof typeof CAD_FILES;
 
 const JOB_ID_RE = /^[a-z0-9][a-z0-9-]{5,63}$/;
+const GUIDE_PICTURE_RE = /^(step-\d{2,3}|done)\.png$/;
+
+/** What drawing an assembly guide came to: its steps, and its video unless ffmpeg failed (`error` says why) */
+export interface CadGuideOutcome {
+  ok: boolean;
+  steps?: number;
+  video?: string | null;
+  error?: string | null;
+}
 
 /** "20261023-091502-a1b2": sorts by creation time, and fits the worker's job id rule */
 export function newJobId(now = new Date()): string {
@@ -253,8 +270,8 @@ export class CadJobStore {
     const meta = await readJson<CadJobMeta>(path.join(dir, 'job.json'));
     if (!meta) return null;
     const status = await readJson<WorkerStatus>(path.join(dir, 'status.json'));
-    const names = ['model.py', 'model.stl', 'model.step', 'preview.png', 'concept.png', 'model.3mf', 'fix.py', 'views.png', 'sides.png', 'shaped.png', 'scene.blend', 'assembly.png'] as const;
-    const [code, stl, step, preview, concept, threemf, fix, views, sides, shaped, blend, assembly] = await Promise.all(
+    const names = ['model.py', 'model.stl', 'model.step', 'preview.png', 'concept.png', 'model.3mf', 'fix.py', 'views.png', 'sides.png', 'shaped.png', 'scene.blend', 'assembly.png', 'guide.json'] as const;
+    const [code, stl, step, preview, concept, threemf, fix, views, sides, shaped, blend, assembly, guide] = await Promise.all(
       names.map((name) => exists(path.join(dir, CAD_FILES[name].path)))
     );
     return {
@@ -276,7 +293,8 @@ export class CadJobStore {
       result: status?.result ?? null,
       report: status?.report ?? null,
       // A fix's source/ is the version before it, already shown as such: only a figure Hunyuan3D shaped has its own
-      files: { code, stl, step, preview, concept, threemf, fix, views, sides, shaped: shaped && status?.maker === 'hunyuan', blend, assembly },
+      files: { code, stl, step, preview, concept, threemf, fix, views, sides, shaped: shaped && status?.maker === 'hunyuan', blend, assembly, guide },
+      guide: status?.guide ?? null,
     };
   }
 
@@ -330,6 +348,14 @@ export class CadJobStore {
     const dir = this.jobDir(id);
     if (!dir) return null;
     const file = path.join(dir, CAD_FILES[name].path);
+    return (await exists(file)) ? file : null;
+  }
+
+  /** A picture of a job's assembly guide (step-01.png…, done.png), or null when there is none */
+  async guidePicture(id: string, name: string): Promise<string | null> {
+    const dir = this.jobDir(id);
+    if (!dir || !GUIDE_PICTURE_RE.test(name)) return null;
+    const file = path.join(dir, 'out', 'guide', name);
     return (await exists(file)) ? file : null;
   }
 
@@ -461,6 +487,8 @@ export interface CadWorkerApi {
   generate(id: string, model: string): Promise<void>;
   build(id: string): Promise<CadBuildReport>;
   cancel(id: string): Promise<void>;
+  /** Draws the assembly guide of a built assembly again */
+  guide(id: string): Promise<CadGuideOutcome>;
 }
 
 /** JSON over HTTP to a worker container; errors as CadWorkerError with the worker's message */
@@ -511,6 +539,11 @@ export class CadWorkerClient extends WorkerHttp implements CadWorkerApi {
 
   async cancel(id: string) {
     await this.call('POST', `/jobs/${id}/cancel`, {}, 10000);
+  }
+
+  async guide(id: string) {
+    // The worker allows a guide 420 s (a frame of video for every step's every move)
+    return (await this.call<{ guide: CadGuideOutcome }>('POST', `/jobs/${id}/guide`, {}, 450000)).guide;
   }
 }
 

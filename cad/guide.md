@@ -86,3 +86,16 @@ mechanism = {
   (kg), `collision: True` with `friction`. Only write what the user asked for or what the design itself fixes (a
   joint is where you put the pin): never invent a motor speed, a load or a mass the user did not give. What is
   missing is asked for in the dashboard before simulating.
+- The dashboard draws an assembly guide from it (a picture per step and a video): the fixed parts first, then each
+  part after the one it is jointed to, along its joint's axis. When the order or the way in matters (a shaft that
+  takes its gears before it goes into the housing, a lid last), assign `assembly_steps`, in Vietnamese:
+
+```python
+assembly_steps = [
+    {"parts": ["shaft", "gear"], "text": "Lồng bánh răng vào trục trước khi lắp trục vào vỏ."},
+    {"parts": ["housing"], "text": "Đặt vỏ xuống, đưa trục vào hai lỗ ổ.", "direction": [0, 0, -1]},
+]
+```
+
+  `direction` is the way the parts move to their place (mm-frame vector); parts left out go on after, in the order
+  above. Name only components.

@@ -28,6 +28,7 @@ export const STEP_LABELS = {
   building: 'Dựng mô hình',
   reviewing: 'Xem ảnh để kiểm tra',
   finishing: 'Xuất file',
+  guiding: 'Vẽ hướng dẫn lắp',
   // Figures from a picture: Hunyuan3D-2 on the GPU, before Claude finishes them
   queued: 'Chờ GPU',
   loading: 'Nạp model dựng hình vào GPU',

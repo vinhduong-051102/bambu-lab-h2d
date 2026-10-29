@@ -101,7 +101,7 @@ function fileStream(file: string, start: number, end: number): ReadableStream<Ui
 }
 
 /** The file, whole or the byte range the browser asks for (video players seek with Range requests) */
-async function serveFile(request: Request, file: string, type: string, cache: string): Promise<Response> {
+export async function serveFile(request: Request, file: string, type: string, cache: string): Promise<Response> {
   const { size } = await fs.stat(file);
   const headers: Record<string, string> = { 'Content-Type': type, 'Accept-Ranges': 'bytes', 'Cache-Control': cache };
   const range = request.headers.get('range')?.match(/^bytes=(\d*)-(\d*)$/);

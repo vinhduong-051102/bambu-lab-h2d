@@ -1,7 +1,7 @@
 """
 Assemblies keep their parts (build.py, guide.md "Assemblies that move"): a model's `components` and `mechanism`
 become components/<name>.stl in their assembled places and assembly.json, which the dashboard simulates as is
-(docs/model-simulation.md); a single part writes neither.
+(docs/model-simulation.md); a single part writes neither. assembly_guide.py then draws how to put them together.
 
     cd /opt/cad && python -m unittest tests.test_assembly
 """
@@ -36,6 +36,12 @@ def build(code):
     done = subprocess.run([sys.executable, str(HERE / "build.py"), "model.py"], cwd=job,
                           capture_output=True, text=True, timeout=300, check=False)
     return done, job / "out"
+
+
+def guide(out):
+    done = subprocess.run([sys.executable, str(HERE / "assembly_guide.py"), str(out)],
+                          capture_output=True, text=True, timeout=300, check=False)
+    return done, json.loads(done.stdout)
 
 
 def stl_bounds(path):
@@ -76,6 +82,55 @@ class AssemblyTest(unittest.TestCase):
         self.assertFalse((out / "assembly.json").exists())
         self.assertFalse((out / "assembly.png").exists())
         self.assertEqual(json.loads((out / "report.json").read_text(encoding="utf-8"))["components"], [])
+
+    def test_guide_from_mechanism(self):
+        _, out = build(HINGE)
+        done, result = guide(out)
+        self.assertEqual(done.returncode, 0, result.get("error"))
+        steps = result["steps"]
+        self.assertEqual([s["parts"] for s in steps], [["base"], ["arm"]])
+        self.assertEqual(result["order"], "mechanism")
+        # The arm turns about Z on the base, so it goes on along Z
+        self.assertEqual(steps[1]["onto"], "base")
+        self.assertEqual(steps[1]["joints"], [{"id": "hinge", "type": "revolute", "part": "arm"}])
+        self.assertEqual([abs(c) for c in steps[1]["moves_along"]["arm"]], [0, 0, 1])
+        # From above, as the arm sits above the base, down onto it
+        self.assertEqual(steps[1]["moves_along"]["arm"][2], -1)
+        self.assertIn("Lồng arm vào base", steps[1]["text"])
+        for name in ("step-01.png", "step-02.png", "done.png"):
+            self.assertTrue((out / "guide" / name).stat().st_size > 0)
+        if result["video"]:
+            self.assertGreater((out / "guide" / "assembly.mp4").stat().st_size, 0)
+            self.assertGreater(result["video_seconds"], 2)
+        else:
+            self.assertIn("ffmpeg", result["video_error"])
+        # A build of the model again clears the guide of the one before
+        build_again = subprocess.run([sys.executable, str(HERE / "build.py"), "model.py"], cwd=out.parent,
+                                     capture_output=True, text=True, timeout=300, check=False)
+        self.assertEqual(build_again.returncode, 0)
+        self.assertFalse((out / "guide").exists())
+
+    def test_guide_from_the_models_steps(self):
+        code = HINGE + 'assembly_steps = [{"parts": ["arm"], "text": "Đặt tay lên trước.", "direction": [0, 0, -1]}]\n'
+        _, out = build(code)
+        self.assertEqual(json.loads((out / "assembly.json").read_text(encoding="utf-8"))["steps"][0]["parts"], ["arm"])
+        done, result = guide(out)
+        self.assertEqual(done.returncode, 0, result.get("error"))
+        self.assertEqual(result["order"], "model")
+        self.assertEqual([s["parts"] for s in result["steps"]], [["arm"], ["base"]])
+        self.assertEqual(result["steps"][0]["text"], "Đặt tay lên trước.")
+        self.assertEqual(result["steps"][0]["moves_along"]["arm"], [0, 0, -1])
+
+    def test_bad_steps_fail_the_build(self):
+        done, out = build(HINGE + 'assembly_steps = [{"parts": ["lid"]}]\n')
+        self.assertEqual(done.returncode, 1)
+        self.assertIn("'lid'", json.loads((out / "report.json").read_text(encoding="utf-8"))["error"])
+
+    def test_no_guide_for_a_print_layout(self):
+        _, out = build("from build123d import Box, Pos\nresult = [Box(10, 10, 10), Pos(30, 0, 0) * Box(10, 10, 10)]\n")
+        done, result = guide(out)
+        self.assertEqual(done.returncode, 1)
+        self.assertIn("components", result["error"])
 
 
 if __name__ == "__main__":

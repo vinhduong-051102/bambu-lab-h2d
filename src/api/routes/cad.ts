@@ -28,6 +28,7 @@ import { customLabel } from '../../domain/filaments/customFilaments';
 import { familyOf } from '../../domain/filaments/bambuColors';
 import { suggestMix } from '../../domain/filaments/colourMixing';
 import { saveStudioImport, safeFileName } from '../../domain/studio/studioImports';
+import { serveFile } from './timelapse';
 import { handler, json, readJsonBody } from '../http';
 
 /** Models the dashboard offers for writing a model; the first is used when a request names none */
@@ -626,10 +627,40 @@ export const getCadFile = handler<{ id: string; name: string }>(async ({ request
   const job = file && (await store().get(params.id));
   if (!file || !job) return json({ success: false, error: 'FILE_NOT_FOUND', message: 'Không có file này.' }, 404);
 
+  // The assembly guide's video plays in the card, which seeks with Range requests
+  if (name === 'assembly.mp4' && !new URL(request.url).searchParams.has('download')) {
+    return serveFile(request, file, CAD_FILES[name].type, 'no-cache');
+  }
   const headers: Record<string, string> = { 'Content-Type': CAD_FILES[name].type, 'Cache-Control': 'no-cache' };
   if (new URL(request.url).searchParams.has('download')) {
     const ext = path.extname(name);
     headers['Content-Disposition'] = `attachment; filename="${fileStem(job)}${ext}"`;
   }
   return new Response(new Uint8Array(await fs.readFile(file)), { headers });
+});
+
+// GET /api/cad/jobs/:id/guide/:picture - A picture of the assembly guide: step-01.png… (each step), done.png
+export const getCadGuidePicture = handler<{ id: string; picture: string }>(async ({ params }) => {
+  const file = await store().guidePicture(params.id, params.picture);
+  if (!file) return json({ success: false, error: 'FILE_NOT_FOUND', message: 'Không có ảnh này.' }, 404);
+  return new Response(new Uint8Array(await fs.readFile(file)), { headers: { 'Content-Type': 'image/png', 'Cache-Control': 'no-cache' } });
+});
+
+// POST /api/cad/jobs/:id/guide - Draws the assembly guide (steps and video) of a built model with `components` again,
+// for one built before guides were drawn; ~1 minute for twenty parts
+export const remakeCadGuide = handler<{ id: string }>(async ({ params }) => {
+  const job = await store().get(params.id);
+  if (!job) return jobNotFound();
+  if (job.source === 'mesh' || !job.files.assembly) {
+    return json({ success: false, error: 'NO_ASSEMBLY', message: 'Mô hình không khai báo components nên không có hướng dẫn lắp.' }, 409);
+  }
+  const w = worker();
+  if (!w) return disabled();
+  try {
+    const guide = await w.guide(params.id);
+    return json({ success: guide.ok, guide, job: await store().get(params.id) }, guide.ok ? 200 : 500);
+  } catch (err) {
+    if (err instanceof CadWorkerError) return workerFailed(err);
+    throw err;
+  }
 });

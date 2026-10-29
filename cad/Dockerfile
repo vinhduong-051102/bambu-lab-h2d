@@ -19,6 +19,11 @@ RUN export HOME=/tmp/claude-install \
  && rm -rf "$HOME" \
  && claude --version
 
+# ffmpeg encodes the assembly guide's video (assembly_guide.py); its own layer, so the ones above stay cached
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends ffmpeg \
+ && rm -rf /var/lib/apt/lists/*
+
 # Claude Code won't run its tools unattended as root; the worker and everything it starts run as cad
 RUN useradd --create-home --uid 1000 cad
 USER cad

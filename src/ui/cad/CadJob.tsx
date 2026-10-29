@@ -22,6 +22,7 @@ import { fileUrl, formatDuration, formatProgress, formatSize, isBusy, jobSteps, 
 import { checkedSettings, settingsSummary, sortedChecks, statusCounts } from '../eng';
 import { formatPrintTime } from '../prints';
 import { ModelSim } from '../sim/ModelSim';
+import { AssemblyGuideButton } from './AssemblyGuide';
 import { EngCheckButton } from './EngCheck';
 
 /** As many pictures as the gateway takes with one revision */
@@ -66,6 +67,7 @@ export interface CadJob {
     colour_request?: Record<string, unknown>;
   } | null;
   files?: Record<string, boolean>;
+  guide?: { ok: boolean; steps?: number; video?: string | null; error?: string | null } | null;
 }
 
 export interface PaletteEntry {
@@ -521,6 +523,7 @@ export function CadJobCard(props: {
             {done && job.files?.step && link('model.step', 'STEP', { download: true, icon: <DownloadOutlined /> })}
             {done && <EngCheckButton job={job} onRevise={onRevise ? (comment) => onRevise(comment, []) : undefined} />}
             {done && <SimulateButton job={job} />}
+            {done && job.files?.assembly && <AssemblyGuideButton job={job} />}
             {job.files?.code && link('model.py', 'Code', { icon: <FileTextOutlined /> })}
             {!busy && job.files?.code && (
               <Button size="small" icon={<EditOutlined />} onClick={() => setRevising(!revising)}>
