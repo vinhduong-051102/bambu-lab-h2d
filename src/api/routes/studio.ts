@@ -21,6 +21,7 @@ import { AiSessionStore, appliedSchema, feedbackSchema, PRINT_ISSUE_LABELS, PRIN
 import { safeFileName, saveStudioImport, STUDIO_FILE_RE, type StudioImport } from '../../domain/studio/studioImports';
 import { handler, json, readJsonBody } from '../http';
 import { partsSection } from './parts';
+import { claudeEntry, recordAiUsage } from '../../domain/ai/aiUsage';
 
 const MAX_IMPORT_BYTES = 1024 * 1024 * 1024;
 
@@ -201,9 +202,17 @@ export const aiOptimizePrompt = handler(async ({ request, printerService }) => {
 
 // POST /api/studio/ai-optimize/check - {request, proposal}: the same checks as ai-optimize, on a proposal made elsewhere
 export const aiOptimizeCheck = handler(async ({ request }) => {
-  const body = (await readJsonBody(request)) as { request?: unknown; proposal?: unknown } | null;
+  const body = (await readJsonBody(request)) as { request?: unknown; proposal?: unknown; usage?: { result?: unknown; windows?: unknown } } | null;
   const parsed = parseStudioRequest(body?.request);
   if (parsed instanceof Response) return parsed;
+  // What `claude -p` used, for the AI statistics (on-click sends it with the proposal)
+  const usage = body?.usage;
+  if (usage?.result && typeof usage.result === 'object') {
+    const names = (parsed.objects ?? []).map((o) => o.name).join(', ');
+    await recordAiUsage(
+      claudeEntry('studio', names || parsed.process_preset, usage.result as Record<string, unknown>, Array.isArray(usage.windows) ? usage.windows : [])
+    );
+  }
   const proposal = aiProposalSchema.safeParse(body?.proposal);
   if (!proposal.success) {
     return json({ success: false, error: 'AI_NO_OUTPUT', message: 'AI không trả về kết quả hợp lệ.' }, 400);

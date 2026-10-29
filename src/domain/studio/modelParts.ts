@@ -351,7 +351,7 @@ export class ModelParts {
     try {
       const images = await Promise.all(['views.png', 'parts.png'].map((n) => this.store.image(analysis.key, n)));
       if (images.some((i) => !i)) throw new Error('Thiếu ảnh render của mẫu.');
-      const raw = await this.namer!.review(NAMING_SYSTEM, (files) => namingPrompt(analysis, files), images as Buffer[], NAMING_SCHEMA, 'png');
+      const raw = await this.namer!.review(NAMING_SYSTEM, (files) => namingPrompt(analysis, files), images as Buffer[], NAMING_SCHEMA, 'png', `Chi tiết của ${analysis.object.name} (${path.basename(analysis.file)})`);
       const naming = namingSchema.parse(raw);
       const ids = new Set(analysis.features.map((f) => f.id));
       named = {

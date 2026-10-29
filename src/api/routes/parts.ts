@@ -33,7 +33,7 @@ export function modelParts(): ModelParts {
     path.resolve(env.STUDIO_IMPORT_DIR ?? './data/studio/imports'),
     new ModelPartsStore(path.resolve(env.MODEL_ANALYSIS_DIR)),
     env.MESH_WORKER_URL && env.STUDIO_IMPORT_DIR ? new MeshPartsWorker(env.MESH_WORKER_URL) : null,
-    new ClaudeCodeVision(env.PARTS_AI_MODEL)
+    new ClaudeCodeVision(env.PARTS_AI_MODEL, undefined, undefined, 'parts')
   );
   return shared;
 }

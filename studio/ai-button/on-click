@@ -151,8 +151,12 @@ if ! jq -e '.structured_output' "$work/claude.json" >/dev/null 2>&1; then
   fail "Claude không trả về kết quả hợp lệ (mã $code): ${detail:-không có thông báo lỗi}"
 fi
 
-jq -n --slurpfile request "$request" --slurpfile claude "$work/claude.json" \
-  '{request: $request[0], proposal: $claude[0].structured_output}' > "$work/check.json" \
+# What Claude used (tokens, cost, the plan's 5-hour and 7-day use as it went), for the gateway's AI statistics
+jq -Rc 'fromjson? | select(.type == "rate_limit_event") | .rate_limit_info.unifiedWindows' "$work/claude.jsonl" \
+  > "$work/windows.jsonl" 2>/dev/null
+jq -n --slurpfile request "$request" --slurpfile claude "$work/claude.json" --slurpfile windows "$work/windows.jsonl" \
+  '{request: $request[0], proposal: $claude[0].structured_output,
+    usage: {result: ($claude[0] | del(.structured_output, .result)), windows: $windows}}' > "$work/check.json" \
   || fail "Không đọc được dữ liệu từ Studio."
 progress check "$(jq '.proposal.changes | length' "$work/check.json")" "$notes"
 post "$work/check.json" "$url/check" "$work/answer.json"

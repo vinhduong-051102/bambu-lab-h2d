@@ -120,6 +120,7 @@ export const GATEWAY_ROUTES: RouteDoc[] = [
 
   // Claude subscriptions
   { method: 'GET', path: '/api/ai/limits', category: 'Hệ thống', description: 'Hạn mức còn lại của các gói Claude (CLAUDE_CODE_OAUTH_TOKEN và _FALLBACK): % đã dùng 5 giờ và 7 ngày, lúc reset, có gọi được không. Lưu 5 phút; ?refresh=1 để kiểm tra lại', exampleUrl: '/api/ai/limits' },
+  { method: 'GET', path: '/api/ai/usage', category: 'Hệ thống', description: 'Thống kê dùng AI theo task (thiết kế AI, nhân vật, đánh giá timelapse, nhận diện chi tiết, AI tối ưu Studio): token, chi phí theo giá API, % trong kỳ, % hạn mức 5 giờ / 7 ngày đã dùng; tổng theo tính năng. ?days=30 (0 = tất cả)', exampleUrl: '/api/ai/usage?days=30' },
 
   // Mechanical model (docs/mechanical-model.md): parts, assembly, DOF, Chrono through /api/sim
   { method: 'POST', path: '/api/mech/:action', category: 'Mô hình cơ khí', description: 'designs {model} (tạo thiết kế mech/1, kiểm tra), import {model_id, fixed, materials, accept} (từ mô hình có sẵn), designs/<id> {changes} (bản sửa mới), designs/<id>/validate · simulate {wait_s} · repairs · apply {proposal_ids, approved} · live {revision, paused} (mở trong khung 3D trực tiếp), models/setup {job_id | model_id} (mô phỏng chính mô hình 3D)', body: '{"model": {"schema": "mech/1", "parts": [...], "joints": [...]}}' },

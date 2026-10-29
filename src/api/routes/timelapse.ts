@@ -22,7 +22,7 @@ const reviews = () =>
   (reviewer ??= new TimelapseReviewer(
     path.resolve(env.TIMELAPSE_CACHE_DIR, 'reviews'),
     new FfmpegFrames(ffmpegInstaller.path),
-    new ClaudeCodeVision(env.TIMELAPSE_AI_MODEL)
+    new ClaudeCodeVision(env.TIMELAPSE_AI_MODEL, undefined, undefined, 'timelapse')
   ));
 const journal = () => journalOverride ?? new PrintJournal(path.resolve(env.PRINT_HISTORY_DIR));
 const sessionStore = () => sessionStoreOverride ?? new AiSessionStore(path.resolve(env.STUDIO_AI_DATA_DIR));
