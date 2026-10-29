@@ -139,6 +139,38 @@ class A2_Names(unittest.TestCase):
         self.assertIn("'crank_joint'", design["revision_info"]["note"])
 
 
+class A3_Welds(unittest.TestCase):
+    def test_fixed_joint_needs_no_position_nor_solver_settings(self):
+        # As the desk calendar declared them: shafts welded to the housing, no position, no simulation settings
+        mechanism = copy.deepcopy(MECHANISM)
+        del mechanism["simulation"]
+        mechanism["parts"]["base"]["fixed"] = False
+        parts = {**PARTS, "frame": ([50, 0, -20], [200, 60, 8])}
+        mechanism["parts"]["frame"] = {"fixed": True, "role": "frame"}
+        mechanism["joints"].append({"id": "base_weld", "type": "fixed", "part_a": "frame", "part_b": "base"})
+        make_job("job-weld-a4", parts, mechanism)
+        s = models.setup({"job_id": "job-weld-a4"})
+        self.assertEqual(s["state"], "READY", s.get("reason"))
+        self.assertEqual(s["validation"]["dof"]["mobility"], 1)
+        self.assertEqual({a["path"] for a in s["validation"]["assumptions"]}, {"simulation.time_step", "simulation.duration"})
+
+    def test_shared_shaft_joints_written_at_its_end(self):
+        # The desk calendar's drums: one shaft along X, every joint written at x = 0 on its axis
+        parts = {"frame": ([60, 0, -20], [200, 60, 8]), "shaft": ([60, 0, 0], [160, 4, 4]),
+                 "drum_a": ([20, 0, 0], [16, 24, 24]), "drum_b": ([100, 0, 0], [16, 24, 24])}
+        mechanism = {"parts": {"frame": {"fixed": True, "role": "frame"}, "drum_a": {"material": "pla"}, "drum_b": {"material": "pla"}},
+                     "joints": [{"id": "weld", "type": "fixed", "part_a": "frame", "part_b": "shaft"},
+                                {"id": "a_rot", "type": "revolute", "part_a": "shaft", "part_b": "drum_a", "position": [0, 0, 0], "axis": [1, 0, 0]},
+                                {"id": "b_rot", "type": "revolute", "part_a": "shaft", "part_b": "drum_b", "position": [0, 0, 0], "axis": [1, 0, 0]}]}
+        make_job("job-shaft-a5", parts, mechanism)
+        s = models.setup({"job_id": "job-shaft-a5"})
+        self.assertNotIn("JOINT_AWAY_FROM_PART", codes(s["validation"]))
+        # Off the axis, it is still found
+        mechanism["joints"][2]["position"] = [0, 40, 0]
+        make_job("job-shaft-a6", parts, mechanism)
+        self.assertIn("JOINT_AWAY_FROM_PART", codes(models.setup({"job_id": "job-shaft-a6"})["validation"]))
+
+
 class B_ModelChanges(unittest.TestCase):
     @unittest.skipUnless(CHRONO, "no Chrono")
     def test_revisions_keep_their_runs(self):

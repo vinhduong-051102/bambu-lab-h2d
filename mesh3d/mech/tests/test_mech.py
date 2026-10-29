@@ -234,7 +234,9 @@ class E_Missing(unittest.TestCase):
         self.assertIn("MASS_UNKNOWN", codes(v, "error"))
         paths = {x["path"] for x in v["missing"]}
         self.assertIn("motors[0].law", paths)
-        self.assertIn("simulation", paths)
+        # Solver settings left out are a stated default, not physical data to ask for
+        self.assertNotIn("simulation", paths)
+        self.assertIn("simulation.time_step", {a["path"] for a in v["assumptions"]})
         shaft = next(p for p in v["parts"] if p["id"] == "input_shaft")
         self.assertIsNone(shaft["mass"])
         with self.assertRaises(service.MechError):
