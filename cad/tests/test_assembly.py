@@ -191,5 +191,67 @@ class AssemblyTest(unittest.TestCase):
         self.assertIn("nothing to print", json.loads((out / "report.json").read_text(encoding="utf-8"))["error"])
 
 
+def box(w, d, h, at=(0.0, 0.0, 0.0)):
+    """A box's triangles (12, 3, 3), its corner at `at`"""
+    import numpy as np
+
+    x, y, z = at
+    c = [(x + i * w, y + j * d, z + k * h) for i in (0, 1) for j in (0, 1) for k in (0, 1)]
+    faces = [(0, 2, 1), (1, 2, 3), (4, 5, 6), (5, 7, 6), (0, 1, 4), (1, 5, 4), (2, 6, 3), (3, 6, 7),
+             (0, 4, 2), (2, 4, 6), (1, 3, 5), (3, 7, 5)]
+    return np.array([[c[a], c[b], c[d_]] for a, b, d_ in faces], dtype=float)
+
+
+class SpacingTest(unittest.TestCase):
+    """Parts are not packed edge to edge: at least GAP apart and MARGIN from the reach, spread over a plate with room"""
+
+    def footprints(self, meshes, layout):
+        out = {}
+        for name, part in layout["parts"].items():
+            points = meshes[name].reshape(-1, 3) @ part["matrix"][:3, :3].T + part["matrix"][:3, 3]
+            out[name] = (part["plate"], points.min(axis=0), points.max(axis=0))
+        return out
+
+    def test_gaps_and_margins(self):
+        sys.path.insert(0, str(HERE))
+        import print_layout as pl
+
+        meshes = {f"p{k}": box(40 + 7 * k, 30 + 5 * k, 6) for k in range(14)}
+        layout = pl.plan(meshes)
+        boxes = self.footprints(meshes, layout)
+        for n, (plate, lo, hi) in boxes.items():
+            origin = pl.plate_origin(plate - 1, len(layout["plates"]))
+            self.assertGreaterEqual(lo[0] - origin[0], pl.REACH[0][0] + pl.MARGIN - 1e-6, n)
+            self.assertLessEqual(hi[0] - origin[0], pl.REACH[0][1] - pl.MARGIN + 1e-6, n)
+            self.assertGreaterEqual(lo[1] - origin[1], pl.REACH[1][0] + pl.MARGIN - 1e-6, n)
+            self.assertLessEqual(hi[1] - origin[1], pl.REACH[1][1] - pl.MARGIN + 1e-6, n)
+        names = list(boxes)
+        for i, a in enumerate(names):
+            for b in names[i + 1:]:
+                if boxes[a][0] != boxes[b][0]:
+                    continue
+                apart = max(boxes[b][1][0] - boxes[a][2][0], boxes[a][1][0] - boxes[b][2][0],
+                            boxes[b][1][1] - boxes[a][2][1], boxes[a][1][1] - boxes[b][2][1])
+                self.assertGreaterEqual(apart, pl.GAP - 1e-6, (a, b))
+
+    def test_few_parts_spread_and_centred(self):
+        sys.path.insert(0, str(HERE))
+        import print_layout as pl
+
+        meshes = {"a": box(50, 40, 5), "b": box(50, 40, 5), "c": box(50, 40, 5)}
+        layout = pl.plan(meshes)
+        boxes = self.footprints(meshes, layout)
+        lows = [lo for _, lo, _ in boxes.values()]
+        highs = [hi for _, _, hi in boxes.values()]
+        # Centred on the reach
+        middle = (min(l[0] for l in lows) + max(h[0] for h in highs)) / 2
+        self.assertAlmostEqual(middle, sum(pl.REACH[0]) / 2, delta=1)
+        # Wider apart than the least gap
+        xs = sorted((lo[0], hi[0]) for lo, hi in zip(lows, highs))
+        ys = sorted((lo[1], hi[1]) for lo, hi in zip(lows, highs))
+        widest = max(max(b[0] - a[1] for a, b in zip(xs, xs[1:])), max(b[0] - a[1] for a, b in zip(ys, ys[1:])))
+        self.assertGreater(widest, 2 * pl.GAP)
+
+
 if __name__ == "__main__":
     unittest.main()

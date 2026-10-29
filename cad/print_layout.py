@@ -9,6 +9,8 @@ onto as many H2D plates as it takes.
 - Packing: footprints (rectangles, a gap apart, turned 90° when that fits better) go on the plate area both nozzles
   reach (H2D: X 25–325, Y 0–320 mm), biggest first, each where it leaves the shortest side free (MaxRects); a part
   that fits on no plate starts a new one, one larger than a plate gets a plate of its own and a warning.
+- Spreading: a plate's parts then move apart to use the whole area (each one's distance from the packed corner
+  scaled up, which only widens the gaps), and the group is centred on the plate.
 - Plates sit where Bambu Studio puts them (plate n at its grid place, a fifth of a plate apart), so the 3MF that
   write_3mf makes opens with each part on its own plate.
 """
@@ -22,7 +24,11 @@ import numpy as np
 BED = (350.0, 320.0)
 REACH = ((25.0, 325.0), (0.0, 320.0))
 MAX_HEIGHT = 320.0
-MARGIN, GAP = 3.0, 4.0
+# Least room between parts, and from the edge of the reach (a long part may need nearly all of it); a plate with room
+# to spare spreads its parts further apart and centres them, which leaves wider edges
+MARGIN, GAP = 3.0, 8.0
+# At most this many times the packed spacing, so a few small parts don't fly to the plate's corners
+SPREAD_MAX = 3.0
 # Studio's LOGICAL_PART_PLATE_GAP: plates are a fifth of a plate apart
 PLATE_GAP = 1 / 5
 # Downward faces steeper than this from vertical need support
@@ -150,6 +156,33 @@ class MaxRects:
             and a[1] + a[3] <= b[1] + b[3] + 1e-6 and (a != b or j < i) for j, b in enumerate(out))]
 
 
+def sizes(placed, turned):
+    """Each placed part's footprint as packed: its size plus the gap, turned when it was"""
+    out = {}
+    for name, (_, _, _, quarter) in placed.items():
+        w, h = turned[name]["size"][:2] + GAP
+        out[name] = (h, w) if quarter else (w, h)
+    return out
+
+
+def spread(placed, footprints, usable):
+    """The parts of each plate moved apart to use its area, then the group centred. Scaling each footprint's corner by
+    s ≥ 1 keeps rectangles that did not overlap apart (s·b − s·a ≥ b − a ≥ the width of the one before), and the far
+    edge stays within the plate while s ≤ the plate's width over the packed width."""
+    area = (usable[0] + GAP, usable[1] + GAP)
+    out = dict(placed)
+    for k in {v[0] for v in placed.values()}:
+        names = [n for n, v in placed.items() if v[0] == k]
+        far = [max(placed[n][1 + a] + footprints[n][a] for n in names) for a in (0, 1)]
+        scale = [min(SPREAD_MAX, area[a] / far[a]) if far[a] > 0 else 1.0 for a in (0, 1)]
+        moved = {n: [placed[n][1] * scale[0], placed[n][2] * scale[1]] for n in names}
+        used = [max(moved[n][a] + footprints[n][a] for n in names) for a in (0, 1)]
+        shift = [max(0.0, (area[a] - used[a]) / 2) for a in (0, 1)]
+        for n in names:
+            out[n] = (k, moved[n][0] + shift[0], moved[n][1] + shift[1], placed[n][3])
+    return out
+
+
 def plan(meshes):
     """{name: triangles (n, 3, 3) as assembled} → {"parts": {name: {matrix (4×4, assembled → plate), plate,
     footprint_mm, contact_mm2, overhang_mm2, height_mm}}, "plates": [{n, parts}], "warnings": [...]}"""
@@ -186,6 +219,7 @@ def plan(meshes):
         if turned[name]["size"][2] > MAX_HEIGHT:
             warnings.append(f"{name} cao {turned[name]['size'][2]:.0f} mm, quá {MAX_HEIGHT:.0f} mm của H2D.")
 
+    placed = spread(placed, {name: rects for name, rects in sizes(placed, turned).items()}, usable)
     parts = {}
     for name, (k, x, y, quarter) in placed.items():
         info = turned[name]
