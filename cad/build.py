@@ -4,10 +4,15 @@ Build runner: python build.py <model.py> [out dir]
 Runs a build123d model file (see guide.md: it assigns the finished solid to `result`), then writes to the out
 dir (default: out/ next to the model): model.stl, model.step, preview.png (four views) and report.json, which
 it also prints. Exits 1 when the model could not be built; report.json then says why.
+
+An assembly keeps its parts: a model that assigns `components` ({name: solid}, in their assembled places), or whose
+`result` holds several solids, also gets components/<name>.stl and assembly.json (each component's file, volume and
+centre, and the model's `mechanism` dict when it has one: what moves, how, and what is fixed, for simulation).
 """
 
 import json
 import math
+import re
 import runpy
 import struct
 import sys
@@ -136,11 +141,83 @@ def render_preview(triangles, size, path, face_colours=None, views=VIEWS):
     plt.close(fig)
 
 
+def as_shape(value, what):
+    from build123d import Compound, Shape
+
+    if isinstance(value, (list, tuple)):
+        value = Compound(children=list(value))
+    if not isinstance(value, Shape):
+        # Builders (BuildPart) hold their part in .part
+        value = getattr(value, "part", value)
+    if not isinstance(value, Shape):
+        raise ValueError(f"{what} is a {type(value).__name__}, not a build123d shape.")
+    return value
+
+
+def read_components(namespace, solids):
+    """{name: shape} of an assembly: `components` as the model names them, else each solid of `result` when it has
+    several (named by its label, or part_1, part_2…); {} for a single part"""
+    given = namespace.get("components")
+    if given is not None:
+        if not isinstance(given, dict) or not given:
+            raise ValueError("`components` must be a dict {name: solid}, the parts in their assembled places.")
+        out = {}
+        for name, value in given.items():
+            if not isinstance(name, str) or not re.fullmatch(r"[A-Za-z0-9_][A-Za-z0-9_-]{0,47}", name):
+                raise ValueError(f"Component name {name!r}: letters, digits, _ and - (at most 48).")
+            out[name] = as_shape(value, f"components[{name!r}]")
+            if not out[name].solids():
+                raise ValueError(f"components[{name!r}] has no solids.")
+        return out
+    if len(solids) < 2:
+        return {}
+    out = {}
+    for k, solid in enumerate(solids, 1):
+        label = re.sub(r"[^A-Za-z0-9_-]", "_", str(getattr(solid, "label", "") or ""))[:48].strip("_")
+        name = label if label and label not in out else f"part_{k}"
+        out[name] = solid
+    return out
+
+
+def write_components(components, mechanism, out, from_solids):
+    """components/<name>.stl and assembly.json"""
+    from build123d import export_stl
+
+    folder = out / "components"
+    folder.mkdir(exist_ok=True)
+    listed = []
+    for name, shape in components.items():
+        export_stl(shape, str(folder / f"{name}.stl"), tolerance=0.01, angular_tolerance=0.1)
+        c = shape.center()
+        listed.append({"name": name, "file": f"components/{name}.stl", "volume_mm3": round(shape.volume, 3),
+                       "center_mm": [round(c.X, 3), round(c.Y, 3), round(c.Z, 3)]})
+    if mechanism is not None:
+        if not isinstance(mechanism, dict):
+            raise ValueError("`mechanism` must be a dict (see guide.md, Assemblies that move).")
+        try:
+            json.dumps(mechanism)
+        except TypeError as err:
+            raise ValueError(f"`mechanism` must hold only numbers, strings, lists and dicts: {err}") from None
+        unknown = {ref for key in ("joints", "gears", "motors", "loads") for item in mechanism.get(key) or []
+                   if isinstance(item, dict) for field in ("part_a", "part_b", "part", "gear_a", "gear_b")
+                   for ref in [item.get(field)] if ref is not None and ref not in components}
+        unknown |= {ref for ref in (mechanism.get("parts") or {}) if ref not in components}
+        if unknown:
+            raise ValueError(f"`mechanism` names parts that are not components: {sorted(unknown)}.")
+    (out / "assembly.json").write_text(json.dumps({
+        "components": listed, "mechanism": mechanism,
+        "from": "solids of result" if from_solids else "components"}, indent=2, ensure_ascii=False))
+    return [entry["file"] for entry in listed] + ["assembly.json"]
+
+
 def build(model, out):
     from build123d import Compound, Shape, export_step, export_stl
 
     namespace = runpy.run_path(str(model), run_name="__model__")
     shape = namespace.get("result")
+    if shape is None and isinstance(namespace.get("components"), dict):
+        # An assembly with no separate print layout: printed as it stands
+        shape = list(namespace["components"].values())
     if shape is None:
         raise ValueError("The model file does not assign the finished part to `result`.")
     if isinstance(shape, (list, tuple)):
@@ -178,6 +255,12 @@ def build(model, out):
         warnings.append(f"The STL mesh is not watertight ({mesh['open_edges']} open, "
                         f"{mesh['non_manifold_edges']} non-manifold edges).")
     render_preview(triangles, size, preview)
+    files = ["model.stl", "model.step", "preview.png"]
+    components = read_components(namespace, solids)
+    if components:
+        files += write_components(components, namespace.get("mechanism"), out, namespace.get("components") is None)
+    elif namespace.get("mechanism") is not None:
+        warnings.append("`mechanism` is ignored: a single part has nothing to move against (give `components`).")
 
     return {
         "size_mm": [round(v, 2) for v in size],
@@ -187,7 +270,8 @@ def build(model, out):
         "solids": len(solids),
         "mesh": mesh,
         "warnings": warnings,
-        "files": ["model.stl", "model.step", "preview.png"],
+        "components": list(components),
+        "files": files,
     }
 
 
@@ -198,8 +282,10 @@ def main():
     model = Path(sys.argv[1]).resolve()
     out = Path(sys.argv[2]).resolve() if len(sys.argv) > 2 else model.parent / "out"
     out.mkdir(parents=True, exist_ok=True)
-    for stale in ("model.stl", "model.step", "preview.png", "report.json"):
+    for stale in ("model.stl", "model.step", "preview.png", "report.json", "assembly.json"):
         (out / stale).unlink(missing_ok=True)
+    for stale in (out / "components").glob("*.stl") if (out / "components").is_dir() else []:
+        stale.unlink()
 
     started = time.monotonic()
     try:

@@ -219,6 +219,12 @@ def read_part(r, p, path, L, A, resolve_file):
             part["inertia"] = valued([[v["ixx"], v["ixy"] or 0, v["ixz"] or 0], [v["ixy"] or 0, v["iyy"], v["iyz"] or 0],
                                       [v["ixz"] or 0, v["iyz"] or 0, v["izz"]]], "user", "kg·mm²")
             part["inertia"]["value"] = (np.array(part["inertia"]["value"]) * L * L).tolist()
+    # Contact with other colliding parts (a block falling on a plate): its convex hull, with the friction given
+    part["collision"] = p.get("collision", False) is True
+    friction = r.number(p, "friction", path, minimum=0)
+    part["friction"] = valued(friction, "user") if friction is not None else None
+    if part["collision"] and friction is None:
+        r.need(f"{path}.friction", f"{part['id']} va chạm: cần hệ số ma sát (friction, vd. 0.3 cho nhựa trên nhựa).")
     return part
 
 

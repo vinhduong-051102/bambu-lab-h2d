@@ -304,22 +304,24 @@ const MECH_TOOLS = [
   {
     name: 'mech_import_model',
     description:
-      'Start a design from a CAD assembly inspected with inspect_3d_model: each component becomes a part (geometry ' +
-      'from the mesh, source imported_cad), and joint hypotheses (coaxial hole/shaft, touching faces) are listed with ' +
-      'their confidence. A hypothesis becomes a joint only when listed in `accept` after the user confirmed it.' + MECH_STATUS,
+      'Set up the simulation of a 3D model as it is: a design job (`job_id`, from cad_ask_claude: its components and ' +
+      'the `mechanism` it declared) or a model inspected with inspect_3d_model (`model_id`). Each component becomes a ' +
+      'part (its mesh, source imported_cad); joint hypotheses (coaxial hole/shaft, touching faces) are listed with ' +
+      'their confidence and become joints only when listed in `accept` after the user confirmed them. One design per ' +
+      'model: called again after the model changed, it makes a new revision with the setup carried over by component ' +
+      '(old runs stay with their revision). Returns the model\'s simulation state (NOT_CONFIGURED, NEEDS_VALIDATION, ' +
+      'INVALID, READY, RUNNING, PAUSED, COMPLETED, FAILED); change the setup with mech_update_design.' + MECH_STATUS,
     inputSchema: {
       type: 'object',
       properties: {
-        model_id: { type: 'string' },
+        job_id: { type: 'string', description: 'A finished design job: its own model is simulated' },
+        model_id: { type: 'string', description: 'An imported model (inspect_3d_model)' },
         version: { type: 'integer', minimum: 1 },
         name: { type: 'string' },
-        fixed: { type: 'array', items: { type: 'string' }, description: 'Components fixed to the ground' },
-        materials: { type: 'object', additionalProperties: { type: 'string' }, description: '{component: material}' },
-        accept: { type: 'array', items: { type: 'string' }, description: 'Hypothesis ids the user confirmed' },
-        simulation: { type: 'object' },
-        create: { type: 'boolean', description: 'Store as a design (default true); false only drafts it' },
+        fixed: { type: 'array', items: { type: 'string' }, description: 'Components fixed to the ground (first setup)' },
+        materials: { type: 'object', additionalProperties: { type: 'string' }, description: '{component: material} (first setup)' },
+        accept: { type: 'array', items: { type: 'string' }, description: 'Hypothesis ids the user confirmed (first setup)' },
       },
-      required: ['model_id'],
       additionalProperties: false,
     },
   },
@@ -327,8 +329,9 @@ const MECH_TOOLS = [
     name: 'mech_update_design',
     description:
       'Change a design: a new revision with `changes` merged into the latest. Lists (parts, joints, gears, motors, ' +
-      'loads) are updated by id: an item replaces the one with its id or is added; {"id", "remove": true} removes ' +
-      'it. `simulation` is merged. The old revision is kept.' + MECH_STATUS,
+      'loads) are updated by id: an item\'s fields are merged into the one with its id, or it is added; ' +
+      '{"remove": {"joints": [ids], …}} removes items. `simulation` is merged. Change one value without rewriting the ' +
+      'model: {"parts": [{"id": "crank", "mass": 0.05}]}. The old revision and its runs are kept.' + MECH_STATUS,
     inputSchema: {
       type: 'object',
       properties: {
@@ -351,8 +354,11 @@ const MECH_TOOLS = [
   },
   {
     name: 'mech_get_design',
-    description: 'A design: its revisions, the stored model, the validation and its runs. Without design_id, lists the designs.',
-    inputSchema: { type: 'object', properties: designRef, additionalProperties: false },
+    description:
+      'A design: its revisions, the stored model, the validation and its runs. With model_id (job-<job id> for a ' +
+      'design job), that model\'s simulation state instead: which design and revision, the state (and why), the ' +
+      'runs of each revision, and an open live session. Without either, lists the designs.',
+    inputSchema: { type: 'object', properties: { ...designRef, model_id: { type: 'string' } }, additionalProperties: false },
   },
   {
     name: 'mech_propose_repairs',
@@ -382,12 +388,17 @@ const MECH_TOOLS = [
     description:
       'Simulate a valid design in Project Chrono (refused with the errors when validation failed): compiles rigid ' +
       'groups to bodies, runs, and compares to the kinematic prediction. Returns the sim_id and the results per part, ' +
-      'joint, gear and motor. Then sim_play_simulation_in_blender with the sim_id.' + MECH_STATUS,
+      'joint, gear and motor. Then sim_play_simulation_in_blender with the sim_id. With live: true it opens the design ' +
+      'in the dashboard\'s live 3D viewer instead (a Chrono session stepped in real time, each component drawn from ' +
+      'the solver\'s state): returns the session_id for sim_control_interactive / sim_get_live_state / ' +
+      'sim_stop_interactive.' + MECH_STATUS,
     inputSchema: {
       type: 'object',
       properties: {
         ...designRef,
         simulation: { type: 'object', description: 'Overrides for this run: duration, time_step, ...' },
+        live: { type: 'boolean', description: 'Open in the live viewer instead of a recorded run' },
+        paused: { type: 'boolean', description: 'live: start paused' },
         wait_s: { type: 'number', minimum: 0, maximum: 600, description: 'Wait this long for Chrono (default 120)' },
       },
       required: ['design_id'],
@@ -1345,7 +1356,8 @@ async function callTool(name, args) {
     case 'mech_create_design':
       return [text(await mechJson('POST', 'designs', args))];
     case 'mech_import_model':
-      return [text(await mechJson('POST', 'import', args))];
+      if (!args.job_id && !args.model_id) throw new GatewayError('Give job_id (a design job) or model_id (inspect_3d_model).');
+      return [text(await mechJson('POST', 'models/setup', args))];
     case 'mech_update_design': {
       const { design_id: designId, ...body } = args;
       return [text(await mechJson('POST', `designs/${encodeURIComponent(designId)}`, body))];
@@ -1353,6 +1365,7 @@ async function callTool(name, args) {
     case 'mech_validate':
       return [text(await mechJson('POST', `designs/${encodeURIComponent(args.design_id)}/validate`, { revision: args.revision }))];
     case 'mech_get_design': {
+      if (args.model_id) return [text(await mechJson('GET', `models/${encodeURIComponent(args.model_id)}`))];
       if (!args.design_id) return [text(await mechJson('GET', 'designs'))];
       const query = args.revision ? `?revision=${args.revision}` : '';
       return [text(await mechJson('GET', `designs/${encodeURIComponent(args.design_id)}${query}`))];
@@ -1364,7 +1377,12 @@ async function callTool(name, args) {
       return [text(await mechJson('POST', `designs/${encodeURIComponent(designId)}/apply`, body))];
     }
     case 'mech_simulate': {
-      const { design_id: designId, ...body } = args;
+      const { design_id: designId, live, ...body } = args;
+      if (live) {
+        const { scene, state, ...opened } = await mechJson('POST', `designs/${encodeURIComponent(designId)}/live`, body);
+        return [text({ ...opened, t: state?.t, running: state?.running, bodies: scene?.bodies?.map((b) => b.id),
+                       next: 'Running in the dashboard viewer: sim_get_live_state / sim_control_interactive with this session_id.' })];
+      }
       const out = await mechJson('POST', `designs/${encodeURIComponent(designId)}/simulate`, body);
       if (out.state === 'completed') out.next = 'sim_play_simulation_in_blender with this sim_id to watch it';
       else if (['queued', 'running'].includes(out.state)) out.next = 'Still running: check with mech_get_results.';

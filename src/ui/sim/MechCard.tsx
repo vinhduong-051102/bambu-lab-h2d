@@ -81,7 +81,7 @@ function Sourced({ v, digits = 4 }: { v: Valued<number>; digits?: number }) {
   );
 }
 
-async function mech<T>(path: string, body?: unknown): Promise<T> {
+export async function mech<T>(path: string, body?: unknown): Promise<T> {
   const res = await fetch(`/api/mech/${path}`, {
     cache: 'no-store',
     ...(body !== undefined && { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }),
@@ -212,7 +212,7 @@ function Repairs({ design, onChanged }: { design: Design; onChanged: (revision: 
   );
 }
 
-function RunResults({ designId, simId, onOpenRun }: { designId: string; simId: string; onOpenRun: (simId: string) => void }) {
+export function RunResults({ designId, simId, onOpenRun }: { designId: string; simId: string; onOpenRun: (simId: string) => void }) {
   const [run, setRun] = useState<RunResult | null>(null);
   const [error, setError] = useState<string | null>(null);
 

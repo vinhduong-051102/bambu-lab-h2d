@@ -46,6 +46,8 @@ Mechanical model (mech/, docs/mechanical-model.md): parts, assembly, joints, DOF
        /mech/designs/<id>/simulate {wait_s, simulation} · /mech/designs/<id>/repairs (proposals) ·
        /mech/designs/<id>/apply {proposal_ids, approved} · /mech/import {model_id, fixed, materials, accept}
   GET  /mech/designs[/<id>[?revision=]] · /mech/designs/<id>/runs/<sim id> · /mech/capabilities
+  POST /mech/models/setup {job_id | model_id}: a 3D model's simulation setup (docs/model-simulation.md)
+  GET  /mech/models/<model id> (its simulation state) · /mech/designs/<id>/viewer (what the live viewer runs)
 """
 
 import json
@@ -77,6 +79,7 @@ from sim import runs as sim  # noqa: E402 - mechanism simulation with Project Ch
 from eng import service as eng  # noqa: E402 - engineering analysis of printed parts
 from eng.schema import InputError  # noqa: E402
 from eng.store import EngError  # noqa: E402
+from mech import models as mech_models  # noqa: E402 - simulation of a 3D model as it is (job or import)
 from mech import service as mech  # noqa: E402 - mechanical model: parts, assembly, DOF, Chrono
 
 ENG_POST = {"inspect": eng.inspect_model, "validate": eng.validate_mesh, "assembly": eng.analyze_assembly,
@@ -141,6 +144,10 @@ class Handler(BaseHTTPRequestHandler):
                     body = mech.get_design(parts[1], query.get("revision"))
                 elif len(parts) == 4 and parts[0] == "designs" and parts[2] == "runs":
                     body = mech.run_results(parts[1], parts[3])
+                elif len(parts) == 3 and parts[0] == "designs" and parts[2] == "viewer":
+                    body = mech_models.viewer(parts[1], query.get("revision"))
+                elif len(parts) == 2 and parts[0] == "models":
+                    body = mech_models.status(parts[1])
                 else:
                     raise mech.MechError(404, "NOT_FOUND", f"Không có GET /mech/{'/'.join(parts)}.")
             else:
@@ -149,6 +156,8 @@ class Handler(BaseHTTPRequestHandler):
                     body = mech.create_design(data)
                 elif parts == ["import"]:
                     body = mech.import_model(data)
+                elif parts == ["models", "setup"]:
+                    body = mech_models.setup(data)
                 elif len(parts) == 2 and parts[0] == "designs":
                     body = mech.update_design(parts[1], data)
                 elif len(parts) == 3 and parts[0] == "designs" and parts[2] == "validate":

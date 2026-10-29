@@ -15,12 +15,13 @@ import {
   SendOutlined,
   StopOutlined,
 } from '@ant-design/icons';
-import { Alert, App, Button, Card, Collapse, Flex, Image, Input, Popconfirm, Progress, Space, Tag, Timeline, Tooltip, Typography } from 'antd';
+import { Alert, App, Button, Card, Collapse, Flex, Image, Input, Modal, Popconfirm, Progress, Space, Tag, Timeline, Tooltip, Typography } from 'antd';
 import { useEffect, useMemo, useState, type ClipboardEvent, type ReactNode } from 'react';
 import { deltaLabel } from '../../domain/filaments/colourMixing';
 import { fileUrl, formatDuration, formatProgress, formatSize, isBusy, jobSteps, modelName, ORIGINS, REVISE_PLACEHOLDERS, STATE_LABELS, STEP_LABELS, versionLabel } from '../cad';
 import { checkedSettings, settingsSummary, sortedChecks, statusCounts } from '../eng';
 import { formatPrintTime } from '../prints';
+import { ModelSim } from '../sim/ModelSim';
 import { EngCheckButton } from './EngCheck';
 
 /** As many pictures as the gateway takes with one revision */
@@ -204,6 +205,21 @@ const Bullets = ({ items }: { items: string[] }) => (
  * either: Claude then looks for problems itself). `before` is the version this one was made from: its preview is
  * shown next to this one's, before and after.
  */
+/** "⚙️ Mô phỏng": the job's own model, its components set up and run in the live Chrono viewer (docs/model-simulation.md) */
+function SimulateButton({ job }: { job: CadJob }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <>
+      <Button size="small" onClick={() => setOpen(true)} title="Mô phỏng vật lý chính mô hình này: chi tiết, khớp, động cơ, chạy trong khung 3D">
+        ⚙️ Mô phỏng
+      </Button>
+      <Modal open={open} onCancel={() => setOpen(false)} footer={null} width="min(1500px, 96vw)" destroyOnHidden title={`Mô phỏng · ${job.title || job.id}`}>
+        {open && <ModelSim jobId={job.id} />}
+      </Modal>
+    </>
+  );
+}
+
 export function CadJobCard(props: {
   job: CadJob;
   now?: number;
@@ -495,6 +511,7 @@ export function CadJobCard(props: {
             {done && link('model.stl', 'STL', { download: true, icon: <DownloadOutlined /> })}
             {done && job.files?.step && link('model.step', 'STEP', { download: true, icon: <DownloadOutlined /> })}
             {done && <EngCheckButton job={job} onRevise={onRevise ? (comment) => onRevise(comment, []) : undefined} />}
+            {done && <SimulateButton job={job} />}
             {job.files?.code && link('model.py', 'Code', { icon: <FileTextOutlined /> })}
             {!busy && job.files?.code && (
               <Button size="small" icon={<EditOutlined />} onClick={() => setRevising(!revising)}>

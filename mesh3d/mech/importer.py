@@ -34,7 +34,8 @@ def draft_from_eng(body):
             "part_b": s["component_b"], "position": s["position"], "axis": s["axis"], "source": "geometry",
             "confidence": "probable"}, "confidence": "probable", "reason": s["reason"]})
     for t in analysis["data"]["touching"]:
-        if not any({h["joint"]["part_a"], h["joint"]["part_b"]} == {t["a"], t["b"]} for h in hypotheses):
+        pairs = [{h["joint"]["part_a"], h["joint"]["part_b"]} if h["kind"] == "joint" else set(h["parts"]) for h in hypotheses]
+        if {t["a"], t["b"]} not in pairs:
             hypotheses.append({"id": f"h{len(hypotheses) + 1}", "kind": "contact", "parts": [t["a"], t["b"]],
                                "confidence": "unknown",
                                "reason": f"{t['a']} và {t['b']} chạm nhau ({t['gap']} mm) nhưng hình học không cho biết là khớp gì."})

@@ -57,3 +57,32 @@ result = part.part
   then `fillet(edges, radius=...)` / `chamfer(edges, length=...)`.
 - Without builders (algebra mode) shapes combine with `+`, `-`, `&` and move with `Pos(x, y, z) * shape`
   and `Rot(0, 0, 45) * shape`.
+
+## Assemblies that move
+
+When the request is a mechanism or several parts that work together (a hinge, gears on shafts, a crank and a
+slider…), keep every part separate so the dashboard can simulate the model as it is:
+
+- Assign `components = {"name": solid, ...}`: each part on its own, **in its assembled place** (shafts in their
+  holes, gears meshing). Names: letters, digits, `_`, `-`. `result` is then the print layout (parts laid flat,
+  apart), or leave it out to print the assembly as it stands.
+- When the user said how it moves, also assign `mechanism`, naming parts by their component name (mm, degrees,
+  kg, N, N·m; positions and axes in the assembled frame):
+
+```python
+mechanism = {
+    "parts": {"base": {"fixed": True, "role": "frame", "material": "pla"},
+              "arm": {"role": "arm", "material": "pla"}},
+    "joints": [{"id": "hinge", "type": "revolute", "part_a": "base", "part_b": "arm",
+                "position": [0, 0, 20], "axis": [0, 1, 0]}],
+    "motors": [{"id": "drive", "joint": "hinge", "speed_rpm": 30}],
+    "simulation": {"duration": 2, "time_step": 0.001},
+}
+```
+
+  Roles: frame, housing, shaft, gear, pulley, crank, rod, link, slider, rocker, arm, bearing, pin, other. Joint
+  types: fixed, revolute, prismatic, cylindrical, spherical. `gears`: `[{"id", "gear_a", "gear_b",
+  "teeth_a", "teeth_b"}]`, each gear on its own revolute joint to a common part. Parts may give `mass`
+  (kg), `collision: True` with `friction`. Only write what the user asked for or what the design itself fixes (a
+  joint is where you put the pin): never invent a motor speed, a load or a mass the user did not give. What is
+  missing is asked for in the dashboard before simulating.
