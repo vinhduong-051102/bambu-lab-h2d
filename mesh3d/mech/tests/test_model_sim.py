@@ -124,6 +124,21 @@ class A_AiCreatedModel(unittest.TestCase):
         self.assertTrue(s["validation"]["missing"])
 
 
+class A2_Names(unittest.TestCase):
+    def test_joint_named_like_its_part_is_renamed(self):
+        # As Claude wrote the calendar: the joint a part turns on, named after the part
+        mechanism = copy.deepcopy(MECHANISM)
+        mechanism["joints"][0]["id"] = "crank"
+        mechanism["motors"][0]["joint"] = "crank"
+        make_job("job-names-a3", mechanism=mechanism)
+        s = models.setup({"job_id": "job-names-a3"})
+        self.assertEqual(s["state"], "READY", s.get("reason"))
+        design = service.get_design(s["design_id"])
+        self.assertIn("crank_joint", {j["id"] for j in design["input"]["joints"]})
+        self.assertEqual(design["input"]["motors"][0]["joint"], "crank_joint")
+        self.assertIn("'crank_joint'", design["revision_info"]["note"])
+
+
 class B_ModelChanges(unittest.TestCase):
     @unittest.skipUnless(CHRONO, "no Chrono")
     def test_revisions_keep_their_runs(self):

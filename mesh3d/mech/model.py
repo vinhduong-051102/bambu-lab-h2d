@@ -167,9 +167,11 @@ def read_part(r, p, path, L, A, resolve_file):
         r.error(f"{path}.source", f"source phải là một trong {', '.join(PROVENANCE)}.")
         source = "user"
     pos = r.vector(p, "position", path)
+    # A mesh file is already where the assembly has it: no position is its own place, not a guess
+    placed = pos is None and bool(p.get("geometry_file")) and p.get("shape") is None
     part["position"] = valued(((pos if pos is not None else np.zeros(3)) * L).tolist(),
-                              source if pos is not None else "assumption", "mm")
-    if pos is None:
+                              source if pos is not None or placed else "assumption", "mm")
+    if pos is None and not placed:
         r.assume(f"{path}.position", "Không cho vị trí: đặt ở gốc tọa độ.")
     part["orientation"] = read_orientation(r, p, path, A).tolist()
     # Geometry: a parametric shape, or a mesh file already in the assembly frame

@@ -105,6 +105,8 @@ def declared(mechanism, names):
             if role is not None and role not in mech_model.ROLES:
                 out["parts"][ref(name)]["role"] = "other"
                 out["notes"].append(f"{name}: vai trò {role!r} không có trong danh sách, đọc là other")
+    # mech/1 ids are unique across parts and joints alike: a joint named after its part ("ratchet") is renamed
+    taken, renamed = set(names.values()), {}
     for key, fields in (("joints", ("part_a", "part_b")), ("gears", ("gear_a", "gear_b")), ("motors", ()),
                         ("loads", ("part", "part_a", "part_b"))):
         for item in mechanism.get(key) or []:
@@ -115,6 +117,18 @@ def declared(mechanism, names):
                         item[f] = ref(item[f])
                 if key == "joints":
                     item.update(confidence="declared", source="design")
+                if key == "motors" and item.get("joint") in renamed:
+                    item["joint"] = renamed[item["joint"]]
+                ident = item.get("id")
+                if isinstance(ident, str) and ident in taken:
+                    new_id, n = f"{ident}_{key[:-1]}", 2
+                    while new_id in taken:
+                        new_id, n = f"{ident}_{key[:-1]}{n}", n + 1
+                    out["notes"].append(f"{key[:-1]} {ident!r} trùng tên chi tiết: đổi thành {new_id!r}")
+                    if key == "joints":
+                        renamed[ident] = new_id
+                    item["id"] = ident = new_id
+                taken.add(ident)
                 out[key].append(item)
     return out
 
