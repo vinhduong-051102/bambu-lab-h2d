@@ -109,7 +109,7 @@ function PrintPlates({ layout }: { layout: PrintLayout }) {
               )}
               <Typography.Text type="secondary">
                 Mỗi chi tiết được đặt nằm trên mặt in tốt nhất (ít phần nhô cần support nhất), xếp trong vùng cả hai đầu phun H2D in
-                tới. File 3MF mở trong Studio đã chia sẵn từng bàn.
+                tới. {layout.plates.length > 1 ? 'Mỗi bàn in là một file 3MF riêng: mở từng file trong Studio.' : 'File 3MF mở trong Studio đã xếp sẵn trên bàn.'}
               </Typography.Text>
             </Flex>
           ),
@@ -562,8 +562,10 @@ export function CadJobCard(props: {
                   loading={acting === 'studio-3mf'}
                   onClick={() => sendToStudio('studio-3mf')}
                   title={
-                    plates
-                      ? 'File 3MF có các chi tiết đã đặt sẵn trên từng bàn in'
+                    plates > 1
+                      ? `Gửi ${plates} file 3MF, mỗi file một bàn in đã xếp sẵn: mở từng file trong Studio`
+                      : plates
+                      ? 'File 3MF có các chi tiết đã xếp sẵn trên bàn in'
                       : '3MF đã tô sẵn màu: filament n trong Studio là màu số n'
                   }
                 >
@@ -574,7 +576,14 @@ export function CadJobCard(props: {
                   Gửi sang Studio
                 </Button>
               ))}
-            {done && job.files?.threemf && link('model.3mf', plates ? '3MF' : '3MF màu', { download: true, icon: <DownloadOutlined /> })}
+            {done &&
+              plates > 1 &&
+              Array.from({ length: plates }, (_, k) => (
+                <Button key={k} size="small" icon={<DownloadOutlined />} href={`/api/cad/jobs/${encodeURIComponent(job.id)}/plates/${k + 1}`}>
+                  3MF bàn {k + 1}
+                </Button>
+              ))}
+            {done && job.files?.threemf && plates <= 1 && link('model.3mf', plates ? '3MF' : '3MF màu', { download: true, icon: <DownloadOutlined /> })}
             {done && link('model.stl', 'STL', { download: true, icon: <DownloadOutlined /> })}
             {done && job.files?.step && link('model.step', 'STEP', { download: true, icon: <DownloadOutlined /> })}
             {done && <EngCheckButton job={job} onRevise={onRevise ? (comment) => onRevise(comment, []) : undefined} />}

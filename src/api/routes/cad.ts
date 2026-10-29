@@ -613,6 +613,19 @@ export const sendCadToStudio = handler<{ id: string }>(async ({ request, params 
     return json({ success: false, error: 'MODEL_NOT_READY', message: 'Mô hình chưa dựng xong nên chưa gửi được.' }, 409);
   }
 
+  // Several plates: one file each, since Studio drops the plates of a 3MF it did not write and centres it all on one
+  const plates = body.data.format === '3mf' ? (job.report?.print_layout?.plates.length ?? 0) : 0;
+  if (plates > 1) {
+    const names: string[] = [];
+    for (let n = 1; n <= plates; n++) {
+      const plateFile = await store().plateFile(job.id, n);
+      if (!plateFile) return json({ success: false, error: 'MODEL_NOT_READY', message: `Thiếu file của bàn ${n}: dựng lại mô hình.` }, 409);
+      const saved = await saveStudioImport(path.resolve(env.STUDIO_IMPORT_DIR), `${fileStem(job)}-ban-${n}.3mf`, await fs.readFile(plateFile));
+      await store().markSent(job.id, saved.name);
+      names.push(saved.name);
+    }
+    return json({ success: true, name: names[0], names, studioPath: `/imports/${names[0]}`, studioPaths: names.map((n) => `/imports/${n}`) }, 201);
+  }
   const saved = await saveStudioImport(path.resolve(env.STUDIO_IMPORT_DIR), `${fileStem(job)}.${body.data.format}`, await fs.readFile(file));
   await store().markSent(job.id, saved.name);
   return json({ success: true, name: saved.name, studioPath: `/imports/${saved.name}`, ...(saved.repair && { repair: saved.repair }) }, 201);
@@ -663,4 +676,16 @@ export const remakeCadGuide = handler<{ id: string }>(async ({ params }) => {
     if (err instanceof CadWorkerError) return workerFailed(err);
     throw err;
   }
+});
+
+// GET /api/cad/jobs/:id/plates/:n - Plate n's own 3MF of an assembly laid out on several plates (downloaded as
+// <name>-ban-<n>.3mf)
+export const getCadPlate = handler<{ id: string; n: string }>(async ({ params }) => {
+  const n = Number(params.n);
+  const file = await store().plateFile(params.id, n);
+  const job = file && (await store().get(params.id));
+  if (!file || !job) return json({ success: false, error: 'FILE_NOT_FOUND', message: 'Không có bàn in này.' }, 404);
+  return new Response(new Uint8Array(await fs.readFile(file)), {
+    headers: { 'Content-Type': 'model/3mf', 'Cache-Control': 'no-cache', 'Content-Disposition': `attachment; filename="${fileStem(job)}-ban-${n}.3mf"` },
+  });
 });

@@ -44,6 +44,8 @@ export interface CadBuildReport {
   mesh?: { triangles: number; watertight: boolean; open_edges: number; non_manifold_edges: number };
   warnings?: string[];
   seconds?: number;
+  /** An assembly laid out for printing (cad/print_layout.py): its plates, and with several, one 3MF each */
+  print_layout?: { plates: { n: number; parts: string[] }[]; plate_files?: string[] };
   /**
    * A coloured figure's filaments: slot n is paint state n in model.3mf. source_hex is the texture's own colour
    * for that slot and delta_e how far the filament is from it; mix, added by the gateway when it is far, is the
@@ -348,6 +350,14 @@ export class CadJobStore {
     const dir = this.jobDir(id);
     if (!dir) return null;
     const file = path.join(dir, CAD_FILES[name].path);
+    return (await exists(file)) ? file : null;
+  }
+
+  /** Plate n's own 3MF of an assembly laid out on several plates (out/plates/plate-<n>.3mf), or null */
+  async plateFile(id: string, n: number): Promise<string | null> {
+    const dir = this.jobDir(id);
+    if (!dir || !Number.isInteger(n) || n < 1) return null;
+    const file = path.join(dir, 'out', 'plates', `plate-${n}.3mf`);
     return (await exists(file)) ? file : null;
   }
 

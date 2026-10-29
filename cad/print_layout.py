@@ -254,3 +254,26 @@ def write_3mf(path, meshes, layout, title="model"):
         z.writestr("_rels/.rels", rels)
         z.writestr("3D/3dmodel.model", model)
         z.writestr("Metadata/model_settings.config", "\n".join(config))
+
+
+def write_plates(folder, meshes, layout, title="model"):
+    """plate-<n>.3mf for each plate, its parts where they lie on that plate: Bambu Studio opens a 3MF it did not write
+    as geometry only, ignoring the plates in model_settings.config, and centres everything on one plate, so a layout
+    of several plates goes to it one plate per file. Returns the file names."""
+    folder.mkdir(parents=True, exist_ok=True)
+    names = []
+    count = len(layout["plates"])
+    for plate in layout["plates"]:
+        shift = plate_origin(plate["n"] - 1, count)
+        parts = {}
+        for name in plate["parts"]:
+            part = dict(layout["parts"][name])
+            part["matrix"] = part["matrix"].copy()
+            part["matrix"][:3, 3] -= shift
+            part["plate"] = 1
+            parts[name] = part
+        name = f"plate-{plate['n']}.3mf"
+        write_3mf(folder / name, {n: meshes[n] for n in parts}, {"parts": parts, "plates": [{"n": 1, "parts": plate["parts"]}]},
+                  title=f"{title} - bàn {plate['n']}")
+        names.append(name)
+    return names

@@ -383,8 +383,14 @@ export function CadCard({ onBusyChange }: { onBusyChange?: (busy: boolean) => vo
         showToast('Đang dựng lại mô hình.', 'info');
       } else {
         const sent = await api('POST', `/api/cad/jobs/${encodeURIComponent(job.id)}/studio`, { format: act === 'studio-3mf' ? '3mf' : 'stl' });
-        showToast(`Đã gửi ${sent.studioPath}. Trong Studio: File → Import.`, 'success');
-        addLog(`Đã gửi mô hình AI vào Bambu Studio: ${sent.studioPath}`, 'success');
+        const paths: string[] = sent.studioPaths ?? [sent.studioPath];
+        showToast(
+          paths.length > 1
+            ? `Đã gửi ${paths.length} file, mỗi file một bàn in: ${paths.join(', ')}. Trong Studio mở từng file (File → Open project).`
+            : `Đã gửi ${sent.studioPath}. Trong Studio: File → Import.`,
+          'success'
+        );
+        addLog(`Đã gửi mô hình AI vào Bambu Studio: ${paths.join(', ')}`, 'success');
       }
       await refresh();
     } catch (err) {

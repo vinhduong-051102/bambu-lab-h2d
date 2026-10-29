@@ -323,6 +323,33 @@ describe('AI modelling API (/api/cad)', () => {
     expect(Buffer.from(part.rawBody).toString()).toBe('2345');
   });
 
+  it('sends an assembly laid out on several plates to Studio one plate per file', async () => {
+    const { job } = (await create({ prompt: 'Cánh tay robot 4 trục' })).json();
+    await worker.finish(job.id);
+    const out = path.join(jobsDir, job.id, 'out');
+    await fs.mkdir(path.join(out, 'plates'), { recursive: true });
+    await fs.writeFile(path.join(out, 'model.3mf'), 'all plates');
+    await fs.writeFile(path.join(out, 'plates', 'plate-1.3mf'), 'plate one');
+    await fs.writeFile(path.join(out, 'plates', 'plate-2.3mf'), 'plate two');
+    const statusFile = path.join(jobsDir, job.id, 'status.json');
+    const status = JSON.parse(await fs.readFile(statusFile, 'utf8'));
+    status.report.print_layout = { plates: [{ n: 1, parts: ['base'] }, { n: 2, parts: ['arm'] }], plate_files: ['plates/plate-1.3mf', 'plates/plate-2.3mf'] };
+    await fs.writeFile(statusFile, JSON.stringify(status));
+
+    const sent = await app.inject({ method: 'POST', url: `/api/cad/jobs/${job.id}/studio`, payload: { format: '3mf' } });
+    expect(sent.statusCode).toBe(201);
+    expect(sent.json().names).toEqual(['Hop-vuong-10-mm-ban-1.3mf', 'Hop-vuong-10-mm-ban-2.3mf']);
+    expect(await fs.readFile(path.join(importDir, 'Hop-vuong-10-mm-ban-2.3mf'), 'utf8')).toBe('plate two');
+    const sentList = (await app.inject({ method: 'GET', url: `/api/cad/jobs/${job.id}` })).json().job.sent;
+    expect(sentList).toHaveLength(2);
+
+    const plate = await app.inject({ method: 'GET', url: `/api/cad/jobs/${job.id}/plates/2` });
+    expect(plate.statusCode).toBe(200);
+    expect(plate.headers.get('content-disposition')).toBe('attachment; filename="Hop-vuong-10-mm-ban-2.3mf"');
+    expect((await app.inject({ method: 'GET', url: `/api/cad/jobs/${job.id}/plates/3` })).statusCode).toBe(404);
+    expect((await app.inject({ method: 'GET', url: `/api/cad/jobs/${job.id}/plates/..%2Fmodel` })).statusCode).toBe(404);
+  });
+
   it('lists jobs newest first', async () => {
     const first = (await create({ prompt: 'Mô hình thứ nhất' })).json().job;
     const second = (await create({ prompt: 'Mô hình thứ hai' })).json().job;

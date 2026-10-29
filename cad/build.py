@@ -16,7 +16,8 @@ With `components`, the print layout is made here, not by the model (print_layout
 lies on the face it prints best on, packed onto as many H2D plates as it takes. model.stl and model.step hold the
 plates side by side, model.3mf the same with each part on its own plate for Bambu Studio, and report.json's
 "print_layout" says which part is on which plate. Not printed: the components named in `not_printed`, and those
-`mechanism` makes of metal (steel shafts, brass pins…), bought instead. `print_layout = "manual"` keeps the model's
+`mechanism` makes of metal (steel shafts, brass pins…), bought instead. With several plates, plates/plate-<n>.3mf
+holds each plate on its own (what is sent to Studio). `print_layout = "manual"` keeps the model's
 own `result` instead.
 """
 
@@ -299,8 +300,12 @@ def lay_out(namespace, components, out):
         trsf.SetValues(*m[0, :4], *m[1, :4], *m[2, :4])
         placed.append(components[name].moved(Location(trsf)))
     print_layout.write_3mf(out / "model.3mf", meshes, layout, title=Path(out).parent.name)
+    # Several plates: one 3MF each as well, since Studio drops the plates of a 3MF it did not write
+    plate_files = (print_layout.write_plates(out / "plates", meshes, layout, title=Path(out).parent.name)
+                   if len(layout["plates"]) > 1 else [])
     report = {
         "plates": layout["plates"],
+        "plate_files": [f"plates/{name}" for name in plate_files],
         "parts": {n: {k: v for k, v in p.items() if k != "matrix"} for n, p in layout["parts"].items()},
         "not_printed": skipped,
         "warnings": layout["warnings"],
@@ -363,7 +368,7 @@ def build(model, out):
     render_preview(triangles, size, preview)
     files = ["model.stl", "model.step", "preview.png"]
     if layout:
-        files += ["model.3mf"] + assembly_files
+        files += ["model.3mf"] + layout["plate_files"] + assembly_files
         if namespace.get("result") is not None:
             warnings.append("`result` is ignored: the print layout is made from `components` "
                             '(print_layout = "manual" keeps it).')
@@ -405,6 +410,7 @@ def main():
         stale.unlink()
     # The assembly guide is of the model built before; the worker draws it again after the last build
     shutil.rmtree(out / "guide", ignore_errors=True)
+    shutil.rmtree(out / "plates", ignore_errors=True)
 
     started = time.monotonic()
     try:

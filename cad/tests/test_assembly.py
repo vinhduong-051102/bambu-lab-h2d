@@ -7,6 +7,7 @@ become components/<name>.stl in their assembled places and assembly.json, which 
 """
 
 import json
+import re
 import struct
 import subprocess
 import sys
@@ -160,6 +161,18 @@ class AssemblyTest(unittest.TestCase):
             config = z.read("Metadata/model_settings.config").decode()
         self.assertEqual(config.count("<plate>"), len(layout["plates"]))
         self.assertEqual(config.count("<model_instance>"), 6)
+        # And each plate on its own, its parts within that plate (what Studio is sent)
+        self.assertEqual(layout["plate_files"], [f"plates/plate-{p['n']}.3mf" for p in layout["plates"]])
+        for plate, file in zip(layout["plates"], layout["plate_files"]):
+            with zipfile.ZipFile(out / file) as z:
+                model = z.read("3D/3dmodel.model").decode()
+            xs = [float(v) for v in re.findall(r'x="([-\d.]+)"', model)]
+            ys = [float(v) for v in re.findall(r'y="([-\d.]+)"', model)]
+            self.assertEqual(model.count("<object "), len(plate["parts"]))
+            self.assertGreaterEqual(min(xs), 25 - 1e-6)
+            self.assertLessEqual(max(xs), 325 + 1e-6)
+            self.assertGreaterEqual(min(ys), -1e-6)
+            self.assertLessEqual(max(ys), 320 + 1e-6)
         # Every part within the plate both nozzles reach, at its plate's place
         self.assertEqual(report["solids"], 6)
         self.assertAlmostEqual(report["min_mm"][2], 0, places=2)
