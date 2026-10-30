@@ -492,7 +492,7 @@ export function EngCheckButton({ job, onRevise }: { job: CadJob; onRevise?: (com
           Lời nhắn viết sẵn từ kết quả kiểm tra; sửa thêm nếu muốn. Claude tạo một phiên bản mới, bản này giữ nguyên.
           Claude chỉ sửa hình dạng mô hình; thông số in (số vỏ, infill…) vẫn chọn trong Bambu Studio.
         </Typography.Paragraph>
-        <Input.TextArea value={request ?? ''} onChange={(e) => setRequest(e.target.value)} autoSize={{ minRows: 6, maxRows: 16 }} maxLength={4000} showCount />
+        <Input.TextArea value={request ?? ''} onChange={(e) => setRequest(e.target.value)} autoSize={{ minRows: 6, maxRows: 16 }} />
       </Modal>
     </>
   );

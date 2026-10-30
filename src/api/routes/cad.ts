@@ -37,7 +37,6 @@ const CAD_MODELS = [
   { id: 'claude-sonnet-5-5', label: 'Claude Sonnet 5.5 (nhanh, tốn ít lượt hơn)' },
 ];
 
-const MAX_PROMPT_CHARS = 4000;
 const MAX_CODE_BYTES = 200 * 1024;
 const MAX_JOB_LIST = 100;
 const MAX_IMAGE_BYTES = 15 * 1024 * 1024;
@@ -109,7 +108,7 @@ async function runningJobs(jobs: CadJob[]): Promise<string[] | null> {
 }
 
 const jobSchema = z.object({
-  prompt: z.string().trim().min(3, 'Mô tả quá ngắn.').max(MAX_PROMPT_CHARS, `Mô tả dài quá ${MAX_PROMPT_CHARS} ký tự.`),
+  prompt: z.string().trim().min(3, 'Mô tả quá ngắn.'),
   model: z.string().optional(),
   // A revision: the prompt says what to change in that job's model
   parent_id: z.string().optional(),
@@ -120,7 +119,7 @@ const jobSchema = z.object({
 const buildSchema = z.object({
   code: z.string().min(1, 'Thiếu code.').refine((code) => Buffer.byteLength(code) <= MAX_CODE_BYTES, 'Code dài quá 200 KB.'),
   title: z.string().trim().max(120).optional(),
-  prompt: z.string().trim().max(MAX_PROMPT_CHARS).optional(),
+  prompt: z.string().trim().optional(),
   parent_id: z.string().optional(),
 });
 
@@ -271,7 +270,7 @@ export const deleteCadJob = handler<{ id: string }>(async ({ request, params }) 
 });
 
 const meshSchema = z.object({
-  prompt: z.string().trim().max(MAX_PROMPT_CHARS, `Mô tả dài quá ${MAX_PROMPT_CHARS} ký tự.`).default(''),
+  prompt: z.string().trim().default(''),
   height_mm: z.coerce.number().min(10, 'Chiều cao tối thiểu 10 mm.').max(300, 'Chiều cao tối đa 300 mm.').default(80),
   base: z.preprocess((v) => v === true || v === 'true' || v === '1' || v === 'on', z.boolean()).default(false),
   // The Claude model that makes or finishes it (CAD_MODELS); default CAD_AI_MODEL
@@ -527,7 +526,7 @@ export const createMeshJob = handler(async ({ request, printerService }) => {
 
 const fixSchema = z.object({
   // What to fix; empty: Claude looks for problems itself
-  prompt: z.string().trim().max(MAX_PROMPT_CHARS, `Mô tả dài quá ${MAX_PROMPT_CHARS} ký tự.`).default(''),
+  prompt: z.string().trim().default(''),
   model: z.string().optional(),
   // Pictures pasted with it (data: URLs or base64): what is wrong, or how it should look
   images: imagesField,

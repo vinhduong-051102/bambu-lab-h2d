@@ -652,7 +652,6 @@ export function CadJobCard(props: {
               <Space.Compact style={{ width: '100%' }}>
                 <Input
                   autoFocus
-                  maxLength={4000}
                   placeholder={`${REVISE_PLACEHOLDERS[figure ? 'figure' : 'technical']} (Ctrl+V để dán ảnh)`}
                   value={comment}
                   onChange={(e) => setComment(e.target.value)}

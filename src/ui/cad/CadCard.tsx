@@ -494,7 +494,6 @@ export function CadCard({ onBusyChange }: { onBusyChange?: (busy: boolean) => vo
         )}
         <Input.TextArea
           rows={3}
-          maxLength={4000}
           placeholder={PLACEHOLDERS[kind]}
           value={prompt}
           onChange={(e) => setPrompt(e.target.value)}
