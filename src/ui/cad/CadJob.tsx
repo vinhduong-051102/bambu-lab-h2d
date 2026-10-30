@@ -17,6 +17,8 @@ import {
 } from '@ant-design/icons';
 import { Alert, App, Button, Card, Collapse, Flex, Image, Input, Modal, Popconfirm, Progress, Space, Tag, Timeline, Tooltip, Typography } from 'antd';
 import { useEffect, useMemo, useState, type ClipboardEvent, type ReactNode } from 'react';
+import Markdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
 import { deltaLabel } from '../../domain/filaments/colourMixing';
 import { fileUrl, formatDuration, formatProgress, formatSize, isBusy, jobSteps, modelName, ORIGINS, REVISE_PLACEHOLDERS, STATE_LABELS, STEP_LABELS, versionLabel } from '../cad';
 import { checkedSettings, settingsSummary, sortedChecks, statusCounts } from '../eng';
@@ -185,6 +187,26 @@ const STEP_ICONS: Record<string, ReactNode> = {
   cancelled: <StopOutlined style={{ color: '#9ca3af' }} />,
   ahead: <ClockCircleOutlined style={{ color: '#6b7280' }} />,
 };
+
+/** The user's description as Markdown (lists, bold, tables, code): a few lines until "Xem thêm", links open in a new tab */
+function PromptText({ text }: { text: string }) {
+  const [open, setOpen] = useState(false);
+  const long = text.length > 160 || text.split('\n').length > 2;
+  return (
+    <div>
+      <div className={`cad-prompt${long && !open ? ' clamped' : ''}`}>
+        <Markdown remarkPlugins={[remarkGfm]} components={{ a: ({ node: _, ...props }) => <a {...props} target="_blank" rel="noreferrer" /> }}>
+          {text}
+        </Markdown>
+      </div>
+      {long && (
+        <Typography.Link style={{ fontSize: 12 }} onClick={() => setOpen(!open)}>
+          {open ? 'Thu gọn' : 'Xem thêm'}
+        </Typography.Link>
+      )}
+    </div>
+  );
+}
 
 /** The job's steps as a timeline (see jobSteps in ../cad) */
 export function JobSteps({ job, now = Date.now() }: { job: CadJob; now?: number }) {
@@ -411,6 +433,9 @@ export function CadJobCard(props: {
     </Button>
   );
 
+  // Without a title, the description's first line stands in, its Markdown marks dropped
+  const heading = job.title || job.prompt.trim().split('\n')[0].replace(/^[#>\-*+\s]+|[*_`]/g, '').trim();
+
   const details = job.result && (
     <Collapse
       size="small"
@@ -487,7 +512,7 @@ export function CadJobCard(props: {
         <Flex vertical gap={8} flex={1} style={{ minWidth: 260 }}>
           <Flex justify="space-between" align="start" gap={8}>
             <Typography.Text strong style={{ fontSize: 15 }}>
-              {job.title || job.prompt}
+              {heading}
             </Typography.Text>
             <Tag color={STATE_COLORS[job.state] ?? 'default'}>{(STATE_LABELS as Record<string, string>)[job.state] ?? job.state}</Tag>
           </Flex>
@@ -495,10 +520,8 @@ export function CadJobCard(props: {
             {formatPrintTime(job.created_at)} · {source}
             {job.parent_id && !fix ? ` · ${versionLabel(job)}` : ''}
           </Typography.Text>
-          {job.title && job.title !== job.prompt && (
-            <Typography.Paragraph type="secondary" ellipsis={{ rows: 2, expandable: 'collapsible' }} style={{ margin: 0 }}>
-              {job.prompt}
-            </Typography.Paragraph>
+          {job.prompt.trim() !== heading && (
+            <PromptText text={job.prompt} />
           )}
           {busy && (
             <Typography.Text>
