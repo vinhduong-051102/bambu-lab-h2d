@@ -41,7 +41,8 @@ HERE = Path(__file__).resolve().parent
 PORT = int(os.environ.get("PORT", "8000"))
 DEFAULT_MODEL = os.environ.get("CAD_AI_MODEL") or "claude-opus-5-5"
 # A Claude run that goes on longer than this is stopped (it has its own limit of builds in prompt.md)
-CLAUDE_TIMEOUT_S = int(os.environ.get("CAD_AI_TIMEOUT_S", "1200"))
+# A large assembly (twenty-odd parts, a build after each change) takes Claude more than 20 minutes
+CLAUDE_TIMEOUT_S = int(os.environ.get("CAD_AI_TIMEOUT_S", "2400"))
 BUILD_TIMEOUT_S = 180
 MAX_TURNS = 60
 CONVERT_TIMEOUT_S = 300
@@ -303,7 +304,9 @@ def generate(job_id, model, tokens=None):
         running[job_id] = proc
     proc.stdin.write("Làm theo yêu cầu trong request.md.\n")
     proc.stdin.close()
-    timer = threading.Timer(CLAUDE_TIMEOUT_S, lambda: kill(proc))
+    # Claude Code exits with a code of its own on SIGTERM, so the timeout is known by this flag, not by the code
+    timed_out = threading.Event()
+    timer = threading.Timer(CLAUDE_TIMEOUT_S, lambda: (timed_out.set(), kill(proc)))
     timer.start()
 
     result_line = None
@@ -371,8 +374,25 @@ def generate(job_id, model, tokens=None):
         status["usage"] = {key: result_line.get(key) for key in ("num_turns", "duration_ms", "usage")}
     if was_cancelled:
         status.update(state="cancelled", error="Đã hủy.")
-    elif code in (-signal.SIGKILL, -signal.SIGTERM) and not result_line:
-        status.update(state="failed", error=f"Claude chạy quá {CLAUDE_TIMEOUT_S // 60} phút nên đã bị dừng.")
+    elif (timed_out.is_set() or code in (-signal.SIGKILL, -signal.SIGTERM)) and not result_line:
+        late = f"Claude chạy quá {CLAUDE_TIMEOUT_S // 60} phút nên đã bị dừng"
+        if not (directory / "model.py").exists():
+            status.update(state="failed", error=f"{late}, trước khi viết model.py.")
+        else:
+            # Stopped before its summary, often right after its last build: the model.py it had is kept when it builds
+            begin_step(status, "finishing", "Dựng lại model.py Claude đang có lúc bị dừng")
+            write_json(directory / "status.json", status)
+            report = run_build(directory)
+            if report.get("ok"):
+                report["warnings"] = [*(report.get("warnings") or []),
+                                      f"{late} trước khi tóm tắt: đây là bản model.py cuối cùng của Claude, "
+                                      "có thể chưa sửa xong; xem kỹ ảnh lắp ráp và bàn in trước khi in."]
+                if (directory / "out" / "assembly.json").exists():
+                    begin_step(status, "guiding", "Vẽ hướng dẫn lắp từng bước và video")
+                    write_json(directory / "status.json", status)
+                    status["guide"] = run_guide(directory)
+            status.update(report=report, state="done" if report.get("ok") else "failed",
+                          error=None if report.get("ok") else f"{late}; model.py lúc đó không dựng được: {report.get('error')}")
     elif not result_line or result_line.get("is_error") or not result_line.get("structured_output"):
         stderr = stderr_path.read_text(encoding="utf-8", errors="replace") if stderr_path.exists() else ""
         status.update(state="failed", error=claude_error(result_line, stderr))
