@@ -5,16 +5,15 @@ import { Alert, App, Button, Card, Col, Descriptions, Empty, Flex, List, Row, Se
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { formatPrintTime } from '../prints';
 import { SIM_STATES, checksSummary, formatNumber, isSimBusy, jointUnits, parseCsv, seriesBy, simFileUrl, thin } from '../sim';
-import { EXAMPLES } from '../simLive';
-import { MechCard } from './MechCard';
 import { ImportedModels } from './ModelSim';
 import { SimLive } from './SimLive';
 
 /**
  * Mechanism simulations (docs/mechanical-simulation.md): the runs an agent started with the sim_* tools, each one's
  * checks against theory, its joints over time from joint_results.csv, and the Blender playback, which can be
- * rendered from here. Runs themselves are started by the agent (MCP), not from this page. A mechanism (an example,
- * a stored one, or a run's) also opens as a live session (docs/interactive-physics.md) to act on while it runs.
+ * rendered from here. Runs themselves are started by the agent (MCP) or a model's ⚙️ Mô phỏng panel, not from this
+ * page; a run's mechanism also opens as a live session (docs/interactive-physics.md) to act on while it runs. The
+ * models imported from files are set up here too.
  */
 
 type Check = { id: string; kind: string; passed: boolean | null; description?: string; max_error?: number; tolerance?: number; unit?: string };
@@ -302,77 +301,6 @@ function RunDetail({ simId, onChanged, onInteract }: { simId: string; onChanged:
   );
 }
 
-type LiveList = { sessions: { session_id: string; name: string; t: number; running: boolean }[]; examples: string[] };
-
-/** Opens a live session: an example, a stored mechanism, or one already running */
-function LiveStarter({ onOpen }: { onOpen: (sessionId: string) => void }) {
-  const { message } = App.useApp();
-  const [list, setList] = useState<LiveList | null>(null);
-  const [mechanisms, setMechanisms] = useState<{ mechanism_id: string; name: string | null }[]>([]);
-  const [error, setError] = useState<string | null>(null);
-  const [choice, setChoice] = useState('example:drop_box');
-  const [starting, setStarting] = useState(false);
-
-  const load = useCallback(() => {
-    getJson<LiveList>('/api/sim/live')
-      .then((data) => {
-        setList(data);
-        setError(null);
-      })
-      .catch((err) => setError(err.message));
-    getJson<{ mechanisms: { mechanism_id: string; name: string | null }[] }>('/api/sim/mechanisms')
-      .then((data) => setMechanisms(data.mechanisms))
-      .catch(() => {});
-  }, []);
-  useEffect(load, [load]);
-
-  const start = async () => {
-    const [kind, id] = [choice.slice(0, choice.indexOf(':')), choice.slice(choice.indexOf(':') + 1)];
-    if (kind === 'session') return onOpen(id);
-    setStarting(true);
-    try {
-      const data = await getJson<{ session_id: string }>('/api/sim/live', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(kind === 'example' ? { example: id } : { mechanism_id: id }),
-      });
-      onOpen(data.session_id);
-    } catch (err) {
-      message.error(`Không mở được phiên: ${err instanceof Error ? err.message : String(err)}`);
-    } finally {
-      setStarting(false);
-    }
-  };
-
-  const examples = EXAMPLES.filter((e) => !list || list.examples.includes(e.value));
-  return (
-    <Card size="small" title="🎮 Mô phỏng tương tác" extra={<Button size="small" icon={<ReloadOutlined />} onClick={load} title="Tải lại" />}>
-      {error ? (
-        <Alert type="info" showIcon title={error} description="Bật container: docker compose -f docker-compose.sim-live.yml up -d (docs/interactive-physics.md)." />
-      ) : (
-        <Flex gap={8} wrap align="center">
-          <Select
-            value={choice}
-            onChange={setChoice}
-            style={{ minWidth: 300, flex: '1 1 300px' }}
-            options={[
-              ...(list?.sessions.length ? [{ label: 'Phiên đang chạy', options: list.sessions.map((s) => ({ value: `session:${s.session_id}`, label: `${s.name} (t = ${s.t.toFixed(1)} s)` })) }] : []),
-              { label: 'Ví dụ', options: examples.map((e) => ({ value: `example:${e.value}`, label: e.label })) },
-              ...(mechanisms.length ? [{ label: 'Cơ cấu đã lưu', options: mechanisms.map((m) => ({ value: `mechanism:${m.mechanism_id}`, label: m.name || m.mechanism_id })) }] : []),
-            ]}
-          />
-          <Button type="primary" icon={<ThunderboltOutlined />} loading={starting} onClick={start}>
-            {choice.startsWith('session:') ? 'Mở lại' : 'Bắt đầu'}
-          </Button>
-          <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-            Chrono chạy liên tục theo thời gian thực: kéo vật bằng chuột, đẩy, đổi motor và trọng lực khi đang chạy.
-          </Typography.Text>
-        </Flex>
-      )}
-    </Card>
-  );
-}
-
 export function SimCard() {
   const { message } = App.useApp();
   const [live, setLive] = useState<string | null>(null);
@@ -424,12 +352,13 @@ export function SimCard() {
 
   return (
     <Row gutter={[16, 16]}>
-      <Col span={24}>{live ? <SimLive key={live} sessionId={live} onClose={() => setLive(null)} /> : <LiveStarter onOpen={setLive} />}</Col>
+      {live && (
+        <Col span={24}>
+          <SimLive key={live} sessionId={live} onClose={() => setLive(null)} />
+        </Col>
+      )}
       <Col span={24}>
         <ImportedModels />
-      </Col>
-      <Col span={24}>
-        <MechCard onOpenRun={setPicked} />
       </Col>
       <Col xs={24} xl={9}>
         <Card

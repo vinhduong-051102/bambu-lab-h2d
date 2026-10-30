@@ -68,13 +68,3 @@ export function latestOnly(send) {
     flush();
   };
 }
-
-/** The example mechanisms (mesh3d/sim/examples) a session opens by name; the drop is the MVP: things fall, hit
- * the ground and can be dragged around */
-export const EXAMPLES = [
-  { value: 'drop_box', label: 'Hộp và bi rơi xuống nền (va chạm)' },
-  { value: 'motor_shaft', label: 'Trục quay có động cơ' },
-  { value: 'pendulum', label: 'Con lắc' },
-  { value: 'gear_pair', label: 'Cặp bánh răng 20/40 (lý tưởng)' },
-  { value: 'gear_contact', label: 'Cặp bánh răng răng tiếp xúc (chậm hơn thời gian thực)' },
-];

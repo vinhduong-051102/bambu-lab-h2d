@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { arrowLength, EXAMPLES, latestOnly, motorDisplay, pace, threeQuaternion, toSi } from '../src/ui/simLive';
+import { arrowLength, latestOnly, motorDisplay, pace, threeQuaternion, toSi } from '../src/ui/simLive';
 
 describe('Interactive simulation viewer helpers', () => {
   it('shows motors in the units people read, and sends SI back', () => {
@@ -48,9 +48,5 @@ describe('Interactive simulation viewer helpers', () => {
     releases.shift()!();
     await Promise.resolve();
     expect(sent).toEqual([1, 4]);
-  });
-
-  it('offers the drop as the first example', () => {
-    expect(EXAMPLES[0].value).toBe('drop_box');
   });
 });
