@@ -7,6 +7,7 @@ request.md, this worker writes model.py (through Claude), out/ (through build.py
   POST /jobs/<id>/generate     {"model": "claude-opus-5-5"}: Claude writes and builds model.py from request.md,
                                in the background; status.json follows its progress. 202, or 409 when running
   POST /jobs/<id>/build        Builds the job's model.py now and answers with build.py's report
+  POST /jobs/<id>/guide        Draws the assembly guide of the job's built assembly again (assembly_guide.py)
   POST /jobs/<id>/cancel       Stops the job's Claude run
   POST /convert                {"file": "<path in JOBS_DIR>"} or {"data_base64", "filename", "job_id"?}, with
                                "tolerance_mm"? and "angular_tolerance_deg"?: each solid of a STEP/IGES file as an STL
@@ -16,7 +17,8 @@ request.md, this worker writes model.py (through Claude), out/ (through build.py
 status.json: {"state": "running" | "done" | "failed" | "cancelled", "step": "starting" | "reading" | "writing" |
 "building" | "reviewing" | "finishing", "steps": [every step so far: {id, started_at, finished_at, detail}; a
 build's detail is its outcome], "notes": ["• ..."], "builds": n, "started_at", "finished_at", "error", "result":
-{summary, ...the output schema}, "report": <last out/report.json>}
+{summary, ...the output schema}, "report": <last out/report.json>, "guide": {ok, steps, video, error} of the assembly
+guide drawn after the last build of a model with `components` (out/guide/), or absent}
 """
 
 import base64
@@ -43,6 +45,7 @@ CLAUDE_TIMEOUT_S = int(os.environ.get("CAD_AI_TIMEOUT_S", "1200"))
 BUILD_TIMEOUT_S = 180
 MAX_TURNS = 60
 CONVERT_TIMEOUT_S = 300
+GUIDE_TIMEOUT_S = 420
 MAX_CONVERT_BYTES = 100 * 1024 * 1024
 CONVERT_SUFFIXES = (".step", ".stp", ".iges", ".igs")
 JOB_ID_RE = re.compile(r"^[a-z0-9][a-z0-9-]{5,63}$")
@@ -107,6 +110,23 @@ def run_build(directory):
     except subprocess.TimeoutExpired:
         return {"ok": False, "error": f"Dựng mô hình quá {BUILD_TIMEOUT_S} giây."}
     return read_json(directory / "out" / "report.json") or {"ok": False, "error": "build.py không ghi report.json."}
+
+
+def run_guide(directory):
+    """assembly_guide.py on a built assembly: {ok, steps, video, error}, or None when the model has no assembled
+    components to guide"""
+    assembly = read_json(directory / "out" / "assembly.json")
+    if not assembly or assembly.get("from") != "components":
+        return None
+    try:
+        subprocess.run([sys.executable, str(HERE / "assembly_guide.py"), "out"], cwd=directory,
+                       capture_output=True, timeout=GUIDE_TIMEOUT_S, check=False)
+    except subprocess.TimeoutExpired:
+        return {"ok": False, "error": f"Vẽ hướng dẫn lắp quá {GUIDE_TIMEOUT_S} giây."}
+    guide = read_json(directory / "out" / "guide" / "guide.json")
+    if not guide:
+        return {"ok": False, "error": "assembly_guide.py không ghi guide.json."}
+    return {"ok": True, "steps": len(guide["steps"]), "video": guide.get("video"), "error": guide.get("video_error")}
 
 
 def new_job_id():
@@ -363,6 +383,10 @@ def generate(job_id, model, tokens=None):
         begin_step(status, "finishing", "Dựng lại model.py cuối cùng, xuất STL, STEP và ảnh xem trước")
         write_json(directory / "status.json", status)
         report = run_build(directory)
+        if report.get("ok") and (directory / "out" / "assembly.json").exists():
+            begin_step(status, "guiding", "Vẽ hướng dẫn lắp từng bước và video")
+            write_json(directory / "status.json", status)
+            status["guide"] = run_guide(directory)
         status.update(report=report, result=result_line["structured_output"],
                       state="done" if report.get("ok") else "failed",
                       error=None if report.get("ok") else f"model.py cuối cùng không dựng được: {report.get('error')}")
@@ -417,7 +441,7 @@ class Handler(BaseHTTPRequestHandler):
     def do_POST(self):
         if self.path == "/convert":
             return self.convert(self.body())
-        match = re.fullmatch(r"/jobs/([^/]+)/(generate|build|cancel)", self.path)
+        match = re.fullmatch(r"/jobs/([^/]+)/(generate|build|guide|cancel)", self.path)
         if not match or not JOB_ID_RE.match(match.group(1)):
             return self.reply(404, {"ok": False, "error": "NOT_FOUND"})
         job_id, action = match.groups()
@@ -446,8 +470,23 @@ class Handler(BaseHTTPRequestHandler):
             status = {"state": "done" if report.get("ok") else "failed", "step": None, "notes": [], "builds": 1,
                       "started_at": now(), "finished_at": now(), "report": report, "result": None,
                       "error": None if report.get("ok") else report.get("error")}
+            if report.get("ok"):
+                status["guide"] = run_guide(directory)
             write_json(directory / "status.json", status)
             return self.reply(200, {"ok": True, "report": report})
+
+        if action == "guide":
+            with lock:
+                if job_id in running:
+                    return self.reply(409, {"ok": False, "error": "JOB_RUNNING", "message": "Job đang chạy."})
+            guide = run_guide(directory)
+            if guide is None:
+                return self.reply(409, {"ok": False, "error": "NO_ASSEMBLY",
+                                        "message": "Mô hình không khai báo components nên không có hướng dẫn lắp."})
+            status = read_json(directory / "status.json", {})
+            status["guide"] = guide
+            write_json(directory / "status.json", status)
+            return self.reply(200 if guide["ok"] else 500, {"ok": guide["ok"], "guide": guide})
 
         with lock:
             proc = running.get(job_id)

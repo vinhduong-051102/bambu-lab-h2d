@@ -4,15 +4,33 @@ Build runner: python build.py <model.py> [out dir]
 Runs a build123d model file (see guide.md: it assigns the finished solid to `result`), then writes to the out
 dir (default: out/ next to the model): model.stl, model.step, preview.png (four views) and report.json, which
 it also prints. Exits 1 when the model could not be built; report.json then says why.
+
+An assembly keeps its parts: a model that assigns `components` ({name: solid}, in their assembled places), or whose
+`result` holds several solids, also gets components/<name>.stl and assembly.json (each component's file, volume and
+centre, and the model's `mechanism` dict when it has one: what moves, how, and what is fixed, for simulation). With
+`components`, assembly.png shows them assembled: what is simulated, where preview.png shows the print layout; the
+model's `assembly_steps` (the order a person puts the parts together) go in assembly.json too, for the assembly guide
+the worker draws after the last build (assembly_guide.py).
+
+With `components`, the print layout is made here, not by the model (print_layout.py): every component that is printed
+lies on the face it prints best on, packed onto as many H2D plates as it takes. model.stl and model.step hold the
+plates side by side, model.3mf the same with each part on its own plate for Bambu Studio, and report.json's
+"print_layout" says which part is on which plate. Not printed: the components named in `not_printed`, and those
+`mechanism` makes of metal (steel shafts, brass pins…), bought instead. With several plates, plates/plate-<n>.3mf
+holds each plate on its own (what is sent to Studio). `print_layout = "manual"` keeps the model's
+own `result` instead.
 """
 
 import json
 import math
+import re
 import runpy
+import shutil
 import struct
 import sys
 import time
 import traceback
+import zipfile
 from pathlib import Path
 
 # Build plate of the H2D for one part (mm), and how far below Z = 0 a part may start before it counts as
@@ -136,11 +154,180 @@ def render_preview(triangles, size, path, face_colours=None, views=VIEWS):
     plt.close(fig)
 
 
+def as_shape(value, what):
+    from build123d import Compound, Shape
+
+    if isinstance(value, (list, tuple)):
+        value = Compound(children=list(value))
+    if not isinstance(value, Shape):
+        # Builders (BuildPart) hold their part in .part
+        value = getattr(value, "part", value)
+    if not isinstance(value, Shape):
+        raise ValueError(f"{what} is a {type(value).__name__}, not a build123d shape.")
+    return value
+
+
+def read_components(namespace, solids):
+    """{name: shape} of an assembly: `components` as the model names them, else each solid of `result` when it has
+    several (named by its label, or part_1, part_2…); {} for a single part"""
+    given = namespace.get("components")
+    if given is not None:
+        if not isinstance(given, dict) or not given:
+            raise ValueError("`components` must be a dict {name: solid}, the parts in their assembled places.")
+        out = {}
+        for name, value in given.items():
+            if not isinstance(name, str) or not re.fullmatch(r"[A-Za-z0-9_][A-Za-z0-9_-]{0,47}", name):
+                raise ValueError(f"Component name {name!r}: letters, digits, _ and - (at most 48).")
+            out[name] = as_shape(value, f"components[{name!r}]")
+            if not out[name].solids():
+                raise ValueError(f"components[{name!r}] has no solids.")
+        return out
+    if len(solids) < 2:
+        return {}
+    out = {}
+    for k, solid in enumerate(solids, 1):
+        label = re.sub(r"[^A-Za-z0-9_-]", "_", str(getattr(solid, "label", "") or ""))[:48].strip("_")
+        name = label if label and label not in out else f"part_{k}"
+        out[name] = solid
+    return out
+
+
+def read_steps(steps, components):
+    """`assembly_steps` as given, checked: [{"parts": [component names], "text"?: str, "direction"?: [x, y, z]}]"""
+    if steps is None:
+        return None
+    if not isinstance(steps, list) or not all(isinstance(step, dict) for step in steps):
+        raise ValueError('`assembly_steps` must be a list of {"parts": [...], "text": "...", "direction": [x, y, z]}.')
+    seen = set()
+    for k, step in enumerate(steps, 1):
+        parts = step.get("parts")
+        if not isinstance(parts, list) or not parts or not all(isinstance(p, str) for p in parts):
+            raise ValueError(f"assembly_steps[{k - 1}]: \"parts\" must be a list of component names.")
+        unknown = [p for p in parts if p not in components]
+        if unknown:
+            raise ValueError(f"assembly_steps[{k - 1}] names parts that are not components: {unknown}.")
+        again = [p for p in parts if p in seen]
+        if again:
+            raise ValueError(f"assembly_steps[{k - 1}] puts on {again} a second time.")
+        seen.update(parts)
+        if "text" in step and not isinstance(step["text"], str):
+            raise ValueError(f"assembly_steps[{k - 1}]: \"text\" must be a string.")
+        direction = step.get("direction")
+        if direction is not None and not (isinstance(direction, list) and len(direction) == 3
+                                          and all(isinstance(c, (int, float)) for c in direction) and any(direction)):
+            raise ValueError(f"assembly_steps[{k - 1}]: \"direction\" must be [x, y, z], not all 0.")
+    return [{key: step[key] for key in ("parts", "text", "direction") if key in step} for step in steps]
+
+
+def write_components(components, mechanism, out, from_solids, steps=None):
+    """components/<name>.stl and assembly.json"""
+    from build123d import export_stl
+
+    folder = out / "components"
+    folder.mkdir(exist_ok=True)
+    listed = []
+    for name, shape in components.items():
+        export_stl(shape, str(folder / f"{name}.stl"), tolerance=0.01, angular_tolerance=0.1)
+        c = shape.center()
+        listed.append({"name": name, "file": f"components/{name}.stl", "volume_mm3": round(shape.volume, 3),
+                       "center_mm": [round(c.X, 3), round(c.Y, 3), round(c.Z, 3)]})
+    if mechanism is not None:
+        if not isinstance(mechanism, dict):
+            raise ValueError("`mechanism` must be a dict (see guide.md, Assemblies that move).")
+        try:
+            json.dumps(mechanism)
+        except TypeError as err:
+            raise ValueError(f"`mechanism` must hold only numbers, strings, lists and dicts: {err}") from None
+        unknown = {ref for key in ("joints", "gears", "motors", "loads") for item in mechanism.get(key) or []
+                   if isinstance(item, dict) for field in ("part_a", "part_b", "part", "gear_a", "gear_b")
+                   for ref in [item.get(field)] if ref is not None and ref not in components}
+        unknown |= {ref for ref in (mechanism.get("parts") or {}) if ref not in components}
+        if unknown:
+            raise ValueError(f"`mechanism` names parts that are not components: {sorted(unknown)}.")
+    steps = read_steps(steps, components)
+    (out / "assembly.json").write_text(json.dumps({
+        "components": listed, "mechanism": mechanism, "steps": steps,
+        "from": "solids of result" if from_solids else "components"}, indent=2, ensure_ascii=False))
+    files = [entry["file"] for entry in listed] + ["assembly.json"]
+    if not from_solids:
+        # Assembled, unlike `result` (laid out to print): the model as the dashboard simulates it
+        triangles = [t for entry in listed for t in read_stl(out / entry["file"])]
+        lows = [min(v[a] for t in triangles for v in t) for a in range(3)]
+        highs = [max(v[a] for t in triangles for v in t) for a in range(3)]
+        render_preview(triangles, tuple(h - lo for h, lo in zip(highs, lows)), out / "assembly.png")
+        files.append("assembly.png")
+    return files
+
+
+METALS = ("steel", "stainless", "aluminium", "aluminum", "brass", "bronze", "copper", "iron", "metal")
+
+
+def bought(namespace, components):
+    """{name: why} of the components that are not printed"""
+    named = namespace.get("not_printed") or []
+    if not isinstance(named, (list, tuple)) or not all(isinstance(n, str) for n in named):
+        raise ValueError("`not_printed` must be a list of component names.")
+    unknown = [n for n in named if n not in components]
+    if unknown:
+        raise ValueError(f"`not_printed` names parts that are not components: {unknown}.")
+    out = {n: "not_printed" for n in named}
+    parts = (namespace.get("mechanism") or {}).get("parts") or {}
+    for name, part in parts.items():
+        material = str((part or {}).get("material") or "").lower() if isinstance(part, dict) else ""
+        if name in components and name not in out and any(m in material for m in METALS):
+            out[name] = material
+    return out
+
+
+def lay_out(namespace, components, out):
+    """The printed components on their plates: (the layout as one shape, report["print_layout"])"""
+    import numpy as np
+    from build123d import Compound, Location
+    from OCP.gp import gp_Trsf
+
+    import print_layout
+
+    skipped = bought(namespace, components)
+    printed = [n for n in components if n not in skipped]
+    if not printed:
+        raise ValueError("Every component is `not_printed` or metal: there is nothing to print.")
+    meshes = {n: np.array(read_stl(out / "components" / f"{n}.stl"), dtype=float) for n in printed}
+    layout = print_layout.plan(meshes)
+    placed = []
+    for name in printed:
+        m = layout["parts"][name]["matrix"]
+        trsf = gp_Trsf()
+        trsf.SetValues(*m[0, :4], *m[1, :4], *m[2, :4])
+        placed.append(components[name].moved(Location(trsf)))
+    print_layout.write_3mf(out / "model.3mf", meshes, layout, title=Path(out).parent.name)
+    # Several plates: one 3MF each as well, since Studio drops the plates of a 3MF it did not write
+    plate_files = (print_layout.write_plates(out / "plates", meshes, layout, title=Path(out).parent.name)
+                   if len(layout["plates"]) > 1 else [])
+    report = {
+        "plates": layout["plates"],
+        "plate_files": [f"plates/{name}" for name in plate_files],
+        "parts": {n: {k: v for k, v in p.items() if k != "matrix"} for n, p in layout["parts"].items()},
+        "not_printed": skipped,
+        "warnings": layout["warnings"],
+    }
+    return Compound(children=placed), report
+
+
 def build(model, out):
     from build123d import Compound, Shape, export_step, export_stl
 
     namespace = runpy.run_path(str(model), run_name="__model__")
     shape = namespace.get("result")
+    layout = None
+    if isinstance(namespace.get("components"), dict) and namespace.get("print_layout") != "manual":
+        # Laid out for printing from the components, whatever `result` holds
+        components = read_components(namespace, [])
+        assembly_files = write_components(components, namespace.get("mechanism"), out, False,
+                                          namespace.get("assembly_steps"))
+        shape, layout = lay_out(namespace, components, out)
+    elif shape is None and isinstance(namespace.get("components"), dict):
+        # An assembly with no separate print layout: printed as it stands
+        shape = list(namespace["components"].values())
     if shape is None:
         raise ValueError("The model file does not assign the finished part to `result`.")
     if isinstance(shape, (list, tuple)):
@@ -157,8 +344,9 @@ def build(model, out):
     box = shape.bounding_box()
     size = (box.size.X, box.size.Y, box.size.Z)
     volume = sum(s.volume for s in solids)
-    warnings = []
-    if any(s > m for s, m in zip(size, MAX_SIZE)):
+    warnings = list(layout["warnings"]) if layout else []
+    # A layout's plates lie side by side, each within the plate
+    if not layout and any(s > m for s, m in zip(size, MAX_SIZE)):
         warnings.append(f"Larger than the H2D's {MAX_SIZE[0]:.0f} × {MAX_SIZE[1]:.0f} × {MAX_SIZE[2]:.0f} mm.")
     if abs(box.min.Z) > PLATE_TOLERANCE:
         warnings.append(f"The lowest point is at Z = {box.min.Z:.2f} mm, not on the build plate (Z = 0).")
@@ -178,6 +366,19 @@ def build(model, out):
         warnings.append(f"The STL mesh is not watertight ({mesh['open_edges']} open, "
                         f"{mesh['non_manifold_edges']} non-manifold edges).")
     render_preview(triangles, size, preview)
+    files = ["model.stl", "model.step", "preview.png"]
+    if layout:
+        files += ["model.3mf"] + layout["plate_files"] + assembly_files
+        if namespace.get("result") is not None:
+            warnings.append("`result` is ignored: the print layout is made from `components` "
+                            '(print_layout = "manual" keeps it).')
+    else:
+        components = read_components(namespace, solids)
+        if components:
+            files += write_components(components, namespace.get("mechanism"), out, namespace.get("components") is None,
+                                      namespace.get("assembly_steps"))
+        elif namespace.get("mechanism") is not None:
+            warnings.append("`mechanism` is ignored: a single part has nothing to move against (give `components`).")
 
     return {
         "size_mm": [round(v, 2) for v in size],
@@ -187,7 +388,9 @@ def build(model, out):
         "solids": len(solids),
         "mesh": mesh,
         "warnings": warnings,
-        "files": ["model.stl", "model.step", "preview.png"],
+        "components": list(components),
+        "files": files,
+        **({"print_layout": layout} if layout else {}),
     }
 
 
@@ -198,8 +401,16 @@ def main():
     model = Path(sys.argv[1]).resolve()
     out = Path(sys.argv[2]).resolve() if len(sys.argv) > 2 else model.parent / "out"
     out.mkdir(parents=True, exist_ok=True)
-    for stale in ("model.stl", "model.step", "preview.png", "report.json"):
+    for stale in ("model.stl", "model.step", "preview.png", "report.json", "assembly.json", "assembly.png"):
         (out / stale).unlink(missing_ok=True)
+    # A print layout's 3MF, not a coloured figure's (mesh3d writes those)
+    if (out / "model.3mf").exists() and b"build.py" in zipfile.ZipFile(out / "model.3mf").read("3D/3dmodel.model")[:600]:
+        (out / "model.3mf").unlink()
+    for stale in (out / "components").glob("*.stl") if (out / "components").is_dir() else []:
+        stale.unlink()
+    # The assembly guide is of the model built before; the worker draws it again after the last build
+    shutil.rmtree(out / "guide", ignore_errors=True)
+    shutil.rmtree(out / "plates", ignore_errors=True)
 
     started = time.monotonic()
     try:

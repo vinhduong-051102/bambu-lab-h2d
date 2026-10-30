@@ -34,6 +34,8 @@ JOINTS = ("fixed", "revolute", "prismatic", "cylindrical", "spherical", "planar"
 MOTOR_MODES = {"revolute": ("speed", "angle", "torque"), "cylindrical": ("speed", "angle", "torque"),
                "prismatic": ("speed", "position", "force")}
 LOADS = ("torque", "force", "spring_damper", "rotational_spring_damper")
+# Solver settings a model may leave out (s): a stated assumption, never physical data
+SOLVER_DEFAULTS = {"time_step": 0.001, "duration": 5.0}
 
 # Nominal densities (kg/m³), for a material named without one: a handbook value, listed as such. Printed parts are
 # lighter (infill): give their mass, or a density measured from a printed part.
@@ -167,9 +169,11 @@ def read_part(r, p, path, L, A, resolve_file):
         r.error(f"{path}.source", f"source phải là một trong {', '.join(PROVENANCE)}.")
         source = "user"
     pos = r.vector(p, "position", path)
+    # A mesh file is already where the assembly has it: no position is its own place, not a guess
+    placed = pos is None and bool(p.get("geometry_file")) and p.get("shape") is None
     part["position"] = valued(((pos if pos is not None else np.zeros(3)) * L).tolist(),
-                              source if pos is not None else "assumption", "mm")
-    if pos is None:
+                              source if pos is not None or placed else "assumption", "mm")
+    if pos is None and not placed:
         r.assume(f"{path}.position", "Không cho vị trí: đặt ở gốc tọa độ.")
     part["orientation"] = read_orientation(r, p, path, A).tolist()
     # Geometry: a parametric shape, or a mesh file already in the assembly frame
@@ -219,6 +223,12 @@ def read_part(r, p, path, L, A, resolve_file):
             part["inertia"] = valued([[v["ixx"], v["ixy"] or 0, v["ixz"] or 0], [v["ixy"] or 0, v["iyy"], v["iyz"] or 0],
                                       [v["ixz"] or 0, v["iyz"] or 0, v["izz"]]], "user", "kg·mm²")
             part["inertia"]["value"] = (np.array(part["inertia"]["value"]) * L * L).tolist()
+    # Contact with other colliding parts (a block falling on a plate): its convex hull, with the friction given
+    part["collision"] = p.get("collision", False) is True
+    friction = r.number(p, "friction", path, minimum=0)
+    part["friction"] = valued(friction, "user") if friction is not None else None
+    if part["collision"] and friction is None:
+        r.need(f"{path}.friction", f"{part['id']} va chạm: cần hệ số ma sát (friction, vd. 0.3 cho nhựa trên nhựa).")
     return part
 
 
@@ -234,7 +244,8 @@ def read_joint(r, j, path, parts, L):
         pa, pb = r.vector(j, "point_a", path, required=True), r.vector(j, "point_b", path, required=True)
         joint.update(point_a=None if pa is None else (pa * L).tolist(), point_b=None if pb is None else (pb * L).tolist())
         return joint
-    pos = r.vector(j, "position", path, required=True)
+    # A weld has no place that matters: a fixed joint only merges its two parts into one rigid group
+    pos = r.vector(j, "position", path, required=joint["type"] != "fixed")
     joint["position"] = None if pos is None else (pos * L).tolist()
     needs_axis = joint["type"] in ("revolute", "prismatic", "cylindrical", "planar")
     axis = r.vector(j, "axis", path, required=needs_axis, unit=True)
@@ -343,10 +354,14 @@ def normalise(model, resolve_file=None):
             if key in load:
                 r.ref(load, key, path, parts_by_id, "chi tiết")
         out["loads"].append(dict(load))
-    sim = model.get("simulation")
-    if not isinstance(sim, dict) or sim.get("duration") is None or sim.get("time_step") is None:
-        r.need("simulation", "Cần simulation.duration và simulation.time_step (s) để chạy mô phỏng.")
-    out["simulation"] = sim if isinstance(sim, dict) else {}
+    # Solver settings are not physical data: a missing one takes a default the user sees and can change
+    sim = dict(model.get("simulation") or {}) if isinstance(model.get("simulation"), (dict, type(None))) else {}
+    for key, default, why in (("time_step", SOLVER_DEFAULTS["time_step"], "bước 1 ms"),
+                              ("duration", SOLVER_DEFAULTS["duration"], "chạy 5 s khi ghi kết quả")):
+        if sim.get(key) is None:
+            sim[key] = default
+            r.assume(f"simulation.{key}", f"Không cho simulation.{key}: dùng {default} s ({why}); đổi trong Cấu hình vật lý.")
+    out["simulation"] = sim
     if not any(p["fixed"] for p in out["parts"]):
         r.need("parts", "Không có chi tiết cố định (fixed): chi tiết nào gắn với nền/khung?")
     if r.errors:

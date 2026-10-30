@@ -57,3 +57,49 @@ result = part.part
   then `fillet(edges, radius=...)` / `chamfer(edges, length=...)`.
 - Without builders (algebra mode) shapes combine with `+`, `-`, `&` and move with `Pos(x, y, z) * shape`
   and `Rot(0, 0, 45) * shape`.
+
+## Assemblies that move
+
+When the request is a mechanism or several parts that work together (a hinge, gears on shafts, a crank and a
+slider…), keep every part separate so the dashboard can simulate the model as it is:
+
+- Assign `components = {"name": solid, ...}`: each part on its own, **in its assembled place** (shafts in their
+  holes, gears meshing). Names: letters, digits, `_`, `-`. Don't lay the parts out for printing: build.py does
+  it, each part on the face it prints best on, packed onto as many H2D plates as it takes (report.json
+  `print_layout`; model.3mf has the plates), so leave `result` out. Parts that are bought, not printed (a steel
+  shaft, a screw, a spring): list them in `not_printed = ["shaft"]` (a `mechanism` part of metal is left out by
+  itself). Only when a part must print in a particular way the build can't guess, lay everything out yourself in
+  `result` and set `print_layout = "manual"`.
+- When the user said how it moves, also assign `mechanism`, naming parts by their component name (mm, degrees,
+  kg, N, N·m; positions and axes in the assembled frame):
+
+```python
+mechanism = {
+    "parts": {"base": {"fixed": True, "role": "frame", "material": "pla"},
+              "arm": {"role": "arm", "material": "pla"}},
+    "joints": [{"id": "hinge", "type": "revolute", "part_a": "base", "part_b": "arm",
+                "position": [0, 0, 20], "axis": [0, 1, 0]}],
+    "motors": [{"id": "drive", "joint": "hinge", "speed_rpm": 30}],
+    "simulation": {"duration": 2, "time_step": 0.001},
+}
+```
+
+  Roles: frame, housing, shaft, gear, pulley, crank, rod, link, slider, rocker, arm, bearing, pin, other. Joint
+  types: fixed, revolute, prismatic, cylindrical, spherical. `gears`: `[{"id", "gear_a", "gear_b",
+  "teeth_a", "teeth_b"}]`, each gear on its own revolute joint to a common part. Parts may give `mass`
+  (kg), `collision: True` with `friction`. Only write what the user asked for or what the design itself fixes (a
+  joint is where you put the pin): never invent a motor speed, a load or a mass the user did not give. What is
+  missing is asked for in the dashboard before simulating.
+- The dashboard draws an assembly guide from it (a picture per step and a video): the fixed parts first, then each
+  part after the one it is jointed to, along its joint's axis. When the order or the way in matters (a shaft that
+  takes its gears before it goes into the housing, a lid last), assign `assembly_steps`, in Vietnamese:
+
+```python
+assembly_steps = [
+    {"parts": ["shaft", "gear"], "text": "Lồng bánh răng vào trục trước khi lắp trục vào vỏ."},
+    {"parts": ["housing"], "text": "Đặt vỏ xuống, đưa trục vào hai lỗ ổ.", "direction": [0, 0, -1]},
+]
+```
+
+  `direction` is the way the parts move to their place (mm-frame vector); parts left out go on after, in the order
+  above. Name only components.

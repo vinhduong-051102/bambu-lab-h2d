@@ -14,6 +14,7 @@ import { TemperatureCard } from './printer/TemperatureCard';
 import { PrintHistoryCard } from './prints/PrintHistoryCard';
 import { SimCard } from './sim/SimCard';
 import { StudioCard } from './studio/StudioCard';
+import { AiUsageCard } from './system/AiUsageCard';
 import { ClaudeLimitsCard } from './system/ClaudeLimitsCard';
 import { ConsoleCard } from './system/ConsoleCard';
 import { DiagnosticsCard } from './system/DiagnosticsCard';
@@ -212,7 +213,7 @@ export function Shell() {
     {
       key: 'system',
       label: '🛠️ Hệ thống',
-      children: grid([<ClaudeLimitsCard key="claude" />, {}], [<ConsoleCard key="console" />, {}], [<DiagnosticsCard key="diag" />, {}]),
+      children: grid([<ClaudeLimitsCard key="claude" />, {}], [<AiUsageCard key="ai-usage" />, {}], [<ConsoleCard key="console" />, {}], [<DiagnosticsCard key="diag" />, {}]),
     },
   ].filter((p) => p !== false);
 

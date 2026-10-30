@@ -15,12 +15,16 @@ import {
   SendOutlined,
   StopOutlined,
 } from '@ant-design/icons';
-import { Alert, App, Button, Card, Collapse, Flex, Image, Input, Popconfirm, Progress, Space, Tag, Timeline, Tooltip, Typography } from 'antd';
+import { Alert, App, Button, Card, Collapse, Flex, Image, Input, Modal, Popconfirm, Progress, Space, Tag, Timeline, Tooltip, Typography } from 'antd';
 import { useEffect, useMemo, useState, type ClipboardEvent, type ReactNode } from 'react';
+import Markdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
 import { deltaLabel } from '../../domain/filaments/colourMixing';
 import { fileUrl, formatDuration, formatProgress, formatSize, isBusy, jobSteps, modelName, ORIGINS, REVISE_PLACEHOLDERS, STATE_LABELS, STEP_LABELS, versionLabel } from '../cad';
 import { checkedSettings, settingsSummary, sortedChecks, statusCounts } from '../eng';
 import { formatPrintTime } from '../prints';
+import { ModelSim } from '../sim/ModelSim';
+import { AssemblyGuideButton } from './AssemblyGuide';
 import { EngCheckButton } from './EngCheck';
 
 /** As many pictures as the gateway takes with one revision */
@@ -63,8 +67,58 @@ export interface CadJob {
     warnings?: string[];
     palette?: PaletteEntry[];
     colour_request?: Record<string, unknown>;
+    /** An assembly laid out for printing by build.py (cad/print_layout.py): its plates, and what is bought instead */
+    print_layout?: PrintLayout;
   } | null;
   files?: Record<string, boolean>;
+  guide?: { ok: boolean; steps?: number; video?: string | null; error?: string | null } | null;
+}
+
+export interface PrintLayout {
+  plates: { n: number; parts: string[] }[];
+  parts: Record<string, { plate: number; footprint_mm: number[]; height_mm: number; overhang_mm2: number; contact_mm2: number }>;
+  not_printed: Record<string, string>;
+}
+
+/** "In 2 bàn: bàn 1 · 12 chi tiết…; không in (mua sẵn): trục (steel)" */
+function PrintPlates({ layout }: { layout: PrintLayout }) {
+  const bought = Object.entries(layout.not_printed);
+  const supports = Object.entries(layout.parts).filter(([, p]) => p.overhang_mm2 > 100);
+  return (
+    <Collapse
+      size="small"
+      items={[
+        {
+          key: 'plates',
+          label: `🖨 Tự chia để in: ${layout.plates.length} bàn in · ${Object.keys(layout.parts).length} chi tiết${bought.length ? ` · ${bought.length} không in` : ''}`,
+          children: (
+            <Flex vertical gap={4}>
+              {layout.plates.map((plate) => (
+                <div key={plate.n}>
+                  <Typography.Text strong>Bàn {plate.n}:</Typography.Text>{' '}
+                  {plate.parts.map((name) => `${name} (cao ${layout.parts[name]?.height_mm ?? '?'} mm)`).join(', ')}
+                </div>
+              ))}
+              {bought.length > 0 && (
+                <Typography.Text type="secondary">
+                  Không in, dùng đồ mua sẵn: {bought.map(([name, why]) => (why === 'not_printed' ? name : `${name} (${why})`)).join(', ')}
+                </Typography.Text>
+              )}
+              {supports.length > 0 && (
+                <Typography.Text type="secondary">
+                  Có thể cần support: {supports.map(([name, p]) => `${name} (${Math.round(p.overhang_mm2)} mm² nhô ra)`).join(', ')}
+                </Typography.Text>
+              )}
+              <Typography.Text type="secondary">
+                Mỗi chi tiết được đặt nằm trên mặt in tốt nhất (ít phần nhô cần support nhất), xếp trong vùng cả hai đầu phun H2D in
+                tới. {layout.plates.length > 1 ? 'Mỗi bàn in là một file 3MF riêng: mở từng file trong Studio.' : 'File 3MF mở trong Studio đã xếp sẵn trên bàn.'}
+              </Typography.Text>
+            </Flex>
+          ),
+        },
+      ]}
+    />
+  );
 }
 
 export interface PaletteEntry {
@@ -133,6 +187,26 @@ const STEP_ICONS: Record<string, ReactNode> = {
   cancelled: <StopOutlined style={{ color: '#9ca3af' }} />,
   ahead: <ClockCircleOutlined style={{ color: '#6b7280' }} />,
 };
+
+/** The user's description as Markdown (lists, bold, tables, code): a few lines until "Xem thêm", links open in a new tab */
+function PromptText({ text }: { text: string }) {
+  const [open, setOpen] = useState(false);
+  const long = text.length > 160 || text.split('\n').length > 2;
+  return (
+    <div>
+      <div className={`cad-prompt${long && !open ? ' clamped' : ''}`}>
+        <Markdown remarkPlugins={[remarkGfm]} components={{ a: ({ node: _, ...props }) => <a {...props} target="_blank" rel="noreferrer" /> }}>
+          {text}
+        </Markdown>
+      </div>
+      {long && (
+        <Typography.Link style={{ fontSize: 12 }} onClick={() => setOpen(!open)}>
+          {open ? 'Thu gọn' : 'Xem thêm'}
+        </Typography.Link>
+      )}
+    </div>
+  );
+}
 
 /** The job's steps as a timeline (see jobSteps in ../cad) */
 export function JobSteps({ job, now = Date.now() }: { job: CadJob; now?: number }) {
@@ -204,6 +278,21 @@ const Bullets = ({ items }: { items: string[] }) => (
  * either: Claude then looks for problems itself). `before` is the version this one was made from: its preview is
  * shown next to this one's, before and after.
  */
+/** "⚙️ Mô phỏng": the job's own model, its components set up and run in the live Chrono viewer (docs/model-simulation.md) */
+function SimulateButton({ job }: { job: CadJob }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <>
+      <Button size="small" onClick={() => setOpen(true)} title="Mô phỏng vật lý chính mô hình này: chi tiết, khớp, động cơ, chạy trong khung 3D">
+        ⚙️ Mô phỏng
+      </Button>
+      <Modal open={open} onCancel={() => setOpen(false)} footer={null} width="min(1500px, 96vw)" destroyOnHidden title={`Mô phỏng · ${job.title || job.id}`}>
+        {open && <ModelSim jobId={job.id} />}
+      </Modal>
+    </>
+  );
+}
+
 export function CadJobCard(props: {
   job: CadJob;
   now?: number;
@@ -224,6 +313,8 @@ export function CadJobCard(props: {
 
   const busy = isBusy(job);
   const done = job.state === 'done';
+  // An assembly laid out on plates: its 3MF has them, where its STL is every plate side by side
+  const plates = job.report?.print_layout?.plates.length ?? 0;
   const figure = job.source === 'mesh';
   // Claude reviewing and fixing a figure
   const fix = figure && job.input === 'fix';
@@ -342,6 +433,9 @@ export function CadJobCard(props: {
     </Button>
   );
 
+  // Without a title, the description's first line stands in, its Markdown marks dropped
+  const heading = job.title || job.prompt.trim().split('\n')[0].replace(/^[#>\-*+\s]+|[*_`]/g, '').trim();
+
   const details = job.result && (
     <Collapse
       size="small"
@@ -400,16 +494,25 @@ export function CadJobCard(props: {
               )}
               {before?.files?.preview ? (
                 <figcaption>Sau · {versionLabel(job)}</figcaption>
+              ) : job.files?.shaped ? (
+                <figcaption>Claude hoàn thiện</figcaption>
               ) : (
-                job.files?.shaped && <figcaption>Claude hoàn thiện</figcaption>
+                job.files?.assembly && <figcaption>Bày in</figcaption>
               )}
             </figure>
+            {job.files?.assembly && (
+              // The parts in their places: what ⚙️ Mô phỏng runs, where the preview is laid out for printing
+              <figure className="cad-compare">
+                <Image src={url('assembly.png')} alt="Lắp ráp" width={160} height={160} style={{ objectFit: 'contain' }} />
+                <figcaption>Lắp ráp · dùng để mô phỏng</figcaption>
+              </figure>
+            )}
           </Flex>
         </Image.PreviewGroup>
         <Flex vertical gap={8} flex={1} style={{ minWidth: 260 }}>
           <Flex justify="space-between" align="start" gap={8}>
             <Typography.Text strong style={{ fontSize: 15 }}>
-              {job.title || job.prompt}
+              {heading}
             </Typography.Text>
             <Tag color={STATE_COLORS[job.state] ?? 'default'}>{(STATE_LABELS as Record<string, string>)[job.state] ?? job.state}</Tag>
           </Flex>
@@ -417,10 +520,8 @@ export function CadJobCard(props: {
             {formatPrintTime(job.created_at)} · {source}
             {job.parent_id && !fix ? ` · ${versionLabel(job)}` : ''}
           </Typography.Text>
-          {job.title && job.title !== job.prompt && (
-            <Typography.Paragraph type="secondary" ellipsis={{ rows: 2, expandable: 'collapsible' }} style={{ margin: 0 }}>
-              {job.prompt}
-            </Typography.Paragraph>
+          {job.prompt.trim() !== heading && (
+            <PromptText text={job.prompt} />
           )}
           {busy && (
             <Typography.Text>
@@ -453,6 +554,7 @@ export function CadJobCard(props: {
                 .join(' · ')}
             </Typography.Text>
           )}
+          {job.report?.print_layout && <PrintPlates layout={job.report.print_layout} />}
           {warnings.length > 0 && <Alert type="warning" title={warnings.map((w, i) => <div key={i}>⚠️ {w}</div>)} />}
           {!!job.report?.palette?.length && (
             <div className="cad-palette">
@@ -482,19 +584,34 @@ export function CadJobCard(props: {
                   icon={<SendOutlined />}
                   loading={acting === 'studio-3mf'}
                   onClick={() => sendToStudio('studio-3mf')}
-                  title="3MF đã tô sẵn màu: filament n trong Studio là màu số n"
+                  title={
+                    plates > 1
+                      ? `Gửi ${plates} file 3MF, mỗi file một bàn in đã xếp sẵn: mở từng file trong Studio`
+                      : plates
+                      ? 'File 3MF có các chi tiết đã xếp sẵn trên bàn in'
+                      : '3MF đã tô sẵn màu: filament n trong Studio là màu số n'
+                  }
                 >
-                  Gửi sang Studio (có màu)
+                  {plates ? `Gửi sang Studio (${plates} bàn in)` : 'Gửi sang Studio (có màu)'}
                 </Button>
               ) : (
                 <Button size="small" type="primary" icon={<SendOutlined />} loading={acting === 'studio-stl'} onClick={() => sendToStudio('studio-stl')}>
                   Gửi sang Studio
                 </Button>
               ))}
-            {done && job.files?.threemf && link('model.3mf', '3MF màu', { download: true, icon: <DownloadOutlined /> })}
+            {done &&
+              plates > 1 &&
+              Array.from({ length: plates }, (_, k) => (
+                <Button key={k} size="small" icon={<DownloadOutlined />} href={`/api/cad/jobs/${encodeURIComponent(job.id)}/plates/${k + 1}`}>
+                  3MF bàn {k + 1}
+                </Button>
+              ))}
+            {done && job.files?.threemf && plates <= 1 && link('model.3mf', plates ? '3MF' : '3MF màu', { download: true, icon: <DownloadOutlined /> })}
             {done && link('model.stl', 'STL', { download: true, icon: <DownloadOutlined /> })}
             {done && job.files?.step && link('model.step', 'STEP', { download: true, icon: <DownloadOutlined /> })}
             {done && <EngCheckButton job={job} onRevise={onRevise ? (comment) => onRevise(comment, []) : undefined} />}
+            {done && <SimulateButton job={job} />}
+            {done && job.files?.assembly && <AssemblyGuideButton job={job} />}
             {job.files?.code && link('model.py', 'Code', { icon: <FileTextOutlined /> })}
             {!busy && job.files?.code && (
               <Button size="small" icon={<EditOutlined />} onClick={() => setRevising(!revising)}>

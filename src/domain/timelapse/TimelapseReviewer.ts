@@ -5,6 +5,7 @@ import path from 'path';
 import { z } from 'zod';
 import type { PrintRecord } from '../prints/PrintJournal';
 import { PRINT_ISSUE_LABELS, PRINT_OUTCOME_LABELS } from '../studio/aiSessions';
+import { AI_FEATURES, claudeEntry, recordAiUsage, type AiFeature } from '../ai/aiUsage';
 
 /**
  * "AI nhận xét" on a timelapse: Claude looks at frames of the printer's timelapse and says what is wrong with
@@ -139,7 +140,8 @@ export interface VisionModel {
    * The model's answer, held to `schema`. The images reach it as files named frame-1.jpg, frame-2.jpg… (or with
    * `extension`) in the folder it works in, so `prompt(files)` names them.
    */
-  review(system: string, prompt: (files: string[]) => string, images: Buffer[], schema: object, extension?: string): Promise<unknown>;
+  /** `subject` names the task in the AI usage statistics */
+  review(system: string, prompt: (files: string[]) => string, images: Buffer[], schema: object, extension?: string, subject?: string): Promise<unknown>;
 }
 
 /** Frames cut with ffmpeg (the gateway's own, from @ffmpeg-installer) */
@@ -218,11 +220,13 @@ export class ClaudeCodeVision implements VisionModel {
   constructor(
     readonly name: string,
     private readonly command = 'claude',
-    private readonly timeoutMs = 10 * 60 * 1000
+    private readonly timeoutMs = 10 * 60 * 1000,
+    /** What its calls count as in the AI usage statistics (aiUsage.ts); null: not counted */
+    private readonly feature: AiFeature | null = null
   ) {}
 
   /** `extension` names the images' type for Claude's Read tool (JPEG frames by default, PNG renders) */
-  async review(system: string, prompt: (files: string[]) => string, images: Buffer[], schema: object, extension = 'jpg'): Promise<unknown> {
+  async review(system: string, prompt: (files: string[]) => string, images: Buffer[], schema: object, extension = 'jpg', subject?: string): Promise<unknown> {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'timelapse-review-'));
     try {
       const files = images.map((_, i) => `frame-${i + 1}.${extension}`);
@@ -249,6 +253,7 @@ export class ClaudeCodeVision implements VisionModel {
         } catch {
           // Reported below
         }
+        if (this.feature && result) await recordAiUsage(claudeEntry(this.feature, subject ?? AI_FEATURES[this.feature], result));
         if (result && !result.is_error && result.structured_output) return result.structured_output;
         const detail = result?.result || stderr.trim().slice(-500) || `claude thoát với mã ${code}`;
         // Out of usage on this subscription: the same request again on the next one
@@ -357,7 +362,9 @@ export class TimelapseReviewer {
           SYSTEM_PROMPT,
           (files) => buildReviewPrompt(print, files, FRAME_PLACES),
           [...progress, ...finished],
-          ANSWER_SCHEMA
+          ANSWER_SCHEMA,
+          'jpg',
+          print?.job_name ? `${print.job_name} (${video})` : video
         );
         const answer = reviewAnswerSchema.parse(raw);
         const review: TimelapseReview = {

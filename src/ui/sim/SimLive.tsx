@@ -2,7 +2,7 @@
 
 import { CaretRightOutlined, CloseOutlined, ExperimentOutlined, PauseOutlined, ReloadOutlined, StepForwardOutlined } from '@ant-design/icons';
 import { Alert, App, Button, Card, Descriptions, Flex, InputNumber, Select, Space, Switch, Table, Tag, Typography } from 'antd';
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { OBJLoader } from 'three/examples/jsm/loaders/OBJLoader.js';
@@ -15,6 +15,10 @@ import { arrowLength, latestOnly, liveUrl, motorDisplay, norm, pace, threeQuater
  * The interactive simulation viewer (docs/interactive-physics.md): a live Chrono session in the sim-live container,
  * drawn with three.js from the state it streams. Dragging a body sends the pointer to the session, which pulls the
  * body there with a finite force; the drawing only ever shows where Chrono put the bodies.
+ *
+ * A body drawn from several components (a 3D model's rigid group, docs/model-simulation.md) shows each component as
+ * its own mesh, picked one by one; `inspect` then adds what the caller knows of the picked component, and the model
+ * as it was made (every body at its starting pose) can be shown faintly beside the moving one.
  */
 
 type Vec = [number, number, number];
@@ -29,6 +33,8 @@ type SceneBody = {
   collision: boolean;
   held: boolean;
   mesh: { url: string; unit_scale: number; format: string } | null;
+  parts?: { id: string; name: string; color: string | null; url: string; unit_scale: number; format: string }[];
+  initial?: { p: Vec; q: [number, number, number, number] };
 };
 type SceneMotor = { id: string; type: string; mode: string; unit: string; body_a: string; point: Vec; axis: Vec };
 type LiveScene = {
@@ -60,7 +66,9 @@ type LiveState = {
     body: string;
     mass: number | null;
     fixed: boolean;
+    position: Vec;
     velocity: Vec;
+    angular_velocity: Vec;
     acceleration: Vec;
     contact_force: Vec | null;
     applied_force: Vec;
@@ -102,11 +110,16 @@ function shapeOf(b: SceneBody): THREE.BufferGeometry {
 }
 
 async function loadMesh(sessionId: string, b: SceneBody): Promise<THREE.BufferGeometry | null> {
-  if (!b.mesh) return null;
-  const res = await fetch(liveUrl(sessionId, `/mesh/${encodeURIComponent(b.id)}`), { cache: 'no-store' });
+  return b.mesh ? loadGeometry(sessionId, b.id, b.mesh) : null;
+}
+
+/** A mesh the session serves (a body's, or `<body>.part<k>` for one of its components), in mm */
+async function loadGeometry(sessionId: string, key: string, mesh: { unit_scale: number; format: string }): Promise<THREE.BufferGeometry | null> {
+  const res = await fetch(liveUrl(sessionId, `/mesh/${encodeURIComponent(key)}`), { cache: 'no-store' });
   if (!res.ok) return null;
   const data = await res.arrayBuffer();
   let geometry: THREE.BufferGeometry | null = null;
+  const b = { mesh };
   if (b.mesh.format === 'stl') geometry = new STLLoader().parse(data);
   else if (b.mesh.format === 'ply') geometry = new PLYLoader().parse(data);
   else if (b.mesh.format === 'obj') {
@@ -130,7 +143,22 @@ function axisMarker(point: Vec, axis: Vec, color: string): THREE.Mesh {
 
 const vec3 = (v: Vec) => new THREE.Vector3(v[0] * MM, v[1] * MM, v[2] * MM);
 
-export function SimLive({ sessionId, onClose }: { sessionId: string; onClose: () => void }) {
+/** What a caller may show of the picked component, from the latest state */
+export type LivePick = { body: string; part: string | null; state: LiveState; scene: LiveScene };
+export type { LiveState, LiveScene };
+
+export function SimLive({
+  sessionId,
+  onClose,
+  inspect,
+  title,
+}: {
+  sessionId: string;
+  onClose: () => void;
+  /** Extra panel for the picked body or component (a 3D model's part data and results) */
+  inspect?: (pick: LivePick) => ReactNode;
+  title?: ReactNode;
+}) {
   const { message } = App.useApp();
   const mountRef = useRef<HTMLDivElement>(null);
   const stateRef = useRef<LiveState | null>(null);
@@ -141,6 +169,10 @@ export function SimLive({ sessionId, onClose }: { sessionId: string; onClose: ()
   const [pushDir, setPushDir] = useState('+Z');
   const [pushN, setPushN] = useState<number | null>(null);
   const [setpoints, setSetpoints] = useState<Record<string, number | null>>({});
+  const [picked, setPicked] = useState<{ body: string; part: string | null } | null>(null);
+  const [ghost, setGhost] = useState(false);
+  const ghostRef = useRef<THREE.Group | null>(null);
+  const pickedRef = useRef<{ body: string; part: string | null } | null>(null);
 
   const act = useCallback(
     async (action: Record<string, unknown>, quiet = false) => {
@@ -243,22 +275,45 @@ export function SimLive({ sessionId, onClose }: { sessionId: string; onClose: ()
 
     const groups = new Map<string, THREE.Group>();
     const pickable: THREE.Mesh[] = [];
+    // The model as made: every body at its starting pose, faint, shown on demand
+    const original = new THREE.Group();
+    original.visible = false;
+    world.add(original);
+    ghostRef.current = original;
+    const ghostMaterial = new THREE.MeshBasicMaterial({ color: '#94A3B8', transparent: true, opacity: 0.18, depthWrite: false });
+    const addGhost = (b: SceneBody, mesh: THREE.Mesh) => {
+      if (!b.initial) return;
+      const copy = new THREE.Mesh(mesh.geometry, ghostMaterial);
+      copy.position.set(b.initial.p[0] * MM, b.initial.p[1] * MM, b.initial.p[2] * MM);
+      const [x, y, z, w] = threeQuaternion(b.initial.q);
+      copy.quaternion.set(x, y, z, w);
+      original.add(copy);
+    };
     scene.bodies.forEach((b, i) => {
       const group = new THREE.Group();
-      const material = new THREE.MeshStandardMaterial({ color: b.color ?? (b.fixed ? '#4B5563' : COLOURS[i % COLOURS.length]), roughness: 0.55, metalness: 0.1 });
-      const mesh = new THREE.Mesh(shapeOf(b), material);
-      mesh.userData.bodyId = b.id;
-      group.add(mesh);
-      pickable.push(mesh);
-      if (b.mesh) {
-        loadMesh(sessionId, b)
-          .then((geometry) => {
-            if (geometry) {
-              mesh.geometry.dispose();
-              mesh.geometry = geometry;
-            }
-          })
-          .catch(() => {});
+      const colour = (c: string | null | undefined) => c ?? b.color ?? (b.fixed ? '#4B5563' : COLOURS[i % COLOURS.length]);
+      const pieces = b.parts?.length ? b.parts : [null];
+      for (const [k, part] of pieces.entries()) {
+        const material = new THREE.MeshStandardMaterial({ color: colour(part?.color), roughness: 0.55, metalness: 0.1 });
+        const mesh = new THREE.Mesh(part ? new THREE.SphereGeometry(2, 8, 6) : shapeOf(b), material);
+        mesh.userData.bodyId = b.id;
+        mesh.userData.partId = part?.id ?? null;
+        group.add(mesh);
+        pickable.push(mesh);
+        const loading = part ? loadGeometry(sessionId, `${b.id}.part${k}`, part) : b.mesh ? loadMesh(sessionId, b) : null;
+        if (loading) {
+          loading
+            .then((geometry) => {
+              if (geometry) {
+                mesh.geometry.dispose();
+                mesh.geometry = geometry;
+              }
+              addGhost(b, mesh);
+            })
+            .catch(() => {});
+        } else {
+          addGhost(b, mesh);
+        }
       }
       groups.set(b.id, group);
       world.add(group);
@@ -291,6 +346,11 @@ export function SimLive({ sessionId, onClose }: { sessionId: string; onClose: ()
     const draw = () => {
       frame = requestAnimationFrame(draw);
       const s = stateRef.current;
+      const pick = pickedRef.current;
+      for (const mesh of pickable) {
+        const on = Boolean(pick && mesh.userData.bodyId === pick.body && (pick.part === null || mesh.userData.partId === pick.part));
+        (mesh.material as THREE.MeshStandardMaterial).emissive?.setHex(on ? 0x334155 : 0x000000);
+      }
       if (s) {
         for (const [id, pose] of Object.entries(s.bodies)) {
           const group = groups.get(id);
@@ -321,7 +381,7 @@ export function SimLive({ sessionId, onClose }: { sessionId: string; onClose: ()
     const raycaster = new THREE.Raycaster();
     const pointer = new THREE.Vector2();
     const send = latestOnly((action: Record<string, unknown>) => call(liveUrl(sessionId, '/actions'), action).catch(() => {}));
-    let grab: { body: string; fixed: boolean; hit: THREE.Vector3; plane: THREE.Plane; x: number; y: number; dragging: boolean } | null = null;
+    let grab: { body: string; part: string | null; fixed: boolean; hit: THREE.Vector3; plane: THREE.Plane; x: number; y: number; dragging: boolean } | null = null;
     const ray = (e: PointerEvent) => {
       const rect = renderer.domElement.getBoundingClientRect();
       pointer.set(((e.clientX - rect.left) / rect.width) * 2 - 1, -((e.clientY - rect.top) / rect.height) * 2 + 1);
@@ -336,7 +396,7 @@ export function SimLive({ sessionId, onClose }: { sessionId: string; onClose: ()
       const body = scene.bodies.find((b) => b.id === id);
       // Shift: drag on the horizontal plane through the point; otherwise on the plane facing the camera
       const normal = e.shiftKey ? new THREE.Vector3(0, 0, 1) : camera.getWorldDirection(new THREE.Vector3());
-      grab = { body: id, fixed: Boolean(body?.fixed), hit: hit.point.clone(), plane: new THREE.Plane().setFromNormalAndCoplanarPoint(normal, hit.point), x: e.clientX, y: e.clientY, dragging: false };
+      grab = { body: id, part: (hit.object.userData.partId as string | null) ?? null, fixed: Boolean(body?.fixed), hit: hit.point.clone(), plane: new THREE.Plane().setFromNormalAndCoplanarPoint(normal, hit.point), x: e.clientX, y: e.clientY, dragging: false };
       renderer.domElement.setPointerCapture(e.pointerId);
     };
     const move = (e: PointerEvent) => {
@@ -356,13 +416,15 @@ export function SimLive({ sessionId, onClose }: { sessionId: string; onClose: ()
     };
     const up = (e: PointerEvent) => {
       if (!grab) return;
-      const { body, dragging } = grab;
+      const { body, part, dragging } = grab;
       grab = null;
       renderer.domElement.releasePointerCapture(e.pointerId);
       if (dragging) {
         // After the last target, so the release is not overtaken by a move still being sent
         setTimeout(() => act({ action: 'release' }, true), 50);
       } else {
+        pickedRef.current = { body, part };
+        setPicked({ body, part });
         act({ action: 'select', body }, true);
       }
     };
@@ -399,6 +461,10 @@ export function SimLive({ sessionId, onClose }: { sessionId: string; onClose: ()
     };
   }, [scene, sessionId, act]);
 
+  useEffect(() => {
+    if (ghostRef.current) ghostRef.current.visible = ghost;
+  }, [ghost, scene]);
+
   const stop = async () => {
     await call(liveUrl(sessionId, '/stop'), {}).catch(() => {});
     onClose();
@@ -434,7 +500,7 @@ export function SimLive({ sessionId, onClose }: { sessionId: string; onClose: ()
       size="small"
       title={
         <Space wrap>
-          🎮 {scene?.name ?? 'Phiên tương tác'}
+          {title ?? <>🎮 {scene?.name ?? 'Phiên tương tác'}</>}
           <Tag color={p.color}>{p.text}</Tag>
           {transport !== 'stream' && <Tag color={transport === 'ended' ? 'error' : 'warning'}>{transport === 'ended' ? 'Phiên đã kết thúc' : 'Đang hỏi trạng thái định kỳ'}</Tag>}
         </Space>
@@ -476,6 +542,10 @@ export function SimLive({ sessionId, onClose }: { sessionId: string; onClose: ()
             <Descriptions.Item label="Tiếp xúc">{state?.contacts ?? '–'}</Descriptions.Item>
             <Descriptions.Item label="Tốc độ">
               <Select size="small" value={state?.speed ?? 1} onChange={(value) => act({ action: 'speed', value })} options={SPEEDS.map((v) => ({ value: v, label: `×${v}` }))} style={{ width: 80 }} />
+            </Descriptions.Item>
+            <Descriptions.Item label="Mô hình gốc" span={2}>
+              <Switch size="small" checked={ghost} onChange={setGhost} />{' '}
+              <Typography.Text type="secondary">vị trí ban đầu, mờ, cạnh mô hình đang chạy</Typography.Text>
             </Descriptions.Item>
             <Descriptions.Item label="Trọng lực" span={2}>
               <Switch
@@ -526,6 +596,7 @@ export function SimLive({ sessionId, onClose }: { sessionId: string; onClose: ()
             />
           )}
 
+          {inspect && picked && state && scene && inspect({ ...picked, state, scene })}
           <Card size="small" title={selectedBody ? `Vật đang chọn: ${selectedBody.name}` : 'Click một vật để xem thông số'}>
             {sel && selectedBody ? (
               <Flex vertical gap={8}>

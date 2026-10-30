@@ -296,6 +296,33 @@ def read_geometry(c, g, path, L, resolve_file):
     return out
 
 
+def read_visual_parts(c, parts, path, resolve_file):
+    """The components a body is drawn from, each its own mesh (in the body frame at t = 0, as mesh_file): a viewer
+    shows and picks them one by one while the body moves as one"""
+    if not isinstance(parts, list) or not parts:
+        c.error(path, "Danh sách các chi tiết [{id, name, mesh_file, color}].")
+        return []
+    out = []
+    for i, part in enumerate(parts):
+        part = c.obj(part, f"{path}[{i}]")
+        if part is None:
+            continue
+        pid = part.get("id")
+        if not isinstance(pid, str) or not ID_RE.match(pid):
+            c.error(f"{path}[{i}].id", "Mã chi tiết: chữ, số, _ . - (tối đa 64).")
+            continue
+        entry = {"id": pid, "name": str(part.get("name") or pid)}
+        try:
+            entry["mesh_file"] = resolve_file(str(part.get("mesh_file")))
+        except ValueError as err:
+            c.error(f"{path}[{i}].mesh_file", str(err))
+            continue
+        if part.get("color") is not None and re.fullmatch(r"#[0-9A-Fa-f]{6}", str(part["color"])):
+            entry["color"] = str(part["color"])
+        out.append(entry)
+    return out
+
+
 def read_body(c, b, path, units, resolve_file):
     L, M = units["L"], units["M"]
     body = {"id": b.get("id"), "name": str(b.get("name") or b.get("id") or "")}
@@ -327,6 +354,9 @@ def read_body(c, b, path, units, resolve_file):
                 if not re.fullmatch(r"#[0-9A-Fa-f]{6}", str(visual["color"])):
                     c.error(f"{path}.visual.color", "Màu dạng #RRGGBB.")
                 out["color"] = str(visual["color"])
+            if visual.get("parts") is not None:
+                out["parts"] = read_visual_parts(c, visual["parts"], f"{path}.visual.parts", resolve_file)
+                out["unit_scale"] = L
             body["visual"] = out
     if body["fixed"]:
         # A fixed body's mass never enters the dynamics: kept for the record when given
@@ -355,6 +385,13 @@ def read_body(c, b, path, units, resolve_file):
     if not isinstance(collide, bool):
         c.error(f"{path}.collision", "Phải là true hoặc false.")
     body["collision"] = bool(collide)
+    hull = b.get("collision_hull")
+    if hull is not None:
+        points = np.asarray(hull, float) if isinstance(hull, list) and hull else None
+        if points is None or points.ndim != 2 or points.shape[1] != 3 or len(points) < 4 or not np.isfinite(points).all():
+            c.error(f"{path}.collision_hull", "Bao lồi: ít nhất 4 điểm [x, y, z] trong khung của body.")
+        else:
+            body["hull_points"] = (points * L).tolist()
     if body["collision"]:
         if geometry is None:
             c.error(f"{path}.collision", "Va chạm cần geometry.")
@@ -383,8 +420,12 @@ def read_mass(c, b, body, geometry, path, L, M):
         c.error(f"{path}.density", "Chỉ cho một trong mass và density.")
 
     volume = shape_com = unit_inertia = None
+    # Everything given (a mech body: mass, centre and inertia of its parts): the mesh is only for contact and drawing
+    given = mass is not None and b.get("center_of_mass") is not None and b.get("inertia") is not None
     if geometry and geometry.get("type") and all(v is not None for k, v in geometry.items() if k != "teeth"):
-        if geometry["type"] == "mesh":
+        if geometry["type"] == "mesh" and given:
+            pass
+        elif geometry["type"] == "mesh":
             if geometry.get("file"):
                 try:
                     volume, shape_com, unit_inertia = mesh_properties(geometry["file"], geometry["unit_scale"])

@@ -52,6 +52,13 @@ async function forward(method: 'GET' | 'POST', route: string, body?: unknown): P
   return new Response(res.body, { status: res.status, headers: { 'Content-Type': type, 'Cache-Control': 'no-store' } });
 }
 
+/** A sim-live JSON answer for another route (the mechanical model starts and finds its sessions here) */
+export async function liveJson(method: 'GET' | 'POST', route: string, body?: unknown): Promise<{ status: number; data: Record<string, unknown> }> {
+  const res = await forward(method, route, body);
+  const data = ((await res.json().catch(() => null)) ?? { success: false, message: `HTTP ${res.status}` }) as Record<string, unknown>;
+  return { status: res.status, data };
+}
+
 async function objectBody(request: Request): Promise<Record<string, unknown>> {
   const body = await readJsonBody(request);
   return body && typeof body === 'object' && !Array.isArray(body) ? (body as Record<string, unknown>) : {};

@@ -75,7 +75,21 @@ table). A short `ramp_s` avoids a start-up torque spike.
 - `{"id", "type": "force", "part", "vector", "point"?}` (N; the point in world coordinates at t = 0)
 - `spring_damper` / `rotational_spring_damper`: `part_a`, `part_b` and the fields of sim_guide.
 
-## Workflow
+## A 3D model the user already has (preferred)
+
+A design job (cad_ask_claude) or an imported model (inspect_3d_model) is simulated as it is, not redrawn:
+
+1. For a mechanism, the CAD job's model.py assigns `components` and `mechanism` (cad/guide.md, "Assemblies that
+   move"), so each part stays separate.
+2. `mech_import_model` with `job_id` (or `model_id`): the model's setup and its state (NOT_CONFIGURED,
+   NEEDS_VALIDATION, INVALID, READY, RUNNING, PAUSED, COMPLETED, FAILED) with the reason. Called again after the
+   model changed, it carries the setup over to a new revision.
+3. Missing data (masses, motor speed, time step) is asked for; give it with `mech_update_design`, one value at a
+   time: `{"changes": {"motors": [{"id": "drive", "speed_rpm": 30}]}}`. Remove with `{"remove": {"joints": [ids]}}`.
+4. `mech_simulate` with `live: true` opens it in the dashboard's 3D viewer (the user presses Simulate there too);
+   without, a recorded run with results per part. `mech_get_design` with `model_id` reads the state again.
+
+## Workflow from a written request
 
 1. Turn the request into a model. Ask for what is missing (masses, speeds, loads, duration) rather than guessing.
    A CAD assembly: `mech_import_model` with the `model_id` from inspect_3d_model; it proposes joints (hypotheses)

@@ -135,6 +135,9 @@ def load_model(request):
         source = {"mechanism_id": request["mechanism_id"]}
     if not isinstance(mechanism, dict):
         raise LiveError(400, "NO_MECHANISM", "Cần mechanism, mechanism_id, example hoặc sim_id.")
+    if not source and isinstance(request.get("origin"), dict):
+        # The model a mechanism was compiled from (mech: a design revision), so the session can be found by it
+        source = {str(k)[:32]: str(v)[:80] for k, v in list(request["origin"].items())[:6]}
     if simulation:
         mechanism = {**mechanism, "simulation": {**(mechanism.get("simulation") or {}), **simulation}}
     try:
@@ -142,7 +145,8 @@ def load_model(request):
     except schema.MechanismError as err:
         raise LiveError(422, "INVALID_MECHANISM", f"Cơ cấu chưa hợp lệ: {err}") from None
     model = result["model"]
-    if any(b.get("collision") and (b.get("geometry") or {}).get("type") == "mesh" for b in model["bodies"]):
+    if any(b.get("collision") and (b.get("geometry") or {}).get("type") == "mesh" and not b.get("hull_points")
+           for b in model["bodies"]):
         # Their convex hulls come from trimesh, which Chrono's Python does not have: the offline run computes them
         try:
             runs.prepare(model)
@@ -510,7 +514,13 @@ class Session:
                            "friction": (b.get("material") or {}).get("friction"),
                            "mesh": {"url": f"mesh/{b['id']}", "unit_scale": visual.get("unit_scale") or g.get("unit_scale"),
                                     "format": Path(mesh).suffix.lower().lstrip(".")} if mesh else None,
-                           "held": b["id"] in self.held})
+                           "parts": [{"id": p["id"], "name": p["name"], "color": p.get("color"),
+                                      "url": f"mesh/{b['id']}.part{k}", "unit_scale": visual.get("unit_scale"),
+                                      "format": Path(p["mesh_file"]).suffix.lower().lstrip(".")}
+                                     for k, p in enumerate(visual.get("parts") or [])],
+                           "held": b["id"] in self.held,
+                           # Where it starts (t = 0): a viewer draws the model as made beside the one moving
+                           "initial": {"p": b["position"], "q": b["orientation"]}})
         poses = {b["id"]: (np.asarray(b["position"], float), np.asarray(b["orientation"], float))
                  for b in self.model["bodies"]}
 
@@ -738,11 +748,18 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.flush()
 
     def mesh(self, session, bid):
-        spec = session.specs.get(bid)
+        spec, part = session.specs.get(bid), None
+        found = re.fullmatch(r"(.+)\.part([0-9]{1,3})", bid)
+        if spec is None and found:
+            # One component of a body drawn from several: <body>.part<k>
+            spec, part = session.specs.get(found.group(1)), int(found.group(2))
         if spec is None:
             raise LiveError(404, "BODY_NOT_FOUND", f"Không có body {bid!r}.")
         visual, g = spec.get("visual") or {}, spec.get("geometry") or {}
         path = visual.get("mesh_file") or (g.get("file") if g.get("type") == "mesh" else None)
+        if part is not None:
+            parts = visual.get("parts") or []
+            path = parts[part]["mesh_file"] if part < len(parts) else None
         if not path or not Path(path).is_file():
             raise LiveError(404, "NO_MESH", f"{bid} không có file mesh.")
         data = Path(path).read_bytes()

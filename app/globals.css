@@ -320,6 +320,70 @@ body {
   margin: 0;
 }
 
+/* The user's description of a model, as Markdown: clamped to a few lines until expanded */
+.cad-prompt {
+  color: var(--text-muted);
+  overflow-wrap: anywhere;
+}
+
+.cad-prompt.clamped {
+  max-height: 3.2em;
+  overflow: hidden;
+  mask-image: linear-gradient(to bottom, #000 50%, transparent);
+}
+
+.cad-prompt > :first-child {
+  margin-top: 0;
+}
+
+.cad-prompt > :last-child {
+  margin-bottom: 0;
+}
+
+.cad-prompt p,
+.cad-prompt ul,
+.cad-prompt ol,
+.cad-prompt pre,
+.cad-prompt table {
+  margin: 0 0 6px;
+}
+
+.cad-prompt ul,
+.cad-prompt ol {
+  padding-left: 20px;
+}
+
+.cad-prompt h1,
+.cad-prompt h2,
+.cad-prompt h3,
+.cad-prompt h4 {
+  margin: 8px 0 4px;
+  font-size: 1em;
+  font-weight: 600;
+}
+
+.cad-prompt code {
+  font-family: var(--font-mono);
+  font-size: 0.9em;
+}
+
+.cad-prompt pre {
+  padding: 6px 8px;
+  overflow-x: auto;
+  border-radius: 4px;
+  background: rgba(127, 127, 127, 0.12);
+}
+
+.cad-prompt table {
+  border-collapse: collapse;
+}
+
+.cad-prompt th,
+.cad-prompt td {
+  padding: 2px 8px;
+  border: 1px solid rgba(127, 127, 127, 0.3);
+}
+
 .cad-compare figcaption {
   margin-top: 2px;
   color: var(--text-muted);

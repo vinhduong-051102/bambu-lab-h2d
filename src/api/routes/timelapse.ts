@@ -22,7 +22,7 @@ const reviews = () =>
   (reviewer ??= new TimelapseReviewer(
     path.resolve(env.TIMELAPSE_CACHE_DIR, 'reviews'),
     new FfmpegFrames(ffmpegInstaller.path),
-    new ClaudeCodeVision(env.TIMELAPSE_AI_MODEL)
+    new ClaudeCodeVision(env.TIMELAPSE_AI_MODEL, undefined, undefined, 'timelapse')
   ));
 const journal = () => journalOverride ?? new PrintJournal(path.resolve(env.PRINT_HISTORY_DIR));
 const sessionStore = () => sessionStoreOverride ?? new AiSessionStore(path.resolve(env.STUDIO_AI_DATA_DIR));
@@ -101,7 +101,7 @@ function fileStream(file: string, start: number, end: number): ReadableStream<Ui
 }
 
 /** The file, whole or the byte range the browser asks for (video players seek with Range requests) */
-async function serveFile(request: Request, file: string, type: string, cache: string): Promise<Response> {
+export async function serveFile(request: Request, file: string, type: string, cache: string): Promise<Response> {
   const { size } = await fs.stat(file);
   const headers: Record<string, string> = { 'Content-Type': type, 'Accept-Ranges': 'bytes', 'Cache-Control': cache };
   const range = request.headers.get('range')?.match(/^bytes=(\d*)-(\d*)$/);

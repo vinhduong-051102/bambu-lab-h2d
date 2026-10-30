@@ -110,7 +110,18 @@ def part_table(asm):
 
 def validate_design(design_id, revision=None):
     folder, rev = design_dir(design_id, revision)
-    norm, asm, analysis, diags, missing = build(read_json(folder / "input.json"))
+    try:
+        norm, asm, analysis, diags, missing = build(read_json(folder / "input.json"))
+    except MechError as err:
+        if err.code != "INVALID_MODEL":
+            raise
+        # Kept as this revision's (failed) validation: the state says what to fix, field by field
+        validation = {"design_id": design_id, "revision": rev, "validated_at": now(), "status": "failed",
+                      "diagnostics": [kinematics.diag("error", "MODEL_FIELD", f"{e['path']}: {e['message']}")
+                                      for e in err.details or []],
+                      "missing": [], "assumptions": [], "parts": [], "groups": {}, "dof": None, "velocities": None}
+        write_json(folder / "validation.json", validation)
+        return validation
     validation = {"design_id": design_id, "revision": rev, "validated_at": now(), "status": overall(diags, missing),
                   "diagnostics": diags, "missing": missing, "assumptions": norm["assumptions"], "parts": part_table(asm),
                   "groups": analysis["groups"], "dof": analysis["dof"], "velocities": analysis.get("velocities"),
@@ -164,6 +175,16 @@ def list_designs(limit=50):
     return out
 
 
+def run_status(sim_id):
+    """The run's status as the sim worker writes it; read again when caught while the file is being rewritten"""
+    for _ in range(20):
+        status = sim.status(sim_id)
+        if status.get("state"):
+            return status
+        time.sleep(0.05)
+    return {**status, "state": "unknown"}
+
+
 def simulate(design_id, body):
     """Validates, compiles for Chrono, runs (waiting up to wait_s), and reads the results per part"""
     folder, rev = design_dir(design_id, body.get("revision"))
@@ -177,7 +198,7 @@ def simulate(design_id, body):
     mechanism, mapping = chrono_adapter.compile_model(asm, SIM_DIR / files_rel, f"sim/{files_rel}")
     if body.get("simulation"):
         mechanism["simulation"] = {**mechanism["simulation"], **body["simulation"]}
-    mapping["assumptions"] = []
+    mapping.setdefault("assumptions", [])
     # Consistent redundant constraints (a planar loop of 3D joints) make the constraint matrix singular: MINRES
     # solves such systems where the default iterative solver leaves microns of drift (crank-slider: 6.6 µm → 0.1 µm)
     if analysis["dof"].get("redundant_equations") and "solver" not in mechanism["simulation"]:
@@ -202,7 +223,7 @@ def simulate(design_id, body):
     (folder / "runs").mkdir(exist_ok=True)
     write_json(folder / "runs" / f"{started['sim_id']}.json", record)
     deadline = time.monotonic() + float(min(max(body.get("wait_s", 120), 0), 600))
-    while time.monotonic() < deadline and sim.status(started["sim_id"])["state"] in ("queued", "running"):
+    while time.monotonic() < deadline and run_status(started["sim_id"])["state"] in ("queued", "running"):
         time.sleep(0.5)
     return run_results(design_id, started["sim_id"], rev)
 
@@ -218,7 +239,7 @@ def run_results(design_id, sim_id, revision=None):
                 break
     if record is None:
         raise MechError(404, "RUN_NOT_FOUND", f"Không có lần chạy {sim_id} của {design_id}.")
-    status = sim.status(sim_id)
+    status = run_status(sim_id)
     out = {"design_id": design_id, "revision": record["revision"], "sim_id": sim_id, "state": status["state"],
            "mapping": record["mapping"], "error": status.get("error")}
     if status["state"] != "completed":

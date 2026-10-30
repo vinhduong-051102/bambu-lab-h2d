@@ -214,7 +214,7 @@ def prepare(model):
     """What chrono_run.py needs that its Python cannot work out: the convex hulls of colliding meshes"""
     for body in model["bodies"]:
         g = body.get("geometry") or {}
-        if body.get("collision") and g.get("type") == "mesh":
+        if body.get("collision") and g.get("type") == "mesh" and not body.get("hull_points"):
             import trimesh
 
             mesh = trimesh.load(g["file"], force="mesh")

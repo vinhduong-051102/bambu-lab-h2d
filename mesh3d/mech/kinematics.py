@@ -529,6 +529,10 @@ def sweep(asm, motor_id, total, steps=72):
 
 # ---------- geometry checks ----------
 
+# An overlap above this share of the smaller part is an error (parts inside each other); below, a warning
+OVERLAP_ERROR_SHARE = 0.02
+
+
 def geometry_checks(asm):
     """Joints near both parts, revolute axes along shafts and gears, gear centre distances, overlaps at t = 0"""
     import trimesh
@@ -542,9 +546,19 @@ def geometry_checks(asm):
             mesh = asm.placed[pid]["mesh"]
             if mesh is None or asm.placed[pid]["part"]["role"] in ("ground", "housing", "frame"):
                 continue
-            # The joint point on or inside the part, or within its hole: up to the part's own radius away
-            d = float(trimesh.proximity.closest_point(mesh, [p])[1][0])
-            if d > max(GEOM_TOL_MM, 0.5 * float(min(mesh.extents))):
+            # The joint point on or inside the part, or within its hole: up to the part's own radius away. A turning
+            # or sliding joint is a line (drums on one shared shaft, each joint written at the shaft's end): measured
+            # from the point of its axis nearest the part
+            q, reach = p, 0.5 * float(min(mesh.extents))
+            if j["type"] in ("revolute", "cylindrical", "prismatic"):
+                n = np.asarray(j["axis"], float)
+                q = p + float(np.dot(np.asarray(mesh.centroid) - p, n)) * n
+                # Through its bore: the material is a hole's radius away, so the reach is the part's size across the
+                # axis (half its narrower width there), not its thickness
+                across = [float(np.ptp(mesh.vertices @ e)) for e in np.linalg.svd(np.eye(3) - np.outer(n, n))[0][:, :2].T]
+                reach = 0.5 * min(across)
+            d = float(trimesh.proximity.closest_point(mesh, [q])[1][0])
+            if d > max(GEOM_TOL_MM, reach):
                 diags.append(diag("warning", "JOINT_AWAY_FROM_PART",
                                   f"Khớp {j['id']} ở cách {pid} {d:.3g} mm: kiểm tra vị trí khớp.", [pid], [j["id"]]))
         if j["type"] in ("revolute", "cylindrical"):
@@ -612,6 +626,10 @@ def geometry_checks(asm):
             inter = trimesh.boolean.intersection([ma, mb], engine="manifold")
             vol = float(inter.volume) if len(inter.faces) else 0.0
             if vol > 1.0:
-                diags.append(diag("error", "PARTS_OVERLAP", f"{a} và {b} chồng lên nhau {vol:.4g} mm³ lúc t = 0.", [a, b], (),
+                # A pawl's nose a hair inside a tooth is interference to fix before printing, not parts in each other
+                share = vol / max(1e-9, min(ma.volume, mb.volume))
+                severity = "error" if share > OVERLAP_ERROR_SHARE else "warning"
+                diags.append(diag(severity, "PARTS_OVERLAP",
+                                  f"{a} và {b} chồng lên nhau {vol:.4g} mm³ lúc t = 0 ({share:.1%} chi tiết nhỏ hơn).", [a, b], (),
                                   "Dời một chi tiết hoặc kiểm tra kích thước."))
     return diags

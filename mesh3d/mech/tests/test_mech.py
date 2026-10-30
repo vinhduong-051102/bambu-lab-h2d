@@ -234,7 +234,9 @@ class E_Missing(unittest.TestCase):
         self.assertIn("MASS_UNKNOWN", codes(v, "error"))
         paths = {x["path"] for x in v["missing"]}
         self.assertIn("motors[0].law", paths)
-        self.assertIn("simulation", paths)
+        # Solver settings left out are a stated default, not physical data to ask for
+        self.assertNotIn("simulation", paths)
+        self.assertIn("simulation.time_step", {a["path"] for a in v["assumptions"]})
         shaft = next(p for p in v["parts"] if p["id"] == "input_shaft")
         self.assertIsNone(shaft["mass"])
         with self.assertRaises(service.MechError):
@@ -257,7 +259,8 @@ class F_EndToEnd(unittest.TestCase):
         r = service.simulate(v["design_id"], {"wait_s": 300})
         self.assertEqual(r["state"], "completed")
         meshes = list((TMP / "sim" / "files" / "mech" / v["design_id"]).rglob("*.stl"))
-        self.assertEqual(len(meshes), 4)  # ground + three shaft groups
+        self.assertEqual(len([m for m in meshes if not m.name.startswith("part_")]), 4)  # ground + three shaft groups
+        self.assertEqual({m.stem[5:] for m in meshes if m.name.startswith("part_")}, part_ids)  # and one per part
         self.assertAlmostEqual(r["parts"]["g4"]["steady_rpm"], 300, delta=0.5)
         # Blender plays it back and checks itself against Chrono
         sim.start_playback(r["sim_id"], {"render": False})

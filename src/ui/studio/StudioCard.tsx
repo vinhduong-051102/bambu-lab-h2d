@@ -4,6 +4,7 @@ import { CaretRightOutlined, DesktopOutlined, ExportOutlined, FullscreenOutlined
 import { Alert, Button, Card, Space, Typography, Upload } from 'antd';
 import { useEffect, useRef, useState } from 'react';
 import { useActions } from '../DashboardContext';
+import { StudioImports } from './StudioImports';
 
 interface StudioConfig {
   enabled: boolean;
@@ -64,6 +65,8 @@ export function StudioCard() {
   const [canEmbed, setCanEmbed] = useState(true);
   const [status, setStatus] = useState<Status>(null);
   const [sending, setSending] = useState(false);
+  // Bumped after a send, so the list of /imports follows
+  const [sentCount, setSentCount] = useState(0);
   const frameWrap = useRef<HTMLDivElement>(null);
   const xhr = useRef<XMLHttpRequest | null>(null);
 
@@ -100,6 +103,7 @@ export function StudioCard() {
     } finally {
       xhr.current = null;
       setSending(false);
+      setSentCount((n) => n + 1);
     }
   };
 
@@ -158,6 +162,7 @@ export function StudioCard() {
           <iframe src={config.url} className="studio-frame" title="Bambu Studio" allow="clipboard-read; clipboard-write; fullscreen" />
         </div>
       )}
+      {config?.importsEnabled && <StudioImports version={sentCount} />}
       {status && <Alert type={status.type} title={status.text} style={{ marginTop: open ? 12 : 0, marginBottom: open ? 0 : 12 }} />}
       {!open && (
         <Typography.Paragraph type="secondary" style={{ margin: 0 }}>
