@@ -4,7 +4,7 @@ import { CaretRightOutlined, ExperimentOutlined, PlusOutlined, ReloadOutlined, S
 import { Alert, App, Button, Card, Checkbox, Collapse, Descriptions, Empty, Flex, InputNumber, Select, Space, Table, Tag, Tooltip, Typography, Upload } from 'antd';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { CAN_SIMULATE, MODEL_SIM_STATES, partMotion } from '../modelSim';
-import { formatNumber } from '../sim';
+import { formatNumber, isSimBusy } from '../sim';
 import { MECH_STATUS, RunResults, mech } from './MechCard';
 import { SimLive, type LivePick } from './SimLive';
 
@@ -32,6 +32,8 @@ type Hypothesis = {
   joint?: InputJoint;
   parts?: string[];
 };
+const POLL_MS = 3000;
+
 type Status = {
   model_id: string;
   model_version: number | null;
@@ -45,6 +47,8 @@ type Status = {
   hypotheses?: Hypothesis[];
   runs?: { sim_id: string; revision: number; state: string; current: boolean }[];
   live?: { session_id: string; t: number; running: boolean } | null;
+  /** "Chuẩn bị mô phỏng" running in the gateway (it goes on when the page closes), or how the last one ended */
+  setup_task?: { running: boolean; error: string | null } | null;
   live_available?: boolean;
 };
 type InputPart = {
@@ -377,6 +381,23 @@ export function ModelSim({ jobId, modelId: givenModelId }: { jobId?: string; mod
     load();
   }, [load]);
 
+  // A setup or a recorded run going on (also one started before the page was opened again): read until it ends
+  const settingUp = Boolean(status?.setup_task?.running);
+  const recording = status?.runs?.some((r) => r.current && isSimBusy(r.state)) ?? false;
+  const watchedSetup = useRef(false);
+  useEffect(() => {
+    if (!settingUp && !recording) return;
+    const timer = setInterval(load, POLL_MS);
+    return () => clearInterval(timer);
+  }, [settingUp, recording, load]);
+  useEffect(() => {
+    if (settingUp) watchedSetup.current = true;
+    else if (watchedSetup.current) {
+      watchedSetup.current = false;
+      if (status?.setup_task?.error) message.error(status.setup_task.error);
+    }
+  }, [settingUp, status?.setup_task?.error, message]);
+
   // Results of the latest finished run of this revision, per part, for the inspector
   const lastRun = useMemo(() => [...(status?.runs ?? [])].reverse().find((r) => r.current && r.state === 'completed') ?? null, [status]);
   useEffect(() => {
@@ -441,7 +462,7 @@ export function ModelSim({ jobId, modelId: givenModelId }: { jobId?: string; mod
         <span style={{ flex: 1 }} />
         <Button size="small" icon={<ReloadOutlined />} onClick={load} title="Đọc lại trạng thái" />
         {(status.state === 'NOT_CONFIGURED' || status.state === 'NEEDS_VALIDATION') && (
-          <Button size="small" type="primary" loading={busy === 'setup'} onClick={setup}>
+          <Button size="small" type="primary" loading={busy === 'setup' || settingUp} onClick={setup}>
             {status.state === 'NOT_CONFIGURED' ? 'Chuẩn bị mô phỏng' : `Cập nhật cấu hình cho v${status.model_version} và kiểm tra`}
           </Button>
         )}

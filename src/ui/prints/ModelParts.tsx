@@ -119,6 +119,8 @@ export function ObjectCard({ object }: { object: ObjectParts }) {
   );
 }
 
+const POLL_MS = 3000;
+
 /** The parts of one print's objects, with a button that measures them (and asks Claude again when it failed) */
 export function PrintParts({ printId, hasSetup }: { printId: string; hasSetup: boolean }) {
   const { showToast, addLog } = useActions();
@@ -127,33 +129,63 @@ export function PrintParts({ printId, hasSetup }: { printId: string; hasSetup: b
   const [error, setError] = useState<string | null>(null);
   const [running, setRunning] = useState(false);
   const url = `/api/prints/${encodeURIComponent(printId)}/parts`;
+  // Set while this page watches an analysis (it runs in the gateway and goes on when the page closes)
+  const watching = useRef(false);
+
+  const finished = useCallback(
+    (list: ObjectParts[]) => addLog(`Đã phân tích thành phần của ${list.filter((o) => o.status === 'done').length}/${list.length} vật thể.`, 'success'),
+    [addLog]
+  );
+
+  // The parts measured so far, and the analysis running now (also one started before the page was opened again)
+  const load = useCallback(
+    (cancelled: () => boolean = () => false) =>
+      printsApi<{ enabled: boolean; objects: ObjectParts[]; task?: { running: boolean; error: string | null } | null }>(url)
+        .then((d) => {
+          if (cancelled()) return;
+          setEnabled(d.enabled);
+          setObjects(d.objects);
+          setRunning(Boolean(d.task?.running));
+          if (d.task && !d.task.running && watching.current) {
+            watching.current = false;
+            if (d.task.error) showToast(d.task.error, 'error');
+            else finished(d.objects);
+          }
+        })
+        .catch((err) => !cancelled() && setError(errorText(err))),
+    [url, showToast, finished]
+  );
 
   useEffect(() => {
     if (!hasSetup) return;
     let cancelled = false;
-    printsApi<{ enabled: boolean; objects: ObjectParts[] }>(url)
-      .then((d) => {
-        if (cancelled) return;
-        setEnabled(d.enabled);
-        setObjects(d.objects);
-      })
-      .catch((err) => !cancelled && setError(errorText(err)));
+    void load(() => cancelled);
     return () => {
       cancelled = true;
     };
-  }, [url, hasSetup]);
+  }, [load, hasSetup]);
+
+  useEffect(() => {
+    if (!running) return;
+    watching.current = true;
+    const timer = setInterval(() => void load(), POLL_MS);
+    return () => clearInterval(timer);
+  }, [running, load]);
 
   const analyze = async () => {
     setRunning(true);
+    let goesOn = false;
     try {
-      const d = await printsApi<{ objects: ObjectParts[] }>(url, { method: 'POST' });
+      const d = await printsApi<{ objects: ObjectParts[]; running?: boolean }>(url, { method: 'POST' });
       setObjects(d.objects);
       setError(null);
-      addLog(`Đã phân tích thành phần của ${d.objects.filter((o) => o.status === 'done').length}/${d.objects.length} vật thể.`, 'success');
+      // Still measuring: read until it is done
+      goesOn = Boolean(d.running);
+      if (!goesOn) finished(d.objects);
     } catch (err) {
       showToast(errorText(err), 'error');
     } finally {
-      setRunning(false);
+      if (!goesOn) setRunning(false);
     }
   };
 

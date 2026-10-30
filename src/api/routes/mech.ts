@@ -1,4 +1,5 @@
 import { env } from '../../config/env';
+import { getTask, startTask } from '../../domain/backgroundTasks';
 import { handler, json, readJsonBody } from '../http';
 import { liveJson } from './simLive';
 
@@ -18,6 +19,10 @@ const DESIGN_RE = /^d-\d{8}-\d{6}-[0-9a-f]{4}$/;
 const SIM_RE = /^[a-z0-9][a-z0-9-]{5,63}$/;
 const DESIGN_ACTIONS = new Set(['validate', 'simulate', 'repairs', 'apply', 'live']);
 const MODEL_RE = /^[a-z0-9][a-z0-9_.-]{0,80}$/;
+// Setting a model up goes on when the page closes; what the worker refuses at once is answered at once
+const SETUP_WAIT_MS = 1500;
+/** The task that sets up a model's simulation: by its eng model id (a design job's is job-<job id>) */
+const setupTask = (modelId: string) => `mech-setup:${modelId}`;
 
 let workerUrlOverride: string | null = null;
 
@@ -92,9 +97,11 @@ async function liveSessions(): Promise<LiveSession[] | null> {
 /** The worker's state of a model, with the live session of its current revision when one is open */
 async function modelStatus(route: string): Promise<Response> {
   const res = await reach('GET', route);
-  if (res.status !== 200 || !res.data.design_id) return json(res.data, res.status || 502);
+  // The setup running now (started before the page was opened again, say) or how the last one ended
+  const setup_task = getTask(setupTask(route.split('/')[1]));
+  if (res.status !== 200 || !res.data.design_id) return json(res.status === 200 ? { ...res.data, setup_task } : res.data, res.status || 502);
   const sessions = await liveSessions();
-  const data: Record<string, unknown> = { ...res.data, live: null, live_available: sessions !== null };
+  const data: Record<string, unknown> = { ...res.data, setup_task, live: null, live_available: sessions !== null };
   const mine = (sessions ?? []).filter((s) => s.source?.design_id === res.data.design_id);
   const current = mine.find((s) => s.source?.revision === String(res.data.revision));
   if (current) {
@@ -127,6 +134,19 @@ async function startLive(designId: string, body: Record<string, unknown>): Promi
   return json({ ...started.data, ...rest }, started.status);
 }
 
+/** Sets a model's simulation up in the background: 202 while it runs, GET models/:id says when it is done */
+async function setup(body: Record<string, unknown>): Promise<Response> {
+  const modelId = typeof body.job_id === 'string' ? `job-${body.job_id}` : typeof body.model_id === 'string' ? body.model_id : null;
+  if (!modelId || !MODEL_RE.test(modelId)) return forward('POST', 'models/setup', body);
+  const { outcome, state } = await startTask(setupTask(modelId), () => reach('POST', 'models/setup', body), {
+    waitMs: SETUP_WAIT_MS,
+    failed: (res) => (res.status >= 200 && res.status < 300 && res.data.success ? null : String(res.data.message ?? `HTTP ${res.status}`)),
+  });
+  if (outcome && 'value' in outcome) return json(outcome.value.data, outcome.value.status || 502);
+  if (outcome) throw outcome.error;
+  return json({ success: true, running: true, model_id: modelId, task: state }, 202);
+}
+
 export const getMech = handler<{ path: string[] }>(async ({ request, params }) => {
   const route = mechPath('GET', params.path ?? []);
   if (!route) return json({ success: false, error: 'NOT_FOUND', message: 'Không có đường dẫn này.' }, 404);
@@ -140,5 +160,6 @@ export const postMech = handler<{ path: string[] }>(async ({ request, params }) 
   const raw = await readJsonBody(request);
   const body = raw && typeof raw === 'object' && !Array.isArray(raw) ? (raw as Record<string, unknown>) : {};
   if (route.endsWith('/live')) return startLive(route.split('/')[1], body);
+  if (route === 'models/setup') return setup(body);
   return forward('POST', route, body);
 });

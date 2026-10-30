@@ -4,6 +4,7 @@ import { PrintJournal, type PrintRecord } from '../../domain/prints/PrintJournal
 import type { StudioRequest } from '../../domain/studio/aiOptimize';
 import { describeFeature, describeParts, MeshPartsWorker, ModelParts, ModelPartsStore, objectsOf, type ModelAnalysis, type PrintWithParts } from '../../domain/studio/modelParts';
 import { ClaudeCodeVision } from '../../domain/timelapse/TimelapseReviewer';
+import { getTask, startTask } from '../../domain/backgroundTasks';
 import { handler, json } from '../http';
 
 /**
@@ -15,6 +16,9 @@ import { handler, json } from '../http';
 const NAME_WITHIN_MS = 90_000;
 const PARTS_BUDGET_MS = 120_000;
 const PAST_PRINTS = 200;
+// Measuring a print's objects goes on when the page closes; what fails at once is answered at once
+const ANALYZE_WAIT_MS = 1500;
+const analyzeTask = (printId: string) => `print-parts:${printId}`;
 
 let partsOverride: ModelParts | null = null;
 let journalOverride: PrintJournal | null = null;
@@ -110,7 +114,8 @@ export const getPrintParts = handler<{ id: string }>(async ({ params }) => {
   const print = await journal().get(params.id);
   if (!print) return printNotFound();
   if (!print.setup) return json({ success: true, enabled: modelParts().enabled, objects: [] });
-  return json({ success: true, enabled: modelParts().enabled, objects: await partsOfPrint(print, false) });
+  // `task`: the analysis running now (started before the page was opened again, say) or how the last one ended
+  return json({ success: true, enabled: modelParts().enabled, objects: await partsOfPrint(print, false), task: getTask(analyzeTask(print.id)) });
 });
 
 // POST /api/prints/:id/parts - Measures the print's objects and has Claude name their parts, again when it failed (takes up to a minute or two)
@@ -119,11 +124,14 @@ export const analyzePrintParts = handler<{ id: string }>(async ({ params }) => {
   const print = await journal().get(params.id);
   if (!print) return printNotFound();
   if (!print.setup) return json({ success: false, error: 'NO_SETUP', message: 'Bản in không gửi từ Studio nên không biết mẫu nào.' }, 422);
-  try {
-    return json({ success: true, enabled: true, objects: await partsOfPrint(print, true) });
-  } catch (err) {
+  const { outcome, state } = await startTask(analyzeTask(print.id), () => partsOfPrint(print, true), { waitMs: ANALYZE_WAIT_MS });
+  if (outcome && 'value' in outcome) return json({ success: true, enabled: true, objects: outcome.value });
+  if (outcome) {
+    const err = outcome.error;
     return json({ success: false, error: 'PARTS_FAILED', message: err instanceof Error ? err.message : String(err) }, 502);
   }
+  // Still measuring (or it already was): GET says when it is done
+  return json({ success: true, enabled: true, running: true, task: state, objects: await partsOfPrint(print, false) }, 202);
 });
 
 // ---------- Earlier prints, all at once ----------

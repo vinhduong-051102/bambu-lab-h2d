@@ -1,6 +1,7 @@
 import { randomBytes } from 'crypto';
 import { promises as fs } from 'fs';
 import path from 'path';
+import { getTask, type TaskState } from '../backgroundTasks';
 
 /**
  * Models designed by AI (docs/cad.md). Each job is a folder in CAD_JOBS_DIR, shared with the CAD and mesh
@@ -146,6 +147,8 @@ export interface CadJob extends CadJobMeta {
   report: CadBuildReport | null;
   /** The assembly guide of a model with `components`, as last drawn */
   guide: CadGuideOutcome | null;
+  /** "Vẽ lại" of its assembly guide, running in the gateway (it goes on when the page closes) or how it ended */
+  guide_task: TaskState | null;
   /**
    * threemf: a coloured figure's 3MF, its faces painted with the filaments in report.palette; fix: the fix.py
    * of an older Claude review; views: the six sides Claude checked the figure from; sides: the sides a figure was
@@ -297,6 +300,7 @@ export class CadJobStore {
       // A fix's source/ is the version before it, already shown as such: only a figure Hunyuan3D shaped has its own
       files: { code, stl, step, preview, concept, threemf, fix, views, sides, shaped: shaped && status?.maker === 'hunyuan', blend, assembly, guide },
       guide: status?.guide ?? null,
+      guide_task: getTask(guideTaskKey(id)),
     };
   }
 
@@ -432,6 +436,9 @@ function attachmentLine(names: string[]): string {
   const files = names.map((name) => `${ATTACHMENTS_DIR}/${name}`).join(', ');
   return `\n\nẢnh người dùng gửi kèm yêu cầu này (mở bằng Read và xem kỹ trước khi sửa): ${files}`;
 }
+
+/** The background task that draws a job's assembly guide again (POST /api/cad/jobs/:id/guide) */
+export const guideTaskKey = (id: string) => `cad-guide:${id}`;
 
 /**
  * Claude's brief for a new model, or for changing the model of `parent` (whose brief it was given); `attached`

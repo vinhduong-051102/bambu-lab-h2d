@@ -11,6 +11,7 @@ import {
   CadWorkerClient,
   CadWorkerError,
   FIGURE_SIDES,
+  guideTaskKey,
   lineageOf,
   MeshWorkerClient,
   type Attachment,
@@ -29,6 +30,7 @@ import { familyOf } from '../../domain/filaments/bambuColors';
 import { suggestMix } from '../../domain/filaments/colourMixing';
 import { saveStudioImport, safeFileName } from '../../domain/studio/studioImports';
 import { serveFile } from './timelapse';
+import { startTask } from '../../domain/backgroundTasks';
 import { handler, json, readJsonBody } from '../http';
 
 /** Models the dashboard offers for writing a model; the first is used when a request names none */
@@ -38,6 +40,8 @@ const CAD_MODELS = [
 ];
 
 const MAX_CODE_BYTES = 200 * 1024;
+// What the worker refuses at once is answered at once; a guide being drawn goes on in the background
+const GUIDE_WAIT_MS = 1500;
 const MAX_JOB_LIST = 100;
 const MAX_IMAGE_BYTES = 15 * 1024 * 1024;
 // PNG, JPEG and WebP by their first bytes: the mesh worker opens any of them, whatever the file is called
@@ -659,7 +663,8 @@ export const getCadGuidePicture = handler<{ id: string; picture: string }>(async
 });
 
 // POST /api/cad/jobs/:id/guide - Draws the assembly guide (steps and video) of a built model with `components` again,
-// for one built before guides were drawn; ~1 minute for twenty parts
+// for one built before guides were drawn; ~1 minute for twenty parts. It goes on when the page closes: 202 while it
+// runs, and the job's `guide_task` says how far it is
 export const remakeCadGuide = handler<{ id: string }>(async ({ params }) => {
   const job = await store().get(params.id);
   if (!job) return jobNotFound();
@@ -668,13 +673,19 @@ export const remakeCadGuide = handler<{ id: string }>(async ({ params }) => {
   }
   const w = worker();
   if (!w) return disabled();
-  try {
-    const guide = await w.guide(params.id);
+  const { outcome } = await startTask(guideTaskKey(params.id), () => w.guide(params.id), {
+    waitMs: GUIDE_WAIT_MS,
+    failed: (guide) => (guide.ok ? null : guide.error ?? 'Không vẽ được hướng dẫn lắp.'),
+  });
+  if (outcome && 'value' in outcome) {
+    const guide = outcome.value;
     return json({ success: guide.ok, guide, job: await store().get(params.id) }, guide.ok ? 200 : 500);
-  } catch (err) {
-    if (err instanceof CadWorkerError) return workerFailed(err);
-    throw err;
   }
+  if (outcome) {
+    if (outcome.error instanceof CadWorkerError) return workerFailed(outcome.error);
+    throw outcome.error;
+  }
+  return json({ success: true, running: true, job: await store().get(params.id) }, 202);
 });
 
 // GET /api/cad/jobs/:id/plates/:n - Plate n's own 3MF of an assembly laid out on several plates (downloaded as

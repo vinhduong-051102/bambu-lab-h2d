@@ -72,6 +72,8 @@ export interface CadJob {
   } | null;
   files?: Record<string, boolean>;
   guide?: { ok: boolean; steps?: number; video?: string | null; error?: string | null } | null;
+  /** Its assembly guide being drawn again in the gateway (it goes on when the page closes), or how that ended */
+  guide_task?: { running: boolean; started_at: string; finished_at: string | null; error: string | null } | null;
 }
 
 export interface PrintLayout {

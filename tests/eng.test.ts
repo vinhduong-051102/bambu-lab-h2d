@@ -6,6 +6,7 @@ import { CapabilityRegistry } from '../src/domain/capabilities/CapabilityRegistr
 import { PrinterCommandService } from '../src/domain/commands/PrinterCommandService';
 import { PrinterService } from '../src/domain/PrinterService';
 import { engGetPath, setEngWorkerUrl } from '../src/api/routes/eng';
+import { clearTasks } from '../src/domain/backgroundTasks';
 import { createTestApp, type TestApp } from './helpers/testApp';
 
 const PNG = Buffer.from([0x89, 0x50, 0x4e, 0x47, 1, 2, 3]);
@@ -13,6 +14,9 @@ const PNG = Buffer.from([0x89, 0x50, 0x4e, 0x47, 1, 2, 3]);
 /** Stands in for mesh3d/worker.py's /eng routes */
 function fakeWorker() {
   const seen: { method: string; url: string; body: unknown }[] = [];
+  // The slow job's check answers when the test lets it
+  let release!: () => void;
+  const released = new Promise<void>((resolve) => (release = resolve));
   const server: Server = createServer(async (req: IncomingMessage, res) => {
     let text = '';
     for await (const chunk of req) text += chunk;
@@ -32,11 +36,16 @@ function fakeWorker() {
       return res.end(PNG);
     }
     if (req.url === '/eng/analyses?model_id=m-20261028-120000-ab12') return reply(200, { ok: true, analyses: [] });
+    if (req.url === '/eng/check' && req.method === 'POST' && (seen.at(-1)?.body as { job_id?: string })?.job_id === '20261029-120000-slow') {
+      await released;
+      return reply(200, { ok: true, report: { status: 'PASS' }, results: {} });
+    }
     if (req.url === '/eng/check' && req.method === 'POST') return reply(200, { ok: true, report: { status: 'WARNING' }, results: {} });
+    if (req.url === '/eng/checks/20261029-120000-slow') return reply(200, { ok: true, report: null, results: {} });
     if (req.url === '/eng/checks/20261028-101211-01bd') return reply(200, { ok: true, report: null, results: {} });
     reply(404, { ok: false, error: 'NOT_FOUND', message: 'Không có.' });
   });
-  return { server, seen };
+  return { server, seen, release };
 }
 
 describe('Engineering analysis (/api/eng)', () => {
@@ -44,6 +53,7 @@ describe('Engineering analysis (/api/eng)', () => {
   let worker: ReturnType<typeof fakeWorker>;
 
   beforeEach(async () => {
+    clearTasks();
     const stateStore = new PrinterStateStore('TEST_SERIAL_ENG');
     const capabilityRegistry = new CapabilityRegistry();
     const mqtt = { publishRequest: async () => true };
@@ -56,6 +66,7 @@ describe('Engineering analysis (/api/eng)', () => {
   });
 
   afterEach(async () => {
+    worker.release();
     setEngWorkerUrl(null);
     await new Promise<void>((resolve) => worker.server.close(() => resolve()));
     app.close();
@@ -89,8 +100,23 @@ describe('Engineering analysis (/api/eng)', () => {
     expect(run.json()).toMatchObject({ success: true, report: { status: 'WARNING' } });
     expect(worker.seen[0]).toMatchObject({ method: 'POST', url: '/eng/check', body: { job_id: '20261028-101211-01bd' } });
     const last = await app.inject({ method: 'GET', url: '/api/eng/checks/20261028-101211-01bd' });
-    expect(last.json()).toEqual({ success: true, report: null, results: {} });
+    expect(last.json()).toMatchObject({ success: true, report: null, results: {}, task: { running: false, error: null } });
     expect(engGetPath(['checks', '../jobs'])).toBeNull();
+  });
+
+  it('keeps a long check running when its page goes, and shows it to the page opened again', async () => {
+    const job = '20261029-120000-slow';
+    const run = await app.inject({ method: 'POST', url: '/api/eng/check', payload: { job_id: job } });
+    expect(run.statusCode).toBe(202);
+    expect(run.json()).toMatchObject({ success: true, running: true, started: true, task: { running: true } });
+    // Opened again while it runs: the same check, not a second one
+    const again = await app.inject({ method: 'POST', url: '/api/eng/check', payload: { job_id: job } });
+    expect(again.json()).toMatchObject({ running: true, started: false });
+    const reading = await app.inject({ method: 'GET', url: `/api/eng/checks/${job}` });
+    expect(reading.json().task).toMatchObject({ running: true, finished_at: null });
+    worker.release();
+    await expect.poll(async () => (await app.inject({ method: 'GET', url: `/api/eng/checks/${job}` })).json().task.running).toBe(false);
+    expect(worker.seen.filter((r) => r.url === '/eng/check')).toHaveLength(1);
   });
 
   it('refuses unknown tools and paths that leave the analysis folder', async () => {

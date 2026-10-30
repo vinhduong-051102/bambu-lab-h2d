@@ -3,7 +3,7 @@
 import { DownloadOutlined, ExperimentOutlined, FileTextOutlined, PrinterOutlined } from '@ant-design/icons';
 import { Alert, App, AutoComplete, Button, Checkbox, Col, Collapse, Divider, Empty, Flex, Form, Image, Input, List, Modal, Row, Select, Space, Spin, Tag, Typography } from 'antd';
 import type { FormInstance } from 'antd';
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   CALIBRATION_BUILD,
   checkedSettings,
@@ -46,12 +46,16 @@ type Result = {
   files?: Record<string, string>;
   inputs?: { print?: Record<string, unknown> | null };
 };
+/** The check running in the gateway (it goes on when the page closes), or how the last one ended */
+type CheckTask = { running: boolean; started_at: string; finished_at: string | null; error: string | null };
 type CheckResponse = {
+  task?: CheckTask | null;
   report: { analysis_id: string; status: string; finished_at?: string; data?: { sections?: { title: string; status: string; checks: number }[] } } | null;
   results: Record<string, Result>;
 };
 
 const STORAGE_KEY = 'eng-print-setup';
+const POLL_MS = 3000;
 
 function remembered(): { values: Record<string, string>; measured: boolean } {
   try {
@@ -373,9 +377,33 @@ export function EngCheckButton({ job, onRevise }: { job: CadJob; onRevise?: (com
   const [data, setData] = useState<CheckResponse | null>(null);
   const [loading, setLoading] = useState(false);
   const [running, setRunning] = useState(false);
+  // When the running check started (it may have been started before the page was opened again)
+  const [startedAt, setStartedAt] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [form] = Form.useForm<Record<string, string>>();
   const [measured, setMeasured] = useState(false);
+
+  // Set while this page watches a check run, to say when it is done
+  const watching = useRef(false);
+
+  // The latest check and the one running (started here, or before the page was opened again)
+  const load = useCallback(async () => {
+    try {
+      const res = await fetch(`/api/eng/checks/${encodeURIComponent(job.id)}`, { cache: 'no-store' });
+      const body = (await res.json()) as (CheckResponse & { success?: boolean }) | null;
+      setData(body?.success && body.report ? body : null);
+      const task = body?.task;
+      setRunning(Boolean(task?.running));
+      setStartedAt(task?.running ? task.started_at : null);
+      if (task && !task.running) {
+        setError(task.error);
+        if (watching.current && !task.error) message.success('Đã kiểm tra xong');
+        watching.current = false;
+      }
+    } catch {
+      setData(null);
+    }
+  }, [job.id, message]);
 
   useEffect(() => {
     if (!open) return;
@@ -383,18 +411,23 @@ export function EngCheckButton({ job, onRevise }: { job: CadJob; onRevise?: (com
     form.setFieldsValue(saved.values);
     setMeasured(saved.measured);
     setLoading(true);
-    fetch(`/api/eng/checks/${encodeURIComponent(job.id)}`, { cache: 'no-store' })
-      .then((res) => res.json())
-      .then((body) => setData(body?.success && body.report ? body : null))
-      .catch(() => setData(null))
-      .finally(() => setLoading(false));
-  }, [open, job.id, form]);
+    void load().finally(() => setLoading(false));
+  }, [open, form, load]);
+
+  // A running check is read again until it ends
+  useEffect(() => {
+    if (!open || !running) return;
+    watching.current = true;
+    const timer = setInterval(() => void load(), POLL_MS);
+    return () => clearInterval(timer);
+  }, [open, running, load]);
 
   const run = async (splitBodies = split) => {
     const values = form.getFieldsValue();
     remember(values, measured);
     setRunning(true);
     setError(null);
+    let goesOn = false;
     try {
       const res = await fetch('/api/eng/check', {
         method: 'POST',
@@ -402,6 +435,12 @@ export function EngCheckButton({ job, onRevise }: { job: CadJob; onRevise?: (com
         body: JSON.stringify({ job_id: job.id, name: job.title || job.id, print: printConfig(values, measured), split_bodies: splitBodies }),
       });
       const body = await res.json().catch(() => null);
+      // Still running: it goes on in the gateway, read until it ends (also after the page is opened again)
+      if (res.status === 202 && body?.running) {
+        setStartedAt(body.task?.started_at ?? null);
+        watching.current = goesOn = true;
+        return;
+      }
       if (!res.ok || !body?.success) {
         const details = Array.isArray(body?.details) ? body.details.map((d: { path: string; message: string }) => `${d.path}: ${d.message}`).join('; ') : '';
         throw new Error(`${body?.message || `HTTP ${res.status}`}${details ? ` (${details})` : ''}`);
@@ -411,7 +450,7 @@ export function EngCheckButton({ job, onRevise }: { job: CadJob; onRevise?: (com
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
-      setRunning(false);
+      if (!goesOn) setRunning(false);
     }
   };
 
@@ -473,6 +512,14 @@ export function EngCheckButton({ job, onRevise }: { job: CadJob; onRevise?: (com
               Coi mỗi khối rời là một chi tiết riêng (kiểm tra cả lắp ghép giữa chúng)
             </Checkbox>
           </Space>
+          {running && startedAt && (
+            <Alert
+              type="info"
+              showIcon
+              title={`Đang kiểm tra từ ${new Date(startedAt).toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' })}`}
+              description="Đóng trang hay hộp thoại này thì việc kiểm tra vẫn chạy tiếp; mở lại để xem kết quả."
+            />
+          )}
           {error && <Alert type="error" showIcon title={error} />}
           <Divider style={{ margin: '4px 0' }} />
           {loading ? <Spin /> : data ? <Results data={data} actions={actions} /> : <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="Chưa kiểm tra mô hình này" />}

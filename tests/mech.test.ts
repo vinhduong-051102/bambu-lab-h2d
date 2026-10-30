@@ -7,6 +7,7 @@ import { PrinterCommandService } from '../src/domain/commands/PrinterCommandServ
 import { PrinterService } from '../src/domain/PrinterService';
 import { mechPath, setMechWorkerUrl } from '../src/api/routes/mech';
 import { setSimLiveUrl } from '../src/api/routes/simLive';
+import { clearTasks } from '../src/domain/backgroundTasks';
 import { CAN_SIMULATE, partMotion, rotate } from '../src/ui/modelSim';
 import { createTestApp, type TestApp } from './helpers/testApp';
 
@@ -16,14 +17,14 @@ const SESSION = 'l-20261029-010203-5e55';
 
 type Seen = { method: string; url: string; body: unknown }[];
 
-function server(route: (req: IncomingMessage, body: unknown, reply: (status: number, body: unknown) => void) => void) {
+function server(route: (req: IncomingMessage, body: unknown, reply: (status: number, body: unknown) => void) => void | Promise<void>) {
   const seen: Seen = [];
   const s: Server = createServer(async (req, res) => {
     let text = '';
     for await (const chunk of req) text += chunk;
     const body = text ? JSON.parse(text) : undefined;
     seen.push({ method: req.method ?? '', url: req.url ?? '', body });
-    route(req, body, (status, out) => {
+    await route(req, body, (status, out) => {
       res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8' });
       res.end(JSON.stringify(out));
     });
@@ -31,9 +32,18 @@ function server(route: (req: IncomingMessage, body: unknown, reply: (status: num
   return { server: s, seen };
 }
 
+// The slow model's setup answers when the test lets it
+let releaseSetup: () => void = () => {};
+
 /** Stands in for mesh3d/worker.py's /mech routes */
 function fakeWorker() {
-  return server((req, _body, reply) => {
+  const setupDone = new Promise<void>((resolve) => (releaseSetup = resolve));
+  return server(async (req, body, reply) => {
+    if (req.url === '/mech/models/setup' && (body as { job_id?: string })?.job_id === 'slow-01') {
+      await setupDone;
+      return reply(200, { ok: true, model_id: 'job-slow-01', design_id: DESIGN, revision: 1, state: 'READY' });
+    }
+    if (req.url === '/mech/models/job-slow-01') return reply(200, { ok: true, model_id: 'job-slow-01', design_id: null, state: 'NOT_CONFIGURED' });
     if (req.url === '/mech/designs' && req.method === 'POST') return reply(200, { ok: true, design_id: DESIGN, revision: 1, status: 'warning' });
     if (req.url === `/mech/designs/${DESIGN}/simulate`) {
       return reply(422, { ok: false, error: 'NOT_VALID', message: 'Mô hình chưa chạy được', details: { diagnostics: [{ code: 'MOTOR_ON_LOCKED_PAIR', joints: ['weld'] }] } });
@@ -69,6 +79,7 @@ describe('Mechanical model (/api/mech)', () => {
   let live: ReturnType<typeof fakeLive>;
 
   beforeEach(async () => {
+    clearTasks();
     const stateStore = new PrinterStateStore('TEST_SERIAL_MECH');
     const capabilityRegistry = new CapabilityRegistry();
     const mqtt = { publishRequest: async () => true };
@@ -84,6 +95,7 @@ describe('Mechanical model (/api/mech)', () => {
   });
 
   afterEach(async () => {
+    releaseSetup();
     setMechWorkerUrl(null);
     setSimLiveUrl(null);
     await new Promise<void>((resolve) => worker.server.close(() => resolve()));
@@ -115,6 +127,17 @@ describe('Mechanical model (/api/mech)', () => {
     expect(mechPath('GET', ['models', '../etc'])).toBeNull();
     expect(mechPath('POST', ['models', 'setup'])).toBe('models/setup');
     expect(mechPath('POST', ['models', 'job-crank-001'])).toBeNull();
+  });
+
+  it('keeps setting a model up when its page goes, and shows it to the page opened again', async () => {
+    const res = await app.inject({ method: 'POST', url: '/api/mech/models/setup', payload: { job_id: 'slow-01' } });
+    expect(res.statusCode).toBe(202);
+    expect(res.json()).toMatchObject({ success: true, running: true, model_id: 'job-slow-01' });
+    const reading = await app.inject({ method: 'GET', url: '/api/mech/models/job-slow-01' });
+    expect(reading.json()).toMatchObject({ state: 'NOT_CONFIGURED', setup_task: { running: true } });
+    releaseSetup();
+    await expect.poll(async () => (await app.inject({ method: 'GET', url: '/api/mech/models/job-slow-01' })).json().setup_task.running).toBe(false);
+    expect(worker.seen.filter((r) => r.url === '/mech/models/setup')).toHaveLength(1);
   });
 
   it("a model's state: a session of an older revision does not make the new one RUNNING", async () => {

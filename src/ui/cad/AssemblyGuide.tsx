@@ -22,6 +22,8 @@ const JOINT_LABELS: Record<string, string> = {
   fixed: 'cố định',
 };
 
+const POLL_MS = 3000;
+
 const pictureUrl = (job: CadJob, name: string) =>
   `/api/cad/jobs/${encodeURIComponent(job.id)}/guide/${name}?v=${encodeURIComponent(job.finished_at ?? job.state)}`;
 
@@ -30,8 +32,27 @@ function GuideView({ job, onJob }: { job: CadJob; onJob?: (job: CadJob) => void 
   const { message } = App.useApp();
   const [guide, setGuide] = useState<Guide | null>(null);
   const [loading, setLoading] = useState(true);
-  const [drawing, setDrawing] = useState(false);
+  // Drawing it again runs in the gateway and goes on when the page closes: the job's guide_task (read again here
+  // while it runs, also when the page was opened again in the middle) says when it is done
+  const [task, setTask] = useState(job.guide_task ?? null);
+  const [asked, setAsked] = useState(false);
+  const drawing = asked || Boolean(task?.running);
   const [version, setVersion] = useState(0);
+  useEffect(() => {
+    if (!drawing) return;
+    const timer = setInterval(async () => {
+      const res = await fetch(`/api/cad/jobs/${encodeURIComponent(job.id)}`, { cache: 'no-store' }).catch(() => null);
+      const data = res?.ok ? await res.json().catch(() => null) : null;
+      const now = data?.job?.guide_task as CadJob['guide_task'];
+      if (!now || now.running) return;
+      setTask(now);
+      setAsked(false);
+      if (now.error) message.error(now.error);
+      onJob?.(data.job);
+      setVersion((v) => v + 1);
+    }, POLL_MS);
+    return () => clearInterval(timer);
+  }, [drawing, job.id, message, onJob]);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -47,7 +68,8 @@ function GuideView({ job, onJob }: { job: CadJob; onJob?: (job: CadJob) => void 
   }, [load]);
 
   const draw = async () => {
-    setDrawing(true);
+    setAsked(true);
+    let goesOn = false;
     try {
       const res = await fetch(`/api/cad/jobs/${encodeURIComponent(job.id)}/guide`, { method: 'POST' });
       const data = await res.json().catch(() => null);
@@ -56,9 +78,11 @@ function GuideView({ job, onJob }: { job: CadJob; onJob?: (job: CadJob) => void 
         return;
       }
       if (data.job) onJob?.(data.job);
-      setVersion((v) => v + 1);
+      // Still drawing: read until it is done
+      goesOn = res.status === 202;
+      if (!goesOn) setVersion((v) => v + 1);
     } finally {
-      setDrawing(false);
+      if (!goesOn) setAsked(false);
     }
   };
 

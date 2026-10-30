@@ -21,7 +21,7 @@ import {
 } from 'antd';
 import { useCallback, useEffect, useRef, useState, type ClipboardEvent } from 'react';
 import { useActions } from '../DashboardContext';
-import { groupVersions, HINTS, isBusy, PLACEHOLDERS } from '../cad';
+import { groupVersions, HINTS, isBusy, isWatched, PLACEHOLDERS } from '../cad';
 import { type CadAction, type CadJob } from './CadJob';
 import { CadFamily } from './CadFamily';
 
@@ -219,7 +219,7 @@ export function CadCard({ onBusyChange }: { onBusyChange?: (busy: boolean) => vo
       setListError(errorText(err));
     }
     setNow(Date.now());
-    timer.current = setTimeout(refresh, list.some(isBusy) ? BUSY_REFRESH_MS : IDLE_REFRESH_MS);
+    timer.current = setTimeout(refresh, list.some(isWatched) ? BUSY_REFRESH_MS : IDLE_REFRESH_MS);
   }, [showToast, addLog]);
 
   useEffect(() => {

@@ -1,4 +1,5 @@
 import { env } from '../../config/env';
+import { getTask, startTask } from '../../domain/backgroundTasks';
 import { handler, json, readJsonBody } from '../http';
 
 /**
@@ -26,6 +27,9 @@ const POST_ROUTES = new Set([
 const ID_RE = /^[a-z][a-z0-9-]{5,63}$/;
 const JOB_RE = /^[a-z0-9][a-z0-9-]{5,63}$/;
 const FILE_PART_RE = /^[A-Za-z0-9_.-]{1,80}$/;
+// A design job's check goes on when the page closes; what the worker refuses at once is answered at once
+const CHECK_WAIT_MS = 1500;
+const checkTask = (jobId: string) => `eng-check:${jobId}`;
 
 let workerUrlOverride: string | null = null;
 
@@ -86,12 +90,34 @@ export const getEng = handler<{ path: string[] }>(async ({ request, params }) =>
   const route = engGetPath(params.path ?? []);
   if (!route) return notFound('Không có đường dẫn này.');
   const query = new URL(request.url).search;
-  return forward('GET', route + query);
+  const res = await forward('GET', route + query);
+  if (params.path?.[0] !== 'checks' || !res.ok) return res;
+  // The latest check, and the one running now (or how the last one ended) for the page to keep watching
+  const data = (await res.json()) as Record<string, unknown>;
+  return json({ ...data, task: getTask(checkTask(params.path[1])) });
 });
+
+/** The worker's JSON answer to a check, kept as it came for whoever started it */
+async function runCheck(body: Record<string, unknown>): Promise<{ status: number; data: Record<string, unknown> }> {
+  const res = await forward('POST', 'check', body);
+  const data = ((await res.json().catch(() => null)) ?? { success: false, message: `HTTP ${res.status}` }) as Record<string, unknown>;
+  return { status: res.status, data };
+}
 
 export const postEng = handler<{ path: string[] }>(async ({ request, params }) => {
   const route = (params.path ?? []).join('/');
   if (!POST_ROUTES.has(route)) return notFound('Không có thao tác này.');
-  const body = await readJsonBody(request);
-  return forward('POST', route, body && typeof body === 'object' && !Array.isArray(body) ? body : {});
+  const raw = await readJsonBody(request);
+  const body = raw && typeof raw === 'object' && !Array.isArray(raw) ? (raw as Record<string, unknown>) : {};
+  if (route !== 'check' || typeof body.job_id !== 'string' || !JOB_RE.test(body.job_id)) return forward('POST', route, body);
+
+  const key = checkTask(body.job_id);
+  const { started, state, outcome } = await startTask(key, () => runCheck(body), {
+    waitMs: CHECK_WAIT_MS,
+    failed: ({ status, data }) => (status < 400 && data.success ? null : String(data.message ?? `HTTP ${status}`)),
+  });
+  if (outcome && 'value' in outcome) return json(outcome.value.data, outcome.value.status);
+  if (outcome) throw outcome.error;
+  // Still running (or one already was): the page reads GET /api/eng/checks/<job> until it ends
+  return json({ success: true, running: true, started, task: state }, 202);
 });

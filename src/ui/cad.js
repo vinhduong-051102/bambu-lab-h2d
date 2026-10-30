@@ -160,6 +160,9 @@ export const PLACEHOLDERS = {
 
 export const isBusy = (job) => job.state === 'running' || job.state === 'queued';
 
+/** The list is read often while a job runs or something of it runs in the background (its assembly guide) */
+export const isWatched = (job) => isBusy(job) || Boolean(job.guide_task?.running);
+
 /** "60 × 40 × 20 mm", or null without a size */
 export function formatSize(sizeMm) {
   if (!Array.isArray(sizeMm) || sizeMm.length !== 3) return null;
