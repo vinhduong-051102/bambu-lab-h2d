@@ -237,7 +237,13 @@ class Session:
         self.m = LiveModel(model)
         flag = self.m.system.DoAssembly(ch.FULL)
         if flag == ch.ExitFlag_NOT_CONVERGED:
-            raise LiveError(422, "ASSEMBLY_FAILED", "Không lắp ráp được cơ cấu ở t = 0: các khớp mâu thuẫn hoặc vị trí ban đầu sai quá xa.")
+            # The joint left furthest apart, as a recorded run reports it
+            worst = max(((cr.violation(link), item["id"]) for item, link in self.m.links
+                         if item["type"] not in cr.UNCONSTRAINED + cr.ACTUATED and not isinstance(link, cr.GearContact)),
+                        default=(0.0, None))
+            where = f" (vi phạm lớn nhất {worst[0]:.3g} tại {worst[1]})" if worst[1] else ""
+            raise LiveError(422, "ASSEMBLY_FAILED",
+                            f"Không lắp ráp được cơ cấu ở t = 0{where}: các khớp mâu thuẫn hoặc vị trí ban đầu sai quá xa.")
         for bid, v in (velocities or {}).items():
             self.m.bodies[bid].SetPosDt(cr.V(v))
         self.specs = {b["id"]: b for b in model["bodies"]}

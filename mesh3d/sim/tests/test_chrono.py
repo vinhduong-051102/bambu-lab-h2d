@@ -4,7 +4,8 @@ Chrono runs against results with an exact answer (sim/chrono_run.py). Needs Chro
     cd /opt/mesh3d && /opt/chrono/bin/python -m unittest sim.tests.test_chrono
 
 - the MVP: a motor turning a shaft at 360°/s turns it ω·t (1e-5 rad over 3 s), smoothly
-- an ideal gear pair 20/40 turns at ω₂/ω₁ = -N₁/N₂ (1e-4)
+- an ideal gear pair 20/40 turns at ω₂/ω₁ = -N₁/N₂ (1e-4), also on a carrier that itself turns (a gripper's
+  fingers on a wrist), relative to that carrier
 - a physical pendulum swings with T = 2π √(I_pivot / (m g d)) · (1 + θ₀²/16) (0.1 %)
 - a free body falls z₀ - g t²/2, to within g·t·dt, the error halving with the step
 - a mass on a spring along a prismatic joint oscillates at √(k/m) (0.2 %)
@@ -89,6 +90,31 @@ class TheoryChecks(unittest.TestCase):
         np.testing.assert_allclose(ww[moving] / wp[moving], -20 / 40, atol=1e-4)
         self.assertGreater(wp[-1], 0)
         self.assertLess(ww[-1], 0)
+
+    def test_gear_pair_on_a_turning_carrier(self):
+        # The frame holding both gears is no longer fixed: it turns about X (across the gears' axes) on a motor of
+        # its own, as a wrist turns the gripper whose fingers mesh
+        m = example("gear_pair")
+        m["bodies"][0].update(fixed=False, density=1240)
+        m["bodies"].insert(0, {"id": "ground", "fixed": True, "geometry": {"type": "box", "size": [10, 10, 10]},
+                               "position": [30, 0, -40]})
+        m["joints"].append({"id": "tilt", "type": "revolute", "body_a": "ground", "body_b": "frame",
+                            "position": [30, 0, -10], "axis": [1, 0, 0]})
+        m["actuators"].append({"id": "tilt_motor", "type": "rotational_motor", "mode": "speed", "body_a": "ground",
+                               "body_b": "frame", "position": [30, 0, -10], "axis": [1, 0, 0],
+                               "law": {"type": "constant", "value": 30}})
+        m["simulation"]["duration"] = 2
+        engine, _, joints = simulate(m)
+        self.assertEqual(engine["state"], "completed", engine.get("error"))
+        check = next(c for c in engine["checks"] if c["kind"] == "gear_ratio")
+        self.assertTrue(check["passed"], check)
+        # The bearings' own rates are relative to the frame: they keep -N₁/N₂ while the frame tilts, to 1 % of the
+        # top speed (an iterative solver holds the pair), and exactly enough to end at the ratio
+        _, rp = series(joints, "pinion_bearing", "rate")
+        _, rw = series(joints, "wheel_bearing", "rate")
+        self.assertLess(float(np.max(np.abs(rw + rp / 2))), 0.01 * float(np.max(np.abs(rp))))
+        self.assertAlmostEqual(float(rw[-1] / rp[-1]), -0.5, delta=1e-3)
+        self.assertLess(engine["assembly_violation"]["value"], 1e-6)
 
     def test_pendulum_period(self):
         m = example("pendulum")

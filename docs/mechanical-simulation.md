@@ -45,6 +45,12 @@ installed module.
   - `SetFrameShaft1/2` are relative to each body's centre-of-mass frame.
   - `SetTransmissionRatio(N_a/N_b)` sets the ratio; the radii come from the shaft distance.
   - External gears turn opposite ways. `SetEpicyclic(true)` is used for internal gears.
+  - It takes the carrier as fixed. A pair on a moving body (a gripper's fingers on a turning wrist) does not
+    assemble with it, so `CarrierGear` is used there instead: each gear and the carrier get a 1D `ChShaft`
+    (`ChShaftBodyRotation`), and `ChShaftsPlanetary` relates them by Willis's equation. Chrono's default solver
+    leaves those shafts nearly uncoupled, so such a model runs on Barzilai-Borwein with at least 1000
+    iterations. MINRES also holds them but diverges with joint limits. The pair holds speeds, not phase, and its
+    ratio check is to 1 % of the top speed.
 - `ChFunctionSine(A, f[Hz], phase, shift)` is `shift + A sin(2πft + phase)`. `ChFunctionInterp` with
   `SetExtrapolate(False)` holds its last value.
 - `GetRelAngle()` is unsigned. `GetRelAngleAxis().z` gives the signed revolute angle.

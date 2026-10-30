@@ -119,10 +119,24 @@ class Model:
             self.add_joint(j)
         for a in model["actuators"]:
             self.add_actuator(a)
+        if any(isinstance(link, CarrierGear) for _, link in self.links):
+            self.carrier_gear_solver(sim)
         self.loads = ch.ChLoadContainer()
         self.system.Add(self.loads)
         for f in model["forces"]:
             self.add_force(f)
+
+    def carrier_gear_solver(self, sim):
+        """A gear pair on a moving carrier ties weightless 1D shafts to the bodies: Chrono's default solver does not
+        converge on them (the gears end up nearly uncoupled). Barzilai-Borwein does, with joint limits and contacts
+        (MINRES holds the shafts too but has no unilateral constraints: a limited joint makes it diverge)"""
+        if sim["solver"] != "default":
+            return
+        self.system.SetSolverType(ch.ChSolver.Type_BARZILAIBORWEIN)
+        iterative = self.system.GetSolver().AsIterative()
+        iterative.SetMaxIterations(max(int(sim.get("max_iterations") or 0), CarrierGear.MIN_ITERATIONS))
+        if sim.get("tolerance"):
+            iterative.SetTolerance(sim["tolerance"])
 
     def solver(self, sim):
         types = {"psor": ch.ChSolver.Type_PSOR, "apgd": ch.ChSolver.Type_APGD,
@@ -226,10 +240,17 @@ class Model:
     def add_ideal_gear(self, j):
         """An ideal gear pair (ChLinkLockGear): no teeth, no backlash, no friction. Each shaft's frame sits on its gear
         at its revolute joint, Z along the first joint's axis; Chrono takes the radii from the distance between the
-        shafts and the ratio N_a/N_b, and turns the gears opposite ways unless the pair is internal (epicyclic)"""
+        shafts and the ratio N_a/N_b, and turns the gears opposite ways unless the pair is internal (epicyclic).
+        ChLinkLockGear takes the carrier as fixed: a pair on a moving body is a CarrierGear"""
         joints = {x["id"]: x for x in self.model["joints"]}
         ja, jb = joints[j["joint_a"]], joints[j["joint_b"]]
         ga, gb = self.bodies[j["body_a"]], self.bodies[j["body_b"]]
+        carrier = self.bodies.get(j.get("carrier"))
+        if carrier is not None and not carrier.IsFixed():
+            gear = CarrierGear(self.system, j, ja["axis"], ga, gb, carrier)
+            self.keep.append(gear)
+            self.links.append((j, gear))
+            return None
         link = ch.ChLinkLockGear()
         link.Initialize(ga, gb, ch.ChFramed())
         axis = ja["axis"]
@@ -300,6 +321,49 @@ class Model:
         link.SetName(f["id"])
         self.system.Add(link)
         self.links.append((f, link))
+
+
+class CarrierGear:
+    """An ideal gear pair held by a moving body (a gripper's two fingers on a turning wrist). Each gear's and the
+    carrier's rotation about the gear axis is a 1D shaft (ChShaftBodyRotation), and ChShaftsPlanetary relates them
+    by Willis's equation, the gears turning relative to their carrier: N_a·(ω_a − ω_c) = ∓N_b·(ω_b − ω_c) (− for an
+    external pair). It holds the speeds, not the phase: over a long run the gears may drift by a fraction of a degree."""
+
+    # A shaft's own inertia, negligible next to any printed gear's about its axis
+    SHAFT_INERTIA = 1e-9
+    # Iterations the solver gets for them (Model.carrier_gear_solver)
+    MIN_ITERATIONS = 1000
+
+    def __init__(self, system, j, axis, ga, gb, carrier):
+        axis = np.asarray(axis, float)
+        self.axis = axis / np.linalg.norm(axis)
+        self.shafts, self.links = [], []
+        for body in (ga, gb, carrier):
+            shaft = ch.ChShaft()
+            shaft.SetInertia(self.SHAFT_INERTIA)
+            system.Add(shaft)
+            link = ch.ChShaftBodyRotation()
+            link.Initialize(shaft, body, body.GetFrameCOMToAbs().GetRot().RotateBack(V(self.axis)))
+            system.Add(link)
+            self.shafts.append(shaft)
+            self.links.append(link)
+        self.sign = 1 if j["internal"] else -1
+        self.ratio = j["teeth_a"] / j["teeth_b"]
+        # r·ω_a − sign·ω_b + (sign − r)·ω_c = 0
+        self.planet = ch.ChShaftsPlanetary()
+        self.planet.Initialize(*self.shafts)
+        self.planet.SetTransmissionRatios(self.ratio, -self.sign, self.sign - self.ratio)
+        self.planet.SetName(j["id"])
+        system.Add(self.planet)
+
+    def violation(self):
+        """How far the speeds are from Willis's equation (rad/s)"""
+        wa, wb, wc = (s.GetPosDt() for s in self.shafts)
+        return abs(self.ratio * wa - self.sign * wb + (self.sign - self.ratio) * wc)
+
+    def torque_b(self):
+        """The torque the pair puts on gear b about the axis (N·m)"""
+        return float(self.planet.GetReaction2())
 
 
 class GearContact:
@@ -398,6 +462,8 @@ class GearContact:
 
 
 def violation(link):
+    if isinstance(link, CarrierGear):
+        return link.violation()
     c = link.GetConstraintViolation()
     return max((abs(c[i]) for i in range(c.Size())), default=0.0)
 
@@ -498,6 +564,9 @@ class Recorder:
                 # The tooth force on gear b (world) and its torque about the axis
                 force, torque = link.state["f_b"].tolist(), (link.state["t_b"] * link.axis).tolist()
                 worst = 0.0
+            elif isinstance(link, CarrierGear):
+                force, torque = [0.0, 0.0, 0.0], (link.torque_b() * link.axis).tolist()
+                worst = violation(link)
             else:
                 wrench = link.GetReaction1()
                 force, torque = vec(wrench.force), vec(wrench.torque)
@@ -546,14 +615,16 @@ def theory_checks(model, rec, sim, meshes=None):
                        else "m", "passed": error <= tolerance,
                        "final": {"simulated": float(values[-1]), "theory": float(expected[-1])}})
     joints = {j["id"]: j for j in model["joints"]}
+    moving_carriers = {b["id"] for b in model["bodies"] if not b.get("fixed")}
     for j in model["joints"]:
         if j["type"] != "gear" or j.get("model") == "contact":
             continue
-        axis = np.asarray(joints[j["joint_a"]]["axis"])
-        wa = np.array([np.dot(w, axis) for _, w in rec.angular[j["body_a"]]])
-        wb = np.array([np.dot(w, axis) for _, w in rec.angular[j["body_b"]]])
-        carrier = np.array([np.dot(w, axis) for _, w in rec.angular[j["carrier"]]])
-        ra, rb = wa - carrier, wb - carrier
+        # Each gear's rate on its own bearing, relative to the carrier whether it stands or turns (a joint whose axis
+        # points the other way counts the other way)
+        ja, jb = joints[j["joint_a"]], joints[j["joint_b"]]
+        same = 1.0 if np.dot(ja["axis"], jb["axis"]) >= 0 else -1.0
+        ra = np.array([rate for _, _, rate in rec.series[ja["id"]]])
+        rb = same * np.array([rate for _, _, rate in rec.series[jb["id"]]])
         # Turning: above 0.1 % of the run's top speed (what is left of the assembly at t = 0 is not a ratio)
         moving = np.abs(ra) > max(1e-6, 1e-3 * float(np.max(np.abs(ra))))
         ratio = (-1 if not j["internal"] else 1) * j["teeth_a"] / j["teeth_b"]
@@ -562,12 +633,18 @@ def theory_checks(model, rec, sim, meshes=None):
                            "description": "Bánh răng không quay: không kiểm tra được tỉ số truyền"})
             continue
         measured = rb[moving] / ra[moving]
-        error = float(np.max(np.abs(measured - ratio)))
+        if j["carrier"] in moving_carriers:
+            # Held by an iterative solver (CarrierGear): the speed error as a share of the top speed, to 1 %
+            error = float(np.max(np.abs(rb - ratio * ra)) / max(1e-9, float(np.max(np.abs(ra))) * max(1.0, abs(ratio))))
+            tolerance, how = 1e-2, "bánh răng lý tưởng trên giá chuyển động, sai số so với tốc độ lớn nhất"
+        else:
+            error = float(np.max(np.abs(measured - ratio)))
+            tolerance, how = 1e-4 * max(1.0, abs(ratio)), "bánh răng lý tưởng"
         checks.append({"id": f"{j['id']}.ratio", "kind": "gear_ratio", "item": j["id"],
                        "description": f"ω_{j['body_b']}/ω_{j['body_a']} so với "
-                                      f"{'-' if not j['internal'] else '+'}N_a/N_b = {ratio:.6g} (bánh răng lý tưởng)",
+                                      f"{'-' if not j['internal'] else '+'}N_a/N_b = {ratio:.6g} ({how})",
                        "expected": ratio, "measured_mean": float(measured.mean()), "max_error": error,
-                       "tolerance": 1e-4 * max(1.0, abs(ratio)), "passed": error <= 1e-4 * max(1.0, abs(ratio))})
+                       "tolerance": tolerance, "passed": error <= tolerance})
     _ = duration
     checks += gear_contact_checks(model, rec, meshes or [])
     checks += resting_checks(model, rec, sim)
