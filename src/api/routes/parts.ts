@@ -124,7 +124,19 @@ export const analyzePrintParts = handler<{ id: string }>(async ({ params }) => {
   const print = await journal().get(params.id);
   if (!print) return printNotFound();
   if (!print.setup) return json({ success: false, error: 'NO_SETUP', message: 'Bản in không gửi từ Studio nên không biết mẫu nào.' }, 422);
-  const { outcome, state } = await startTask(analyzeTask(print.id), () => partsOfPrint(print, true), { waitMs: ANALYZE_WAIT_MS });
+  const { outcome, state } = await startTask(analyzeTask(print.id), () => partsOfPrint(print, true), {
+    info: { kind: 'print-parts', label: print.job_name, page: 'prints' },
+    waitMs: ANALYZE_WAIT_MS,
+    // The objects Claude could not name, or whose mesh is gone from Studio's imports
+    explain: (objects) =>
+      objects.flatMap((o) =>
+        o.status === 'missing'
+          ? [`${o.name}: không còn file mẫu trong thư mục imports của Studio`]
+          : o.analysis?.naming_error
+            ? [`${o.name}: ${o.analysis.naming_error}`]
+            : []
+      ),
+  });
   if (outcome && 'value' in outcome) return json({ success: true, enabled: true, objects: outcome.value });
   if (outcome) {
     const err = outcome.error;
@@ -136,44 +148,61 @@ export const analyzePrintParts = handler<{ id: string }>(async ({ params }) => {
 
 // ---------- Earlier prints, all at once ----------
 
-interface Backfill {
-  running: boolean;
-  total: number;
-  done: number;
-  failed: string[];
-  started_at: string | null;
-  finished_at: string | null;
+const BACKFILL_TASK = 'parts-backfill';
+
+/** How far measuring the earlier prints has got, in the shape the button reads */
+function backfillState() {
+  const task = getTask(BACKFILL_TASK);
+  return {
+    running: task?.running ?? false,
+    total: task?.progress?.total ?? 0,
+    done: task?.progress?.done ?? 0,
+    failed: task?.details ?? [],
+    started_at: task?.started_at ?? null,
+    finished_at: task?.finished_at ?? null,
+  };
 }
 
-let backfill: Backfill = { running: false, total: 0, done: 0, failed: [], started_at: null, finished_at: null };
-
 // GET /api/studio/parts/backfill - How far measuring the earlier prints has got
-export const getPartsBackfill = handler(() => json({ success: true, enabled: modelParts().enabled, ...backfill }));
+export const getPartsBackfill = handler(() => json({ success: true, enabled: modelParts().enabled, ...backfillState() }));
 
 // POST /api/studio/parts/backfill - Measures every object of every print sent from Studio, one after another
 export const startPartsBackfill = handler(async () => {
   if (!modelParts().enabled) return disabled();
-  if (backfill.running) return json({ success: true, ...backfill }, 202);
+  if (getTask(BACKFILL_TASK)?.running) return json({ success: true, ...backfillState() }, 202);
   const parts = modelParts();
   const prints = (await journal().list(PAST_PRINTS)).filter((p) => p.setup);
-  const objects = new Map(prints.flatMap((p) => objectsOf(p.setup!)).map((o) => [JSON.stringify(o), o]));
-  backfill = { running: true, total: objects.size, done: 0, failed: [], started_at: new Date().toISOString(), finished_at: null };
-  const state = backfill;
-  (async () => {
-    for (const object of objects.values()) {
-      try {
-        const analysis = await parts.analyze(object);
-        if (analysis && !analysis.matched) state.failed.push(`${object.name}: ${analysis.reason ?? 'không khớp'}`);
-        if (analysis?.naming_error) state.failed.push(`${object.name}: ${analysis.naming_error}`);
-      } catch (err) {
-        state.failed.push(`${object.name}: ${err instanceof Error ? err.message : String(err)}`);
+  const objects = [...new Map(prints.flatMap((p) => objectsOf(p.setup!)).map((o) => [JSON.stringify(o), o])).values()];
+  await startTask(
+    BACKFILL_TASK,
+    async (progress) => {
+      // Objects that did not match a mesh are listed; ones that failed (or Claude could not name) make it an error
+      const notes: string[] = [];
+      let failures = 0;
+      progress(0, objects.length);
+      for (const [i, object] of objects.entries()) {
+        try {
+          const analysis = await parts.analyze(object);
+          if (analysis && !analysis.matched) notes.push(`${object.name}: ${analysis.reason ?? 'không khớp'}`);
+          if (analysis?.naming_error) {
+            notes.push(`${object.name}: ${analysis.naming_error}`);
+            failures++;
+          }
+        } catch (err) {
+          notes.push(`${object.name}: ${err instanceof Error ? err.message : String(err)}`);
+          failures++;
+        }
+        progress(i + 1, objects.length, notes);
       }
-      state.done++;
+      return { notes, failures };
+    },
+    {
+      info: { kind: 'parts-backfill', label: `${objects.length} vật thể của các bản in cũ`, page: 'prints' },
+      failed: ({ failures }) => (failures ? `${failures}/${objects.length} vật thể chưa đo hoặc chưa đặt tên được` : null),
+      explain: ({ notes }) => notes,
     }
-    state.running = false;
-    state.finished_at = new Date().toISOString();
-  })();
-  return json({ success: true, ...backfill }, 202);
+  );
+  return json({ success: true, ...backfillState() }, 202);
 });
 
 // GET /api/studio/parts/:key/:image - A render of an analysis (views.png, parts.png)

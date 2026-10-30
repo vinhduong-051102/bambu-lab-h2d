@@ -350,7 +350,8 @@ function SetupEditor({ status, input, onSaved }: { status: Status; input: Design
   );
 }
 
-export function ModelSim({ jobId, modelId: givenModelId }: { jobId?: string; modelId?: string }) {
+/** `name`: what the task panel calls its setup while it runs */
+export function ModelSim({ jobId, modelId: givenModelId, name }: { jobId?: string; modelId?: string; name?: string }) {
   const { message } = App.useApp();
   const modelId = givenModelId ?? `job-${jobId}`;
   const [status, setStatus] = useState<Status | null>(null);
@@ -418,7 +419,7 @@ export function ModelSim({ jobId, modelId: givenModelId }: { jobId?: string; mod
     }
   };
   const setup = () => step('setup', async () => {
-    await mech('models/setup', jobId ? { job_id: jobId } : { model_id: modelId });
+    await mech('models/setup', { ...(jobId ? { job_id: jobId } : { model_id: modelId }), ...(name && { name }) });
     await load();
   });
   const simulate = () => step('live', async () => {

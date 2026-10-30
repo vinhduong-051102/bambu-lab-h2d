@@ -197,6 +197,33 @@ describe('AI modelling API (/api/cad)', () => {
     expect(res.job).toMatchObject({ state: 'failed', error: expect.stringContaining('khởi động lại') });
   });
 
+  it('shows why a model failed, lists it among the tasks and runs it again in place', async () => {
+    const { job } = (await create({ prompt: 'Một cái hộp' })).json();
+    // Claude stopped with its last build broken, saying why on stderr
+    worker.running = [];
+    const status = path.join(jobsDir, job.id, 'status.json');
+    const before = JSON.parse(await fs.readFile(status, 'utf8'));
+    await fs.writeFile(
+      status,
+      JSON.stringify({ ...before, state: 'failed', error: 'Claude chạy quá 40 phút nên đã bị dừng', report: { ok: false, error: 'NameError: Box2' }, finished_at: new Date().toISOString() })
+    );
+    await fs.writeFile(path.join(jobsDir, job.id, 'claude.err'), 'Lỗi một\nLỗi hai\n');
+    const failed = (await app.inject({ method: 'GET', url: `/api/cad/jobs/${job.id}` })).json().job;
+    expect(failed).toMatchObject({ state: 'failed', retryable: true });
+    expect(failed.error_details[0]).toBe('Lần dựng cuối: NameError: Box2');
+    expect(failed.error_details).toContain('Claude: Đang dựng hộp');
+    expect(failed.error_details.slice(-3)).toEqual(['claude.err:', 'Lỗi một', 'Lỗi hai']);
+
+    const tasks = (await app.inject({ method: 'GET', url: '/api/tasks' })).json().tasks;
+    expect(tasks).toContainEqual(expect.objectContaining({ key: `cad:${job.id}`, state: 'failed', retry_url: `/api/cad/jobs/${job.id}/retry` }));
+
+    const retried = await app.inject({ method: 'POST', url: `/api/cad/jobs/${job.id}/retry`, payload: {} });
+    expect(retried.statusCode).toBe(202);
+    expect(worker.generated.map((g) => g.id)).toEqual([job.id, job.id]);
+    expect(retried.json().job.state).toBe('running');
+    expect((await app.inject({ method: 'POST', url: `/api/cad/jobs/${job.id}/retry`, payload: {} })).statusCode).toBe(409);
+  });
+
   it('revises a model starting from its code and brief', async () => {
     const { job } = (await create({ prompt: 'Hộp vuông cạnh 10 mm' })).json();
     await worker.finish(job.id);

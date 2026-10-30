@@ -78,6 +78,21 @@ export const validateMechanism = handler(async ({ request }) => forward('POST', 
 
 export const listSimRuns = handler(async () => forward('GET', 'runs'));
 
+/** The worker's runs as data (the task panel): null when the worker is off or unreachable */
+export async function simRunList(): Promise<{ sim_id: string; name: string; state: string; progress?: number; created_at: string }[] | null> {
+  const res = await forward('GET', 'runs');
+  if (!res.ok) return null;
+  const data = (await res.json().catch(() => null)) as { runs?: unknown } | null;
+  return Array.isArray(data?.runs) ? (data.runs as never) : null;
+}
+
+/** Why a run failed, from its results (the task panel) */
+export async function simRunError(simId: string): Promise<string | null> {
+  const res = await forward('GET', `runs/${simId}/results`);
+  const data = (await res.json().catch(() => null)) as { summary?: { error?: string | null }; error?: string | null } | null;
+  return data?.summary?.error ?? data?.error ?? null;
+}
+
 export const startSimRun = handler(async ({ request }) => forward('POST', 'runs', await objectBody(request)));
 
 export const getSimRun = handler<{ id: string }>(async ({ params }) =>

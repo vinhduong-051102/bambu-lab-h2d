@@ -149,6 +149,10 @@ export interface CadJob extends CadJobMeta {
   guide: CadGuideOutcome | null;
   /** "Vẽ lại" of its assembly guide, running in the gateway (it goes on when the page closes) or how it ended */
   guide_task: TaskState | null;
+  /** A failed job's details under its error: the last build's error, Claude's last notes, Claude Code's stderr */
+  error_details: string[];
+  /** Whether POST /api/cad/jobs/:id/retry can run it again in place (a figure needs the settings it was asked with) */
+  retryable: boolean;
   /**
    * threemf: a coloured figure's 3MF, its faces painted with the filaments in report.palette; fix: the fix.py
    * of an older Claude review; views: the six sides Claude checked the figure from; sides: the sides a figure was
@@ -247,7 +251,7 @@ export class CadJobStore {
    */
   async create(
     meta: Omit<CadJobMeta, 'id' | 'created_at' | 'sent'>,
-    files: { request?: string; code?: string; image?: Uint8Array; views?: SideViews; attachments?: Attachment[] }
+    files: { request?: string; code?: string; image?: Uint8Array; views?: SideViews; attachments?: Attachment[]; mesh?: MeshParams }
   ): Promise<CadJobMeta> {
     const id = newJobId();
     const dir = path.join(this.dir, id);
@@ -256,6 +260,8 @@ export class CadJobStore {
     if (files.request !== undefined) await fs.writeFile(path.join(dir, 'request.md'), files.request);
     if (files.code !== undefined) await fs.writeFile(path.join(dir, 'model.py'), files.code);
     if (files.image !== undefined) await fs.writeFile(path.join(dir, 'input.png'), files.image);
+    // A figure's settings, so "Thử lại" makes it again as it was asked
+    if (files.mesh !== undefined) await writeJson(path.join(dir, MESH_PARAMS), files.mesh);
     const sides = Object.entries(files.views ?? {}).filter((entry): entry is [string, Uint8Array] => !!entry[1]);
     if (sides.length) {
       await fs.mkdir(path.join(dir, 'views'), { recursive: true });
@@ -301,6 +307,15 @@ export class CadJobStore {
       files: { code, stl, step, preview, concept, threemf, fix, views, sides, shaped: shaped && status?.maker === 'hunyuan', blend, assembly, guide },
       guide: status?.guide ?? null,
       guide_task: getTask(guideTaskKey(id)),
+      error_details: status?.state === 'failed' ? await failureDetails(dir, status) : [],
+      retryable:
+        meta.source === 'claude'
+          ? await exists(path.join(dir, 'request.md'))
+          : meta.source === 'code'
+            ? code
+            : status?.input === 'fix'
+              ? Boolean(meta.parent_id)
+              : await exists(path.join(dir, MESH_PARAMS)),
     };
   }
 
@@ -363,6 +378,12 @@ export class CadJobStore {
     if (!dir || !Number.isInteger(n) || n < 1) return null;
     const file = path.join(dir, 'out', 'plates', `plate-${n}.3mf`);
     return (await exists(file)) ? file : null;
+  }
+
+  /** The settings a figure was asked with (written since retrying came in); null for older ones */
+  async meshParams(id: string): Promise<MeshParams | null> {
+    const dir = this.jobDir(id);
+    return dir ? readJson<MeshParams>(path.join(dir, MESH_PARAMS)) : null;
   }
 
   /** A picture of a job's assembly guide (step-01.png…, done.png), or null when there is none */
@@ -435,6 +456,29 @@ function attachmentLine(names: string[]): string {
   if (!names.length) return '';
   const files = names.map((name) => `${ATTACHMENTS_DIR}/${name}`).join(', ');
   return `\n\nẢnh người dùng gửi kèm yêu cầu này (mở bằng Read và xem kỹ trước khi sửa): ${files}`;
+}
+
+const MESH_PARAMS = 'mesh-params.json';
+const STDERR_LINES = 12;
+
+/**
+ * What else is known about a failed job, in the order it helps: the last build's error (build123d's traceback
+ * ends with it), what the last build step said, Claude's last notes, and the end of Claude Code's or the worker's
+ * stderr (claude.err, worker.err) when it wrote any
+ */
+async function failureDetails(dir: string, status: WorkerStatus): Promise<string[]> {
+  const lines: string[] = [];
+  const report = status.report as (CadBuildReport & { error?: string }) | null;
+  if (report?.error) lines.push(`Lần dựng cuối: ${report.error}`);
+  const last = [...(status.steps ?? [])].reverse().find((s) => s.detail);
+  if (last?.detail) lines.push(`Bước cuối (${last.id}): ${last.detail}`);
+  for (const note of (status.notes ?? []).slice(-3)) lines.push(`Claude: ${note.replace(/^•\s*/, '')}`);
+  for (const name of ['claude.err', 'worker.err']) {
+    const text = await fs.readFile(path.join(dir, name), 'utf8').catch(() => '');
+    const tail = text.trim().split(/\r?\n/).slice(-STDERR_LINES).filter(Boolean);
+    if (tail.length) lines.push(`${name}:`, ...tail);
+  }
+  return lines;
 }
 
 /** The background task that draws a job's assembly guide again (POST /api/cad/jobs/:id/guide) */

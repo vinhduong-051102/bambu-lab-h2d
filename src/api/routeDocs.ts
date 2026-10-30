@@ -92,6 +92,7 @@ export const GATEWAY_ROUTES: RouteDoc[] = [
   { method: 'GET', path: '/api/cad/jobs/:id', category: 'Thiết kế AI', description: 'Một mô hình: tiến độ, tóm tắt của Claude, báo cáo dựng và các file có sẵn', exampleUrl: '/api/cad/jobs/<id>' },
   { method: 'DELETE', path: '/api/cad/jobs/:id', category: 'Thiết kế AI', description: 'Xóa một mô hình; ?family=1 xóa cả các bản sửa, sửa lại và tạo lại từ nó (không xóa khi có bản đang dựng)' },
   { method: 'POST', path: '/api/cad/jobs/:id/cancel', category: 'Thiết kế AI', description: 'Dừng Claude đang thiết kế mô hình', body: '{}' },
+  { method: 'POST', path: '/api/cad/jobs/:id/retry', category: 'Thiết kế AI', description: 'Chạy lại tại chỗ một mẫu lỗi hoặc đã hủy, đúng như đã yêu cầu (Claude từ request.md, code dựng lại, mẫu từ ảnh với cùng thông số)', body: '{}' },
   { method: 'POST', path: '/api/cad/jobs/:id/fix', category: 'Thiết kế AI', description: 'Claude review mô hình nhân vật đã dựng (so với ảnh gốc, xem 6 phía) rồi sửa: đắp chân cụt, bỏ mảnh rời, làm mịn bề mặt sần, vá lỗ, giữ màu filament; prompt rỗng thì Claude tự tìm lỗi; images: ảnh dán kèm (data: URL, tối đa 4). Tạo job mới, bản cũ giữ nguyên', body: '{"prompt": "Chân bị cụt, đứng không vững", "model": "claude-opus-5-5"}' },
   { method: 'POST', path: '/api/cad/jobs/:id/studio', category: 'Thiết kế AI', description: 'Gửi mô hình vào thư mục /imports của Bambu Studio (STL được tự sửa lưới)', body: '{"format": "stl"}' },
   { method: 'GET', path: '/api/cad/jobs/:id/files/:name', category: 'Thiết kế AI', description: 'File của mô hình: model.py, model.stl, model.step, model.3mf, preview.png, concept.png, report.json, fix.py, views.png, assembly.png; mô hình nhiều chi tiết: guide.json (các bước lắp) và assembly.mp4 (video lắp, hỗ trợ Range) (?download=1 để tải về)', exampleUrl: '/api/cad/jobs/<id>/files/preview.png' },
@@ -160,6 +161,8 @@ export const GATEWAY_ROUTES: RouteDoc[] = [
 
   // 10. Real-time WebSocket Stream
   { method: 'GET (WS)', path: '/ws', category: 'Real-time WebSocket', description: 'Kết nối WebSocket đẩy dữ liệu telemetry & lệnh thời gian thực', exampleUrl: 'ws://localhost:3000/ws' },
+  { method: 'GET', path: '/api/tasks', category: 'Tác vụ nền', description: 'Các tác vụ chạy nền (đang chạy, lỗi, vừa xong): mẫu AI, kiểm tra kỹ thuật, hướng dẫn lắp, phân tích thành phần, chuẩn bị mô phỏng, AI xem timelapse, lần chạy mô phỏng; lỗi kèm chi tiết và retry_url', exampleUrl: '/api/tasks' },
+  { method: 'POST', path: '/api/tasks/retry', category: 'Tác vụ nền', description: 'Chạy lại một tác vụ nền của gateway đúng như lần đầu (?key= hoặc {key})', body: '{}' },
 ];
 
 // GET /api/routes

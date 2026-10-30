@@ -364,6 +364,10 @@ export function CadCard({ onBusyChange }: { onBusyChange?: (busy: boolean) => vo
       if (act === 'delete') {
         await api('DELETE', `/api/cad/jobs/${encodeURIComponent(job.id)}`);
         showToast('Đã xóa bản này.', 'info');
+      } else if (act === 'retry') {
+        await api('POST', `/api/cad/jobs/${encodeURIComponent(job.id)}/retry`, {});
+        showToast('Đang chạy lại bản này.', 'info');
+        addLog(`Chạy lại mô hình AI "${job.title || job.prompt.slice(0, 60)}".`);
       } else if (act === 'cancel') {
         await api('POST', `/api/cad/jobs/${encodeURIComponent(job.id)}/cancel`, {});
         showToast('Đã hủy.', 'info');

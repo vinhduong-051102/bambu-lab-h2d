@@ -72,6 +72,10 @@ export interface CadJob {
   } | null;
   files?: Record<string, boolean>;
   guide?: { ok: boolean; steps?: number; video?: string | null; error?: string | null } | null;
+  /** A failed job's details: the last build's error, Claude's last notes, the end of its stderr */
+  error_details?: string[];
+  /** Whether "Thử lại" can run it again in place */
+  retryable?: boolean;
   /** Its assembly guide being drawn again in the gateway (it goes on when the page closes), or how that ended */
   guide_task?: { running: boolean; started_at: string; finished_at: string | null; error: string | null } | null;
 }
@@ -134,7 +138,7 @@ export interface PaletteEntry {
   mix?: { components: { key: string; hex: string; percent: number; name?: string | null }[]; hex: string; delta_e: number } | null;
 }
 
-export type CadAction = 'cancel' | 'again' | 'studio-stl' | 'studio-3mf' | 'delete';
+export type CadAction = 'cancel' | 'again' | 'retry' | 'studio-stl' | 'studio-3mf' | 'delete';
 
 const STATE_COLORS: Record<string, string> = { queued: 'default', running: 'processing', done: 'success', failed: 'error', cancelled: 'warning' };
 
@@ -289,7 +293,7 @@ function SimulateButton({ job }: { job: CadJob }) {
         ⚙️ Mô phỏng
       </Button>
       <Modal open={open} onCancel={() => setOpen(false)} footer={null} width="min(1500px, 96vw)" destroyOnHidden title={`Mô phỏng · ${job.title || job.id}`}>
-        {open && <ModelSim jobId={job.id} />}
+        {open && <ModelSim jobId={job.id} name={job.title || job.prompt.split('\n')[0].slice(0, 80)} />}
       </Modal>
     </>
   );
@@ -548,7 +552,33 @@ export function CadJobCard(props: {
               ))}
             </div>
           )}
-          {job.error && job.state !== 'cancelled' && <Alert type="error" showIcon title={job.error} />}
+          {job.error && job.state !== 'cancelled' && (
+            <Alert
+              type="error"
+              showIcon
+              title={job.error}
+              description={
+                (!!job.error_details?.length || (job.retryable && onAction)) && (
+                  <Flex vertical gap={6}>
+                    {!!job.error_details?.length && (
+                      <Collapse
+                        size="small"
+                        ghost
+                        items={[{ key: 'details', label: 'Chi tiết lỗi', children: <pre className="task-details">{job.error_details.join('\n')}</pre> }]}
+                      />
+                    )}
+                    {job.retryable && onAction && (
+                      <div>
+                        <Button size="small" type="primary" icon={<ReloadOutlined />} loading={acting === 'retry'} onClick={() => act('retry')} title="Chạy lại bản này tại chỗ, đúng như đã yêu cầu">
+                          Thử lại
+                        </Button>
+                      </div>
+                    )}
+                  </Flex>
+                )
+              }
+            />
+          )}
           {job.report?.ok && (
             <Typography.Text>
               {[size, job.report.volume_cm3 != null ? `${job.report.volume_cm3} cm³` : null, job.report.mesh?.watertight ? 'lưới kín' : 'lưới hở']

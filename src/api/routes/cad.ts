@@ -19,6 +19,7 @@ import {
   type CadJob,
   type CadWorkerApi,
   type MeshColour,
+  type MeshParams,
   type MeshWorkerApi,
   type SideViews,
 } from '../../domain/cad/cadJobs';
@@ -166,6 +167,15 @@ export const listCadJobs = handler(async ({ request }) => {
   return json({ success: true, jobs: await Promise.all(jobs.map((job) => withMixes(settle(job, running)))) });
 });
 
+/** The latest jobs as the list shows them (a job its worker no longer runs is settled as interrupted), for the task
+ * panel; null when the CAD feature is off */
+export async function recentCadJobs(limit: number): Promise<CadJob[] | null> {
+  if (!worker() && !meshWorker()) return null;
+  const jobs = await store().list(limit);
+  const running = await runningJobs(jobs);
+  return jobs.map((job) => settle(job, running));
+}
+
 // POST /api/cad/jobs - {prompt, model?, parent_id?, images?}: Claude designs a model (or changes parent_id's) in the background
 export const createCadJob = handler(async ({ request }) => {
   const w = worker();
@@ -255,6 +265,43 @@ export const cancelCadJob = handler<{ id: string }>(async ({ params }) => {
     throw err;
   }
   return json({ success: true, job: await store().get(params.id) });
+});
+
+// POST /api/cad/jobs/:id/retry - Runs a failed (or cancelled) model again in place, as it was asked: Claude from the
+// same request.md, ready-made code built again, a figure from the same picture and settings, a fix of the same figure
+export const retryCadJob = handler<{ id: string }>(async ({ params }) => {
+  const job = await store().get(params.id);
+  if (!job) return jobNotFound();
+  if (job.state === 'running' || job.state === 'queued') {
+    return json({ success: false, error: 'JOB_RUNNING', message: 'Bản này đang chạy.' }, 409);
+  }
+  const model = job.model ?? env.CAD_AI_MODEL;
+  try {
+    if (job.source !== 'mesh') {
+      const w = worker();
+      if (!w) return disabled();
+      if (job.source === 'code') await w.build(job.id);
+      else await w.generate(job.id, model);
+    } else {
+      const m = meshWorker();
+      if (!m) return meshDisabled();
+      if (job.input === 'fix' && job.parent_id) await m.fix(job.id, job.parent_id, model);
+      else {
+        const asked = await store().meshParams(job.id);
+        if (!asked) {
+          return json(
+            { success: false, error: 'NO_PARAMS', message: 'Bản này tạo trước khi lưu thông số nên không chạy lại tại chỗ được: dùng “Làm lại” để tạo bản mới.' },
+            409
+          );
+        }
+        await m.generate(job.id, asked);
+      }
+    }
+  } catch (err) {
+    if (err instanceof CadWorkerError) return workerFailed(err);
+    throw err;
+  }
+  return json({ success: true, job: await store().get(job.id) }, 202);
 });
 
 // DELETE /api/cad/jobs/:id?family=1 - Deletes a model (with family=1 also every fix, revision and remake made from
@@ -507,20 +554,21 @@ export const createMeshJob = handler(async ({ request, printerService }) => {
     colour.request = { palette, colours, material, filaments };
   }
 
+  const params: MeshParams = {
+    prompt,
+    height_mm: body.data.height_mm,
+    base: body.data.base,
+    colour,
+    model,
+    seed: body.data.seed ?? randomInt(1, 2 ** 31 - 1),
+    multiview: Boolean(image) && body.data.multiview,
+  };
   const meta = await store().create(
     { prompt: prompt || 'Mô hình từ ảnh', source: 'mesh', model, parent_id: body.data.parent_id ?? null, title: null },
-    image ? { image, views } : {}
+    image ? { image, views, mesh: params } : { mesh: params }
   );
   try {
-    await m.generate(meta.id, {
-      prompt,
-      height_mm: body.data.height_mm,
-      base: body.data.base,
-      colour,
-      model,
-      seed: body.data.seed ?? randomInt(1, 2 ** 31 - 1),
-      multiview: Boolean(image) && body.data.multiview,
-    });
+    await m.generate(meta.id, params);
   } catch (err) {
     if (err instanceof CadWorkerError) return workerFailed(err);
     throw err;
@@ -674,8 +722,11 @@ export const remakeCadGuide = handler<{ id: string }>(async ({ params }) => {
   const w = worker();
   if (!w) return disabled();
   const { outcome } = await startTask(guideTaskKey(params.id), () => w.guide(params.id), {
+    info: { kind: 'cad-guide', label: job.title || job.prompt.slice(0, 80), page: 'cad' },
     waitMs: GUIDE_WAIT_MS,
     failed: (guide) => (guide.ok ? null : guide.error ?? 'Không vẽ được hướng dẫn lắp.'),
+    // A guide drawn without its video still counts, the reason why is kept
+    explain: (guide) => (guide.ok && guide.error ? [`Không có video: ${guide.error}`] : []),
   });
   if (outcome && 'value' in outcome) {
     const guide = outcome.value;

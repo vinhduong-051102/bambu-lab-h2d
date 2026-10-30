@@ -40,6 +40,9 @@ function fakeWorker() {
       await released;
       return reply(200, { ok: true, report: { status: 'PASS' }, results: {} });
     }
+    if (req.url === '/eng/check' && req.method === 'POST' && (seen.at(-1)?.body as { job_id?: string })?.job_id === '20261029-120000-bad1') {
+      return reply(422, { ok: false, error: 'INVALID_INPUT', message: 'Thông số in sai', details: [{ path: 'print.nozzle_mm', message: 'Phải lớn hơn 0' }] });
+    }
     if (req.url === '/eng/check' && req.method === 'POST') return reply(200, { ok: true, report: { status: 'WARNING' }, results: {} });
     if (req.url === '/eng/checks/20261029-120000-slow') return reply(200, { ok: true, report: null, results: {} });
     if (req.url === '/eng/checks/20261028-101211-01bd') return reply(200, { ok: true, report: null, results: {} });
@@ -117,6 +120,32 @@ describe('Engineering analysis (/api/eng)', () => {
     worker.release();
     await expect.poll(async () => (await app.inject({ method: 'GET', url: `/api/eng/checks/${job}` })).json().task.running).toBe(false);
     expect(worker.seen.filter((r) => r.url === '/eng/check')).toHaveLength(1);
+  });
+
+  it('lists a failed check on the task panel with its details, and runs it again from there', async () => {
+    const job = '20261029-120000-bad1';
+    const run = await app.inject({ method: 'POST', url: '/api/eng/check', payload: { job_id: job, name: 'Giá đỡ', print: { nozzle_mm: 0 } } });
+    expect(run.statusCode).toBe(422);
+    const tasks = (await app.inject({ method: 'GET', url: '/api/tasks' })).json().tasks;
+    const task = tasks.find((t: { key: string }) => t.key === `eng-check:${job}`);
+    expect(task).toMatchObject({
+      kind: 'eng-check',
+      label: 'Giá đỡ',
+      state: 'failed',
+      error: 'Thông số in sai',
+      details: ['HTTP 422 · INVALID_INPUT', 'print.nozzle_mm: Phải lớn hơn 0'],
+    });
+    const again = await app.inject({ method: 'POST', url: task.retry_url, payload: {} });
+    expect(again.statusCode).toBe(202);
+    const state = async () =>
+      (await app.inject({ method: 'GET', url: '/api/tasks' })).json().tasks.find((t: { key: string }) => t.key === `eng-check:${job}`).state;
+    await expect.poll(state).toBe('failed');
+    // Run again as first asked
+    expect(worker.seen.filter((r) => r.url === '/eng/check').map((r) => r.body)).toEqual([
+      { job_id: job, name: 'Giá đỡ', print: { nozzle_mm: 0 } },
+      { job_id: job, name: 'Giá đỡ', print: { nozzle_mm: 0 } },
+    ]);
+    expect((await app.inject({ method: 'POST', url: '/api/tasks/retry?key=nope', payload: {} })).statusCode).toBe(409);
   });
 
   it('refuses unknown tools and paths that leave the analysis folder', async () => {

@@ -19,6 +19,7 @@ import { ClaudeLimitsCard } from './system/ClaudeLimitsCard';
 import { ConsoleCard } from './system/ConsoleCard';
 import { DiagnosticsCard } from './system/DiagnosticsCard';
 import { ApiModal, CapabilitiesModal } from './system/InfoModals';
+import { TasksButton } from './system/TasksPanel';
 
 const WS_BADGE: Record<WsStatus, { status: 'success' | 'error' | 'processing'; text: string }> = {
   connecting: { status: 'processing', text: 'WS Connecting...' },
@@ -66,7 +67,7 @@ function usePage(available: string[]) {
   return [page, go] as const;
 }
 
-function Header({ onApi, onCapabilities }: { onApi: () => void; onCapabilities: () => void }) {
+function Header({ onApi, onCapabilities, onPage }: { onApi: () => void; onCapabilities: () => void; onPage: (page: string) => void }) {
   const { printer, wsStatus } = useLive();
   const { compact, setCompact, showToast } = useActions();
   const toggleCompact = (on: boolean) => {
@@ -94,6 +95,7 @@ function Header({ onApi, onCapabilities }: { onApi: () => void; onCapabilities: 
           </div>
         </Flex>
         <Flex align="center" gap={12} wrap>
+          <TasksButton onOpen={onPage} />
           <Space size={6} title="Giao Diện Đơn Giản: ẩn log & hướng dẫn">
             <EyeOutlined />
             <Switch size="small" checked={compact} onChange={toggleCompact} />
@@ -220,7 +222,7 @@ export function Shell() {
   return (
     <Layout className="dashboard">
       <Flex vertical gap={16}>
-        <Header onApi={() => setApiOpen(true)} onCapabilities={() => setCapOpen(true)} />
+        <Header onApi={() => setApiOpen(true)} onCapabilities={() => setCapOpen(true)} onPage={go} />
         <ControlBar />
         <Tabs activeKey={page} onChange={go} items={pages} size="large" />
       </Flex>

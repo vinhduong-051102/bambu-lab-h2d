@@ -139,7 +139,12 @@ async function setup(body: Record<string, unknown>): Promise<Response> {
   const modelId = typeof body.job_id === 'string' ? `job-${body.job_id}` : typeof body.model_id === 'string' ? body.model_id : null;
   if (!modelId || !MODEL_RE.test(modelId)) return forward('POST', 'models/setup', body);
   const { outcome, state } = await startTask(setupTask(modelId), () => reach('POST', 'models/setup', body), {
+    info: { kind: 'mech-setup', label: typeof body.name === 'string' && body.name ? body.name : modelId, page: 'cad' },
     waitMs: SETUP_WAIT_MS,
+    explain: (res) =>
+      res.status >= 200 && res.status < 300 && res.data.success
+        ? []
+        : [`HTTP ${res.status || 'không kết nối được'}${res.data.error ? ` · ${String(res.data.error)}` : ''}`],
     failed: (res) => (res.status >= 200 && res.status < 300 && res.data.success ? null : String(res.data.message ?? `HTTP ${res.status}`)),
   });
   if (outcome && 'value' in outcome) return json(outcome.value.data, outcome.value.status || 502);

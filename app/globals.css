@@ -589,3 +589,19 @@ body {
 .limits-active {
   border-color: var(--primary-accent) !important;
 }
+
+/* ---------- Background tasks ---------- */
+/* A failed task's details: worker messages and stderr lines, kept as written */
+.task-details {
+  margin: 0;
+  font-family: var(--font-mono);
+  max-height: 260px;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-size: 12px;
+  line-height: 1.5;
+  padding: 8px 10px;
+  border-radius: 6px;
+  background: rgba(128, 128, 128, 0.1);
+}

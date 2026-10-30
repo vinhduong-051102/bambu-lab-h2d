@@ -97,6 +97,15 @@ export const getEng = handler<{ path: string[] }>(async ({ request, params }) =>
   return json({ ...data, task: getTask(checkTask(params.path[1])) });
 });
 
+/** What the worker said beyond its message: the error code, and each field it refused with why */
+function workerDetails(status: number, data: Record<string, unknown>): string[] {
+  const lines = [`HTTP ${status}${data.error ? ` · ${String(data.error)}` : ''}`];
+  if (Array.isArray(data.details)) {
+    for (const d of data.details as { path?: string; message?: string }[]) lines.push(d.path ? `${d.path}: ${d.message ?? ''}` : String(d.message ?? JSON.stringify(d)));
+  }
+  return lines;
+}
+
 /** The worker's JSON answer to a check, kept as it came for whoever started it */
 async function runCheck(body: Record<string, unknown>): Promise<{ status: number; data: Record<string, unknown> }> {
   const res = await forward('POST', 'check', body);
@@ -113,8 +122,10 @@ export const postEng = handler<{ path: string[] }>(async ({ request, params }) =
 
   const key = checkTask(body.job_id);
   const { started, state, outcome } = await startTask(key, () => runCheck(body), {
+    info: { kind: 'eng-check', label: typeof body.name === 'string' && body.name ? body.name : body.job_id, page: 'cad' },
     waitMs: CHECK_WAIT_MS,
     failed: ({ status, data }) => (status < 400 && data.success ? null : String(data.message ?? `HTTP ${status}`)),
+    explain: ({ status, data }) => (status < 400 && data.success ? [] : workerDetails(status, data)),
   });
   if (outcome && 'value' in outcome) return json(outcome.value.data, outcome.value.status);
   if (outcome) throw outcome.error;

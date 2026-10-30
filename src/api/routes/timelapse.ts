@@ -8,6 +8,7 @@ import { isPrintId, PrintJournal } from '../../domain/prints/PrintJournal';
 import { AiSessionStore, PRINT_ISSUE_LABELS, PRINT_OUTCOME_LABELS } from '../../domain/studio/aiSessions';
 import { isVideoName, matchPrint, TimelapseLibrary } from '../../domain/timelapse/TimelapseLibrary';
 import { ClaudeCodeVision, FfmpegFrames, TimelapseReviewer, type TimelapseReview } from '../../domain/timelapse/TimelapseReviewer';
+import { startTask } from '../../domain/backgroundTasks';
 import { handler, json, readJsonBody } from '../http';
 
 let library: TimelapseLibrary | null = null;
@@ -192,14 +193,23 @@ export const startTimelapseReview = handler<{ name: string }>(async ({ request, 
   if (body.data.print_id && !print) {
     return json({ success: false, error: 'PRINT_NOT_FOUND', message: 'Không tìm thấy bản in này.' }, 404);
   }
-  void reviews().start(
-    video.name,
+  // Listed on the dashboard's task panel, where a failed review can be asked again
+  await startTask(
+    `timelapse-review:${video.name}`,
     async () => {
-      const file = await timelapses().video(video.name);
-      if (!file) throw new Error('Máy in không còn video này.');
-      return file;
+      await reviews().start(
+        video.name,
+        async () => {
+          const file = await timelapses().video(video.name);
+          if (!file) throw new Error('Máy in không còn video này.');
+          return file;
+        },
+        print
+      );
+      const state = await reviews().state(video.name);
+      if (state.status === 'failed') throw new Error(state.error);
     },
-    print
+    { info: { kind: 'timelapse-review', label: print?.job_name ?? video.name, page: 'prints' } }
   );
   return json({ success: true, ...reviewInfo(), ...(await reviews().state(video.name)) }, 202);
 });
