@@ -46,8 +46,9 @@ simulation setup (one design per model, one revision per change); the live viewe
 - **Contact.** A part with `collision: true` needs a `friction` (asked for, never assumed); its group's convex hull
   is computed in the mesh worker and sent with the mechanism, because the live container has no trimesh.
 - **Time.** Physics step = the design's `time_step`; the session steps against the wall clock (×speed) and drops
-  what it cannot do, reporting the real-time factor; the viewer draws at the browser's frame rate from the latest
-  state (≤ 30 Hz stream); simulation time `t` is shown. Chrono runs in its own container: the page never blocks.
+  what it cannot do, reporting the real-time factor; the viewer draws at the browser's frame rate, a moment (~80 ms)
+  behind the stream (≤ 60 Hz), each body interpolated between the two Chrono states around the time drawn
+  (`smoothPlayback` in `src/ui/simLive.js`); simulation time `t` is shown. Chrono runs in its own container: the page never blocks.
 
 ## 3. States (read from stored data, never from the page)
 

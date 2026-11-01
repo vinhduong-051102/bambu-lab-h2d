@@ -9,7 +9,7 @@ import { OBJLoader } from 'three/examples/jsm/loaders/OBJLoader.js';
 import { PLYLoader } from 'three/examples/jsm/loaders/PLYLoader.js';
 import { STLLoader } from 'three/examples/jsm/loaders/STLLoader.js';
 import { formatNumber } from '../sim';
-import { arrowLength, latestOnly, liveUrl, motorDisplay, norm, pace, threeQuaternion, toSi } from '../simLive';
+import { arrowLength, latestOnly, liveUrl, motorDisplay, norm, pace, smoothPlayback, threeQuaternion, toSi } from '../simLive';
 
 /**
  * The interactive simulation viewer (docs/interactive-physics.md): a live Chrono session in the sim-live container,
@@ -162,6 +162,8 @@ export function SimLive({
   const { message } = App.useApp();
   const mountRef = useRef<HTMLDivElement>(null);
   const stateRef = useRef<LiveState | null>(null);
+  // What the 3D view draws: the states as they come, played back smoothly (simLive.smoothPlayback)
+  const playbackRef = useRef(smoothPlayback());
   const [scene, setScene] = useState<LiveScene | null>(null);
   const [state, setState] = useState<LiveState | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -193,6 +195,7 @@ export function SimLive({
       .then((data) => {
         setScene(data.scene);
         stateRef.current = data.state;
+        playbackRef.current.push(data.state, performance.now());
         setState(data.state);
       })
       .catch((err) => setError(err.message));
@@ -205,12 +208,13 @@ export function SimLive({
     const take = (next: LiveState) => {
       stateRef.current = next;
       const now = performance.now();
+      playbackRef.current.push(next, now);
       if (now - shown > 125) {
         shown = now;
         setState(next);
       }
     };
-    const source = new EventSource(liveUrl(sessionId, '/stream?hz=30'));
+    const source = new EventSource(liveUrl(sessionId, '/stream?hz=60'));
     source.onmessage = (event) => take(JSON.parse(event.data));
     source.addEventListener('end', () => {
       source.close();
@@ -345,7 +349,7 @@ export function SimLive({
     let frame = 0;
     const draw = () => {
       frame = requestAnimationFrame(draw);
-      const s = stateRef.current;
+      const s = (playbackRef.current.frame(performance.now()) as LiveState | null) ?? stateRef.current;
       const pick = pickedRef.current;
       for (const mesh of pickable) {
         const on = Boolean(pick && mesh.userData.bodyId === pick.body && (pick.part === null || mesh.userData.partId === pick.part));
