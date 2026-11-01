@@ -22,6 +22,8 @@ HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 
 MAX_SHEETS = 12
+# ISO 5455 reduction scales, tried in turn until every sheet's views fit its A3 frame
+SCALES = (1.0, 0.5, 0.2, 0.1, 0.05)
 
 
 def sheets_of(model, title):
@@ -47,14 +49,24 @@ def sheets_of(model, title):
 
 
 def draw(model, out, title):
-    from cadgen.eng_drawing import Sheet, eng_drawing
-
     parts, cut = sheets_of(model, title)
+    for scale in SCALES:
+        try:
+            return render(model, out, parts, scale), cut
+        except ValueError as err:
+            # cadgen refuses views that run off the frame, naming a scale that fits
+            if "runs off the frame" not in str(err) or scale == SCALES[-1]:
+                raise
+    raise AssertionError("unreachable")
+
+
+def render(model, out, parts, scale):
+    from cadgen.eng_drawing import Sheet, eng_drawing
 
     def drawing():
         sheets = []
         for k, (name, part) in enumerate(parts, 1):
-            sheet = Sheet("A3", title=name.upper()[:60], part_number=f"{Path(model).parent.name}-{k:02d}",
+            sheet = Sheet("A3", scale=scale, title=name.upper()[:60], part_number=f"{Path(model).parent.name}-{k:02d}",
                           material="PLA (FDM)", units="mm", notes=["3D PRINTED ON BAMBU LAB H2D.",
                                                                    "DIMENSIONS AS MODELLED, BEFORE PRINT SHRINKAGE."])
             top, front, right, _iso = sheet.three_views(part, iso=True)
@@ -65,7 +77,7 @@ def draw(model, out, title):
 
     drawing.__name__ = "drawing"
     eng_drawing(out=str(out))(drawing)()
-    return len(parts), cut
+    return len(parts)
 
 
 def main():
