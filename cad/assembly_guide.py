@@ -31,6 +31,8 @@ GUIDE_DIR = "guide"
 WIDTH, HEIGHT, HEADER = 960, 720, 92
 # Drawn this many times larger, then scaled down: PIL fills polygons without anti-aliasing
 SUPERSAMPLE = 2
+# The meshes are drawn coarsened to a grid this many cells across the model: about a pixel of the picture
+GRID_CELLS = 500
 FPS = 24
 # Frames of each step: still with its arrow, moving in, still in place; then the turn round the finished model
 HOLD_BEFORE, MOVE, HOLD_AFTER, TURN = 12, 18, 8, 72
@@ -60,6 +62,15 @@ def axis_name(v, signed=False):
     return "(" + ", ".join(f"{c:.2f}" for c in v) + ")"
 
 
+def coarsen(tris, cell):
+    """The triangles with their corners snapped to a grid of `cell` mm, those that collapse dropped (vertex
+    clustering): the shape as the pictures can show it, with far fewer triangles"""
+    snapped = np.round(tris / cell) * cell
+    a, b, c = snapped[:, 0], snapped[:, 1], snapped[:, 2]
+    kept = ~(np.all(a == b, axis=1) | np.all(b == c, axis=1) | np.all(a == c, axis=1))
+    return snapped[kept] if kept.any() else tris  # a part smaller than a cell keeps its own triangles
+
+
 def joint_axis(joint):
     axis = joint.get("axis")
     return unit(axis) if isinstance(axis, list) and len(axis) == 3 else None
@@ -80,6 +91,10 @@ class Guide:
                        and j.get("part_a") in self.meshes and j.get("part_b") in self.meshes]
         everything = np.concatenate([m.reshape(-1, 3) for m in self.meshes.values()])
         self.size = float(max(everything.max(axis=0) - everything.min(axis=0)))
+        # Every frame draws every triangle in Python: the STLs' fine tessellation (a robot arm's 200k-odd triangles)
+        # would take the guide hours, and at this size nothing finer than a pixel shows
+        cell = self.size / GRID_CELLS
+        self.meshes = {name: coarsen(mesh, cell) for name, mesh in self.meshes.items()}
         self.given = assembly.get("steps") or []
 
     def partner(self, name, placed):
