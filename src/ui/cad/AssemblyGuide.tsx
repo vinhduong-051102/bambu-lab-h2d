@@ -1,7 +1,7 @@
 'use client';
 
 import { Alert, App, Button, Empty, Flex, Image, Modal, Spin, Tag, Typography } from 'antd';
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { fileUrl } from '../cad';
 import type { CadJob } from './CadJob';
 
@@ -54,15 +54,18 @@ function GuideView({ job, onJob }: { job: CadJob; onJob?: (job: CadJob) => void 
     return () => clearInterval(timer);
   }, [drawing, job.id, message, onJob]);
 
+  // The card hands over a new job object each time it refreshes its list: read guide.json again only when the job
+  // was built again or the guide drawn again, else the video would start over every few seconds
+  const jobRef = useRef(job);
+  jobRef.current = job;
   const load = useCallback(async () => {
-    setLoading(true);
     try {
-      const res = await fetch(`${fileUrl(job, 'guide.json')}&r=${version}`, { cache: 'no-store' });
+      const res = await fetch(`${fileUrl(jobRef.current, 'guide.json')}&r=${version}`, { cache: 'no-store' });
       setGuide(res.ok ? ((await res.json()) as Guide) : null);
     } finally {
       setLoading(false);
     }
-  }, [job, version]);
+  }, [job.id, job.finished_at, version]);
   useEffect(() => {
     void load();
   }, [load]);
