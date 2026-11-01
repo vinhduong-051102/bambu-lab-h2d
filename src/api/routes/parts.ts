@@ -1,4 +1,5 @@
 import path from 'path';
+import type { Doctor } from '../../domain/retryDoctor';
 import { env } from '../../config/env';
 import { PrintJournal, type PrintRecord } from '../../domain/prints/PrintJournal';
 import type { StudioRequest } from '../../domain/studio/aiOptimize';
@@ -126,6 +127,7 @@ export const analyzePrintParts = handler<{ id: string }>(async ({ params }) => {
   if (!print.setup) return json({ success: false, error: 'NO_SETUP', message: 'Bản in không gửi từ Studio nên không biết mẫu nào.' }, 422);
   const { outcome, state } = await startTask(analyzeTask(print.id), () => partsOfPrint(print, true), {
     info: { kind: 'print-parts', label: print.job_name, page: 'prints' },
+    doctor: PRINT_PARTS_DOCTOR,
     waitMs: ANALYZE_WAIT_MS,
     // The objects Claude could not name, or whose mesh is gone from Studio's imports
     explain: (objects) =>
@@ -149,6 +151,27 @@ export const analyzePrintParts = handler<{ id: string }>(async ({ params }) => {
 // ---------- Earlier prints, all at once ----------
 
 const BACKFILL_TASK = 'parts-backfill';
+
+/** A retry of the earlier prints names again what Claude could not name the first time (a stored naming error
+ * otherwise counts as named) */
+const BACKFILL_DOCTOR: Doctor = {
+  about: 'Đo các vật thể của những bản in cũ (container mesh3d) và nhờ Claude đặt tên các chi tiết từ ảnh render.',
+  knobs: { retry_naming: { type: 'boolean', describe: 'Nhờ Claude đặt tên lại những vật thể lần trước chưa đặt tên được' } },
+  rules: [
+    {
+      match: /chưa đo hoặc chưa đặt tên được/,
+      cause: 'Một số vật thể chưa đặt tên được; lần chạy trước giữ nguyên lỗi đặt tên đã lưu nên không hỏi lại Claude.',
+      tune: (t) => (t.retry_naming ? null : { ...t, retry_naming: true }),
+    },
+  ],
+};
+
+/** One print's parts: Claude is asked again already (retryNaming), so a retry has nothing to turn */
+const PRINT_PARTS_DOCTOR: Doctor = {
+  about: 'Đo các vật thể của một bản in (container mesh3d) và nhờ Claude đặt tên các chi tiết từ ảnh render.',
+  knobs: {},
+  rules: [],
+};
 
 /** How far measuring the earlier prints has got, in the shape the button reads */
 function backfillState() {
@@ -175,14 +198,14 @@ export const startPartsBackfill = handler(async () => {
   const objects = [...new Map(prints.flatMap((p) => objectsOf(p.setup!)).map((o) => [JSON.stringify(o), o])).values()];
   await startTask(
     BACKFILL_TASK,
-    async (progress) => {
+    async (progress, tuning) => {
       // Objects that did not match a mesh are listed; ones that failed (or Claude could not name) make it an error
       const notes: string[] = [];
       let failures = 0;
       progress(0, objects.length);
       for (const [i, object] of objects.entries()) {
         try {
-          const analysis = await parts.analyze(object);
+          const analysis = await parts.analyze(object, tuning.retry_naming ? { retryNaming: true } : undefined);
           if (analysis && !analysis.matched) notes.push(`${object.name}: ${analysis.reason ?? 'không khớp'}`);
           if (analysis?.naming_error) {
             notes.push(`${object.name}: ${analysis.naming_error}`);
@@ -198,6 +221,7 @@ export const startPartsBackfill = handler(async () => {
     },
     {
       info: { kind: 'parts-backfill', label: `${objects.length} vật thể của các bản in cũ`, page: 'prints' },
+      doctor: BACKFILL_DOCTOR,
       failed: ({ failures }) => (failures ? `${failures}/${objects.length} vật thể chưa đo hoặc chưa đặt tên được` : null),
       explain: ({ notes }) => notes,
     }

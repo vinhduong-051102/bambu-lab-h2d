@@ -20,6 +20,49 @@ export interface PanelTask {
   progress: { done: number; total: number | null; unit?: string | null } | null;
   retry_url: string | null;
   retry_hint?: string;
+  attempt?: number;
+  /** A retry's analysis of the failure before it (src/domain/retryDoctor.ts) */
+  diagnosis?: Diagnosis | { pending: true } | null;
+}
+
+interface Diagnosis {
+  by: 'rule' | 'claude' | 'none';
+  cause: string;
+  changes: string[];
+  stop: string | null;
+  hint: string | null;
+}
+
+const BY = { rule: 'theo quy tắc', claude: 'Claude phân tích', none: 'chưa phân tích được' } as const;
+
+/** Why the run before failed and what this run does differently, under a task that was run again */
+function DiagnosisNote({ task }: { task: PanelTask }) {
+  const d = task.diagnosis;
+  if (!d) return null;
+  if ('pending' in d) {
+    return (
+      <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+        <LoadingOutlined /> Đang phân tích lỗi lần trước…
+      </Typography.Text>
+    );
+  }
+  return (
+    <Flex vertical gap={2} className="task-diagnosis">
+      <Typography.Text style={{ fontSize: 12 }}>
+        <Typography.Text strong style={{ fontSize: 12 }}>
+          Lần chạy {task.attempt ?? 2} · {BY[d.by]}:
+        </Typography.Text>{' '}
+        {d.cause}
+      </Typography.Text>
+      {d.changes.length > 0 && <Typography.Text style={{ fontSize: 12 }}>→ Chạy lại với: {d.changes.join('; ')}</Typography.Text>}
+      {d.hint && <Typography.Text style={{ fontSize: 12 }}>→ Dặn Claude: {d.hint}</Typography.Text>}
+      {d.stop && (
+        <Typography.Text type="danger" style={{ fontSize: 12 }}>
+          Dừng: {d.stop}
+        </Typography.Text>
+      )}
+    </Flex>
+  );
 }
 
 const STORAGE_KEY = 'dismissed-tasks';
@@ -88,6 +131,7 @@ function TaskItem({ task, onRetry, onOpen, onDismiss }: { task: PanelTask; onRet
             )}
           </Space>
         </Flex>
+        <DiagnosisNote task={task} />
         {task.state === 'running' && p && p.total ? (
           <Progress percent={Math.round((p.done / p.total) * 100)} size="small" format={() => (p.unit === '%' ? `${p.done}%` : `${p.done}/${p.total}${p.unit ? ` ${p.unit}` : ''}`)} />
         ) : null}

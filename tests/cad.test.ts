@@ -10,6 +10,7 @@ import { env } from '../src/config/env';
 import { buildRequest, CadJobStore, CadWorkerError, newJobId, type CadBuildReport, type CadWorkerApi } from '../src/domain/cad/cadJobs';
 import { setCadJobStore, setCadWorker } from '../src/api/routes/cad';
 import { writeStl } from '../src/domain/studio/meshRepair';
+import type { RetryNote } from '../src/domain/retryDoctor';
 import { createTestApp, type TestApp } from './helpers/testApp';
 
 const CUBE = writeStl(
@@ -28,7 +29,7 @@ const REPORT: CadBuildReport = {
 
 /** Stands in for the CAD container: writes what cad/worker.py would into the shared job folder */
 class FakeWorker implements CadWorkerApi {
-  generated: { id: string; model: string }[] = [];
+  generated: { id: string; model: string; extra?: { retry?: RetryNote; timeout_s?: number } }[] = [];
   built: string[] = [];
   cancelled: string[] = [];
   guided: string[] = [];
@@ -43,9 +44,9 @@ class FakeWorker implements CadWorkerApi {
     return { ok: true, claude: true, running: this.running };
   }
 
-  async generate(id: string, model: string) {
+  async generate(id: string, model: string, extra?: { retry?: RetryNote; timeout_s?: number }) {
     if (this.fail) throw this.fail;
-    this.generated.push({ id, model });
+    this.generated.push({ id, model, ...(extra && { extra }) });
     this.running.push(id);
     await this.status(id, { state: 'running', step: 'building', notes: ['• Đang dựng hộp'], builds: 1 });
   }
@@ -246,6 +247,14 @@ describe('AI modelling API (/api/cad)', () => {
     const retried = await app.inject({ method: 'POST', url: `/api/cad/jobs/${job.id}/retry`, payload: {} });
     expect(retried.statusCode).toBe(202);
     expect(worker.generated.map((g) => g.id)).toEqual([job.id, job.id]);
+    // Analysed by its rule: more time, and Claude told what failed and to carry on from its model.py
+    expect(retried.json().diagnosis).toMatchObject({ by: 'rule', tuning: { timeout_s: 4800 }, stop: null });
+    expect(worker.generated[1].extra).toMatchObject({
+      timeout_s: 4800,
+      retry: { error: 'Claude chạy quá 40 phút nên đã bị dừng', details: expect.arrayContaining(['Lần dựng cuối: NameError: Box2']) },
+    });
+    expect(worker.generated[1].extra?.retry?.hint).toMatch(/tiếp tục từ model.py/);
+    expect(retried.json().job.retry).toMatchObject({ attempt: 2, tuning: { timeout_s: 4800 } });
     expect(retried.json().job.state).toBe('running');
     expect((await app.inject({ method: 'POST', url: `/api/cad/jobs/${job.id}/retry`, payload: {} })).statusCode).toBe(409);
   });

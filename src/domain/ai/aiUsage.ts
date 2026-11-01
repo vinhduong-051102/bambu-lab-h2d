@@ -15,7 +15,7 @@
 import { promises as fs } from 'fs';
 import path from 'path';
 
-export type AiFeature = 'cad' | 'figure' | 'timelapse' | 'parts' | 'studio';
+export type AiFeature = 'cad' | 'figure' | 'timelapse' | 'parts' | 'studio' | 'retry';
 
 export const AI_FEATURES: Record<AiFeature, string> = {
   cad: 'Thiết kế AI (mô hình CAD)',
@@ -23,6 +23,7 @@ export const AI_FEATURES: Record<AiFeature, string> = {
   timelapse: 'Đánh giá timelapse',
   parts: 'Nhận diện chi tiết mẫu',
   studio: 'AI tối ưu trong Studio',
+  retry: 'Phân tích lỗi khi thử lại',
 };
 
 export interface AiTokens {

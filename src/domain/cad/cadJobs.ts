@@ -2,6 +2,8 @@ import { randomBytes } from 'crypto';
 import { promises as fs } from 'fs';
 import path from 'path';
 import { getTask, type TaskState } from '../backgroundTasks';
+import { waitFor } from './cadDoctors';
+import type { Diagnosis, RetryNote, Tuning } from '../retryDoctor';
 
 /**
  * Models designed by AI (docs/cad.md). Each job is a folder in CAD_JOBS_DIR, shared with the CAD and mesh
@@ -133,6 +135,16 @@ interface WorkerStatus {
   guide?: CadGuideOutcome | null;
 }
 
+/** A job's retries: written by POST /api/cad/jobs/:id/retry, kept in the job's folder (retry.json) */
+export interface CadRetry {
+  /** Runs so far, the first counted */
+  attempt: number;
+  tuning: Tuning;
+  diagnosis: Diagnosis | null;
+  /** Failures with the settings they ran with, to stop one that repeats */
+  history: string[];
+}
+
 export interface CadJob extends CadJobMeta {
   state: CadJobState;
   step: string | null;
@@ -160,6 +172,8 @@ export interface CadJob extends CadJobMeta {
   error_details: string[];
   /** Whether POST /api/cad/jobs/:id/retry can run it again in place (a figure needs the settings it was asked with) */
   retryable: boolean;
+  /** Its retries (retry.json): how many, with which settings, and the last one's analysis of the failure before */
+  retry: CadRetry | null;
   /**
    * threemf: a coloured figure's 3MF, its faces painted with the filaments in report.palette; fix: the fix.py
    * of an older Claude review; views: the six sides Claude checked the figure from; sides: the sides a figure was
@@ -379,6 +393,7 @@ export class CadJobStore {
       drawing_task: getTask(drawingTaskKey(id)),
       dfam_task: getTask(dfamTaskKey(id)),
       error_details: status?.state === 'failed' ? await failureDetails(dir, status) : [],
+      retry: await readJson<CadRetry>(path.join(dir, RETRY_FILE)),
       retryable:
         meta.source === 'claude'
           ? await exists(path.join(dir, 'request.md'))
@@ -466,6 +481,12 @@ export class CadJobStore {
   }
 
   /** The settings a figure was asked with (written since retrying came in); null for older ones */
+  /** Keeps a job's retries (retry.json) */
+  async saveRetry(id: string, retry: CadRetry): Promise<void> {
+    const dir = this.jobDir(id);
+    if (dir) await writeJson(path.join(dir, RETRY_FILE), retry);
+  }
+
   async meshParams(id: string): Promise<MeshParams | null> {
     const dir = this.jobDir(id);
     return dir ? readJson<MeshParams>(path.join(dir, MESH_PARAMS)) : null;
@@ -544,6 +565,7 @@ function attachmentLine(names: string[]): string {
 }
 
 const MESH_PARAMS = 'mesh-params.json';
+const RETRY_FILE = 'retry.json';
 const STDERR_LINES = 12;
 
 /**
@@ -633,15 +655,16 @@ export interface CadWorkerHealth {
 /** The worker's HTTP API (cad/worker.py) */
 export interface CadWorkerApi {
   health(): Promise<CadWorkerHealth>;
-  generate(id: string, model: string): Promise<void>;
-  build(id: string): Promise<CadBuildReport>;
+  /** `retry`: why the run before failed, for Claude; `timeout_s`: its time on a retry */
+  generate(id: string, model: string, extra?: { retry?: RetryNote; timeout_s?: number }): Promise<void>;
+  build(id: string, tuning?: Tuning): Promise<CadBuildReport>;
   cancel(id: string): Promise<void>;
   /** Draws the assembly guide of a built assembly again */
-  guide(id: string): Promise<CadGuideOutcome>;
+  guide(id: string, tuning?: Tuning): Promise<CadGuideOutcome>;
   /** Draws the engineering drawing of a built model (out/drawing.pdf) */
-  drawing(id: string, title: string): Promise<CadDrawingOutcome>;
+  drawing(id: string, title: string, tuning?: Tuning): Promise<CadDrawingOutcome>;
   /** Runs the DfAM check of a built model (out/dfam.json) */
-  dfam(id: string): Promise<CadDfam>;
+  dfam(id: string, tuning?: Tuning): Promise<CadDfam>;
   /** A link to the CAD Viewer page of a built model: its path on the viewer's origin, with the engine's token */
   viewer(id: string): Promise<CadViewerLink>;
 }
@@ -691,32 +714,32 @@ export class CadWorkerClient extends WorkerHttp implements CadWorkerApi {
     return this.call<CadWorkerHealth>('GET', '/health', undefined, 3000);
   }
 
-  async generate(id: string, model: string) {
-    await this.call('POST', `/jobs/${id}/generate`, { model }, 10000);
+  async generate(id: string, model: string, extra: { retry?: RetryNote; timeout_s?: number } = {}) {
+    await this.call('POST', `/jobs/${id}/generate`, { model, ...extra }, 10000);
   }
 
-  async build(id: string) {
-    // The worker allows a model 180 s to build
-    return (await this.call<{ report: CadBuildReport }>('POST', `/jobs/${id}/build`, {}, 200000)).report;
+  async build(id: string, tuning: Tuning = {}) {
+    // The worker allows a model 180 s to build, or what a retry gives it
+    return (await this.call<{ report: CadBuildReport }>('POST', `/jobs/${id}/build`, tuning, waitFor(tuning, 180))).report;
   }
 
   async cancel(id: string) {
     await this.call('POST', `/jobs/${id}/cancel`, {}, 10000);
   }
 
-  async guide(id: string) {
-    // The worker allows a guide 420 s (a frame of video for every step's every move)
-    return (await this.call<{ guide: CadGuideOutcome }>('POST', `/jobs/${id}/guide`, {}, 450000)).guide;
+  async guide(id: string, tuning: Tuning = {}) {
+    // The worker allows a guide 420 s (a frame of video for every step's every move), or what a retry gives it
+    return (await this.call<{ guide: CadGuideOutcome }>('POST', `/jobs/${id}/guide`, tuning, waitFor(tuning, 420))).guide;
   }
 
-  drawing(id: string, title: string) {
+  drawing(id: string, title: string, tuning: Tuning = {}) {
     // The worker allows a drawing 300 s (hidden lines of every view, a sheet per printed part)
-    return this.call<CadDrawingOutcome>('POST', `/jobs/${id}/drawing`, { title }, 320000);
+    return this.call<CadDrawingOutcome>('POST', `/jobs/${id}/drawing`, { title, ...tuning }, waitFor(tuning, 300));
   }
 
-  dfam(id: string) {
+  dfam(id: string, tuning: Tuning = {}) {
     // The worker allows a check 600 s (ray casting the wall thickness of a large mesh)
-    return this.call<CadDfam>('POST', `/jobs/${id}/dfam`, {}, 620000);
+    return this.call<CadDfam>('POST', `/jobs/${id}/dfam`, tuning, waitFor(tuning, 600));
   }
 
   viewer(id: string) {
@@ -763,9 +786,9 @@ export interface MeshParams {
 /** The mesh worker's HTTP API (mesh3d/worker.py) */
 export interface MeshWorkerApi {
   health(): Promise<MeshWorkerHealth>;
-  generate(id: string, params: MeshParams): Promise<void>;
+  generate(id: string, params: MeshParams, retry?: RetryNote): Promise<void>;
   /** Claude reviews and fixes the figure of `parentId` in job `id` (mesh3d/review.py) */
-  fix(id: string, parentId: string, model: string): Promise<void>;
+  fix(id: string, parentId: string, model: string, retry?: RetryNote): Promise<void>;
   cancel(id: string): Promise<void>;
 }
 
@@ -778,13 +801,13 @@ export class MeshWorkerClient extends WorkerHttp implements MeshWorkerApi {
     return this.call<MeshWorkerHealth>('GET', '/health', undefined, 3000);
   }
 
-  async generate(id: string, params: MeshParams) {
-    await this.call('POST', `/jobs/${id}/generate`, params, 10000);
+  async generate(id: string, params: MeshParams, retry?: RetryNote) {
+    await this.call('POST', `/jobs/${id}/generate`, { ...params, ...(retry && { retry }) }, 10000);
   }
 
-  async fix(id: string, parentId: string, model: string) {
+  async fix(id: string, parentId: string, model: string, retry?: RetryNote) {
     // The worker copies the figure and its picture before it answers
-    await this.call('POST', `/jobs/${id}/fix`, { parent_id: parentId, model }, 30000);
+    await this.call('POST', `/jobs/${id}/fix`, { parent_id: parentId, model, ...(retry && { retry }) }, 30000);
   }
 
   async cancel(id: string) {

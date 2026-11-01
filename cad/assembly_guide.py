@@ -16,6 +16,7 @@ Nothing checks that a part's way in is clear: it is the order a person would try
 
 import json
 import math
+import os
 import shutil
 import subprocess
 import sys
@@ -31,8 +32,10 @@ GUIDE_DIR = "guide"
 WIDTH, HEIGHT, HEADER = 960, 720, 92
 # Drawn this many times larger, then scaled down: PIL fills polygons without anti-aliasing
 SUPERSAMPLE = 2
-# The meshes are drawn coarsened to a grid this many cells across the model: about a pixel of the picture
-GRID_CELLS = 500
+# The meshes are drawn coarsened to a grid this many cells across the model: about a pixel of the picture. A retry
+# of a guide that ran out of time draws coarser (GUIDE_GRID_CELLS), or the pictures only (GUIDE_VIDEO=0)
+GRID_CELLS = int(os.environ.get("GUIDE_GRID_CELLS") or 500)
+VIDEO = os.environ.get("GUIDE_VIDEO", "1") != "0"
 # How much of the parts going on shows over what is in front of them (0–255): enough to see them whole, while the
 # parts in front still show through
 FRONT_ALPHA = 200
@@ -366,7 +369,7 @@ class Video:
 
     def __init__(self, path):
         self.path, self.frames, self.proc = path, 0, None
-        if shutil.which("ffmpeg"):
+        if path and shutil.which("ffmpeg"):
             self.proc = subprocess.Popen(
                 ["ffmpeg", "-loglevel", "error", "-y", "-f", "rawvideo", "-pix_fmt", "rgb24", "-s", f"{WIDTH}x{HEIGHT}",
                  "-r", str(FPS), "-i", "-", "-c:v", "libx264", "-preset", "veryfast", "-crf", "23",
@@ -381,6 +384,8 @@ class Video:
                 self.proc.stdin.write(data)
 
     def close(self):
+        if not self.path:
+            return "Bỏ video để vẽ kịp (lần chạy lại sau khi vẽ quá thời gian)."
         if not self.proc:
             return "Không có ffmpeg nên không làm được video."
         self.proc.stdin.close()
@@ -402,7 +407,7 @@ def make(out):
     points += [guide.meshes[name].reshape(-1, 3) + move["direction"] * move["distance"]
                for step in steps for name, move in step["moves"].items()]
     frame = Frame(camera, np.concatenate(points))
-    video = Video(folder / "assembly.mp4")
+    video = Video(folder / "assembly.mp4" if VIDEO else None)
     total = len(steps)
     placed = []
     for step in steps:
@@ -421,7 +426,7 @@ def make(out):
         start = picture(0, arrows=True)
         start.save(folder / step["image"])
         video.add(start, HOLD_BEFORE if moves else HOLD_BEFORE + MOVE)
-        if moves:
+        if moves and VIDEO:
             for k in range(1, MOVE + 1):
                 video.add(picture(ease(k / MOVE), arrows=False))
             video.add(picture(1, arrows=False), HOLD_AFTER)
@@ -431,7 +436,7 @@ def make(out):
     everything = np.concatenate([m.reshape(-1, 3) for m in guide.meshes.values()])
     centre = everything.mean(axis=0)
     radius = float(np.linalg.norm(everything - centre, axis=1).max())
-    for k in range(TURN):
+    for k in range(TURN if VIDEO else 1):
         turning = Camera(camera.elevation, camera.azimuth + 360 * k / TURN)
         ring = Frame(turning, np.array([centre]), fixed_span=np.array([2 * radius, 2 * radius]))
         image = draw(turning, ring, [(guide.meshes[p], PLACED) for p in guide.names], "Hoàn thành",

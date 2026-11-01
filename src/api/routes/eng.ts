@@ -1,5 +1,6 @@
 import { env } from '../../config/env';
 import { getTask, startTask } from '../../domain/backgroundTasks';
+import { ENG_DOCTOR } from '../../domain/cad/cadDoctors';
 import { handler, json, readJsonBody } from '../http';
 
 /**
@@ -119,8 +120,10 @@ export const postEng = handler<{ path: string[] }>(async ({ request, params }) =
   if (route !== 'check' || typeof body.job_id !== 'string' || !JOB_RE.test(body.job_id)) return forward('POST', route, body);
 
   const key = checkTask(body.job_id);
-  const { started, state, outcome } = await startTask(key, () => runCheck(body), {
+  // A retry may leave out the thickness render (Blender), the slowest part (ENG_DOCTOR)
+  const { started, state, outcome } = await startTask(key, (_, tuning) => runCheck({ ...body, ...(tuning.render === false && { render: false }) }), {
     info: { kind: 'eng-check', label: typeof body.name === 'string' && body.name ? body.name : body.job_id, page: 'cad' },
+    doctor: ENG_DOCTOR,
     waitMs: CHECK_WAIT_MS,
     failed: ({ status, data }) => (status < 400 && data.success ? null : String(data.message ?? `HTTP ${status}`)),
     explain: ({ status, data }) => (status < 400 && data.success ? [] : workerDetails(status, data)),

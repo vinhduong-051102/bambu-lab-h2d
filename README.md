@@ -145,6 +145,7 @@ ANTHROPIC_API_KEY=
 STUDIO_AI_MODEL=claude-opus-5-5
 TIMELAPSE_AI_MODEL=claude-opus-5-5
 PARTS_AI_MODEL=claude-opus-5-5
+RETRY_AI_MODEL=claude-sonnet-5-5   # analyses an unknown failure before "Thử lại" runs a task again
 CAD_AI_MODEL=claude-opus-5-5
 
 # Workers (empty = feature off)

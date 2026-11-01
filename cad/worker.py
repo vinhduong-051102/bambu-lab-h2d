@@ -122,38 +122,50 @@ def write_json(path, data):
     os.replace(part, path)
 
 
-def run_build(directory):
+def option(body, name, low, high, default):
+    """A number a retry may set (the gateway's analysis of the failure: more time, coarser…), kept within bounds"""
+    try:
+        value = float(body.get(name))
+    except (TypeError, ValueError):
+        return default
+    return type(default)(min(max(value, low), high))
+
+
+def run_build(directory, timeout=BUILD_TIMEOUT_S):
     """build.py on the job's model.py; its report, or one saying why it did not run"""
     try:
         subprocess.run([sys.executable, str(HERE / "build.py"), "model.py"], cwd=directory,
-                       capture_output=True, timeout=BUILD_TIMEOUT_S, check=False)
+                       capture_output=True, timeout=timeout, check=False)
     except subprocess.TimeoutExpired:
-        return {"ok": False, "error": f"Dựng mô hình quá {BUILD_TIMEOUT_S} giây."}
+        return {"ok": False, "error": f"Dựng mô hình quá {timeout} giây."}
     return read_json(directory / "out" / "report.json") or {"ok": False, "error": "build.py không ghi report.json."}
 
 
-def run_guide(directory):
+def run_guide(directory, timeout=GUIDE_TIMEOUT_S, grid_cells=None, video=True):
     """assembly_guide.py on a built assembly: {ok, steps, video, error}, or None when the model has no assembled
-    components to guide"""
+    components to guide. A retry may give it longer, a coarser grid or no video"""
     assembly = read_json(directory / "out" / "assembly.json")
     if not assembly or assembly.get("from") != "components":
         return None
+    env = {**os.environ, "GUIDE_VIDEO": "1" if video else "0"}
+    if grid_cells:
+        env["GUIDE_GRID_CELLS"] = str(int(grid_cells))
     try:
-        subprocess.run([sys.executable, str(HERE / "assembly_guide.py"), "out"], cwd=directory,
-                       capture_output=True, timeout=GUIDE_TIMEOUT_S, check=False)
+        subprocess.run([sys.executable, str(HERE / "assembly_guide.py"), "out"], cwd=directory, env=env,
+                       capture_output=True, timeout=timeout, check=False)
     except subprocess.TimeoutExpired:
-        return {"ok": False, "error": f"Vẽ hướng dẫn lắp quá {GUIDE_TIMEOUT_S} giây."}
+        return {"ok": False, "error": f"Vẽ hướng dẫn lắp quá {timeout} giây."}
     guide = read_json(directory / "out" / "guide" / "guide.json")
     if not guide:
         return {"ok": False, "error": "assembly_guide.py không ghi guide.json."}
     return {"ok": True, "steps": len(guide["steps"]), "video": guide.get("video"), "error": guide.get("video_error")}
 
 
-def run_script(directory, script, args, timeout, what):
+def run_script(directory, script, args, timeout, what, env=None):
     """One of the worker's scripts that prints a JSON report: that report, or one saying why there is none"""
     try:
         done = subprocess.run([sys.executable, str(HERE / script), *args], cwd=directory, capture_output=True,
-                              text=True, timeout=timeout, check=False)
+                              text=True, timeout=timeout, check=False, env={**os.environ, **(env or {})})
     except subprocess.TimeoutExpired:
         return {"ok": False, "error": f"{what} quá {timeout} giây."}
     lines = [line for line in done.stdout.splitlines() if line.startswith("{")]
@@ -379,8 +391,25 @@ def claude_error(result, stderr):
     return f"Claude không trả về kết quả hợp lệ: {detail}"
 
 
-def generate(job_id, model, tokens=None):
+def retry_note(retry):
+    """What Claude is told on a retry: why the run before failed, what the gateway's analysis made of it"""
+    if not retry:
+        return ""
+    lines = ["", "Lần chạy trước của job này THẤT BẠI. Đừng lặp lại cách đã hỏng:",
+             f"- Lỗi: {str(retry.get('error') or '')[:1500]}"]
+    lines += [f"  {str(d)[:400]}" for d in (retry.get("details") or [])[:16]]
+    if retry.get("cause"):
+        lines.append(f"- Phân tích: {str(retry['cause'])[:1500]}")
+    if retry.get("hint"):
+        lines.append(f"- Hướng sửa: {str(retry['hint'])[:1500]}")
+    lines += ["model.py (nếu có) là bản của lần trước: đọc nó, tìm nguyên nhân rồi sửa tiếp từ đó, không làm lại từ "
+              "đầu trừ khi cách cũ sai hẳn."]
+    return "\n".join(lines) + "\n"
+
+
+def generate(job_id, model, tokens=None, retry=None, timeout_s=None):
     tokens = claude_tokens() if tokens is None else tokens
+    claude_timeout = timeout_s or CLAUDE_TIMEOUT_S
     directory = job_dir(job_id)
     status = {"state": "running", "step": "starting", "notes": [], "builds": 0, "model": model,
               "started_at": now(), "finished_at": None, "error": None, "result": None, "report": None,
@@ -413,11 +442,11 @@ def generate(job_id, model, tokens=None):
                                 stderr=stderr_file, text=True, encoding="utf-8", start_new_session=True)
     with lock:
         running[job_id] = proc
-    proc.stdin.write("Làm theo yêu cầu trong request.md.\n")
+    proc.stdin.write("Làm theo yêu cầu trong request.md.\n" + retry_note(retry))
     proc.stdin.close()
     # Claude Code exits with a code of its own on SIGTERM, so the timeout is known by this flag, not by the code
     timed_out = threading.Event()
-    timer = threading.Timer(CLAUDE_TIMEOUT_S, lambda: (timed_out.set(), kill(proc)))
+    timer = threading.Timer(claude_timeout, lambda: (timed_out.set(), kill(proc)))
     timer.start()
 
     result_line = None
@@ -486,7 +515,7 @@ def generate(job_id, model, tokens=None):
     if was_cancelled:
         status.update(state="cancelled", error="Đã hủy.")
     elif (timed_out.is_set() or code in (-signal.SIGKILL, -signal.SIGTERM)) and not result_line:
-        late = f"Claude chạy quá {CLAUDE_TIMEOUT_S // 60} phút nên đã bị dừng"
+        late = f"Claude chạy quá {claude_timeout // 60} phút nên đã bị dừng"
         if not (directory / "model.py").exists():
             status.update(state="failed", error=f"{late}, trước khi viết model.py.")
         else:
@@ -585,25 +614,38 @@ class Handler(BaseHTTPRequestHandler):
             if not os.environ.get("CLAUDE_CODE_OAUTH_TOKEN"):
                 return self.reply(501, {"ok": False, "error": "AI_DISABLED",
                                         "message": "Container cad chưa có CLAUDE_CODE_OAUTH_TOKEN (claude setup-token)."})
+            retry = body.get("retry") if isinstance(body.get("retry"), dict) else None
             if not (directory / "request.md").exists():
-                return self.reply(400, {"ok": False, "error": "NO_REQUEST", "message": "Job chưa có request.md."})
+                if not (retry and (directory / "model.py").exists()):
+                    return self.reply(400, {"ok": False, "error": "NO_REQUEST", "message": "Job chưa có request.md."})
+                # Code written by hand that does not build: Claude fixes it, keeping the design
+                (directory / "request.md").write_text(
+                    "# Sửa lỗi dựng\n\nmodel.py là mô hình viết sẵn (không do Claude viết) và không dựng được. Sửa "
+                    "cho nó dựng được, giữ nguyên thiết kế và các thông số; chỉ đổi những gì cần.\n", encoding="utf-8")
             with lock:
                 if job_id in running:
                     return self.reply(409, {"ok": False, "error": "JOB_RUNNING", "message": "Job đang chạy."})
             model = str(body.get("model") or DEFAULT_MODEL)
-            threading.Thread(target=generate_safely, args=(job_id, model), daemon=True).start()
+            timeout_s = option(body, "timeout_s", 600, 3 * CLAUDE_TIMEOUT_S, CLAUDE_TIMEOUT_S)
+            threading.Thread(target=generate_safely, args=(job_id, model, retry, timeout_s), daemon=True).start()
             return self.reply(202, {"ok": True})
 
         if action == "build":
             if not (directory / "model.py").exists():
                 return self.reply(400, {"ok": False, "error": "NO_MODEL", "message": "Job chưa có model.py."})
-            report = run_build(directory)
+            started = now()
+            report = run_build(directory, option(body, "timeout_s", 60, 1800, BUILD_TIMEOUT_S))
             status = {"state": "done" if report.get("ok") else "failed", "step": None, "notes": [], "builds": 1,
-                      "started_at": now(), "finished_at": now(), "report": report, "result": None,
-                      "error": None if report.get("ok") else report.get("error")}
-            if report.get("ok"):
-                status["guide"] = run_guide(directory)
+                      "started_at": started, "finished_at": now(), "report": report, "result": None,
+                      "error": None if report.get("ok") else report.get("error"), "guide": None}
             write_json(directory / "status.json", status)
+            if report.get("ok"):
+                # The guide (minutes for a large assembly) after the answer, so the build is not held up by it
+                def guide_after():
+                    current = read_json(directory / "status.json", {})
+                    current["guide"] = run_guide(directory)
+                    write_json(directory / "status.json", current)
+                threading.Thread(target=guide_after, daemon=True).start()
             return self.reply(200, {"ok": True, "report": report})
 
         if action == "viewer":
@@ -620,11 +662,15 @@ class Handler(BaseHTTPRequestHandler):
                 if not (directory / "model.py").exists():
                     return self.reply(400, {"ok": False, "error": "NO_MODEL", "message": "Job chưa có model.py."})
                 title = str(body.get("title") or "")[:80] or job_id
-                report = run_script(directory, "drawing.py", ["model.py", title], DRAWING_TIMEOUT_S, "Vẽ bản vẽ")
+                sheets = option(body, "max_sheets", 1, 12, 12)
+                report = run_script(directory, "drawing.py", ["model.py", title],
+                                    option(body, "timeout_s", 60, 1800, DRAWING_TIMEOUT_S), "Vẽ bản vẽ",
+                                    env={"DRAWING_MAX_SHEETS": str(sheets)})
             else:
                 if not (directory / "out" / "model.stl").exists():
                     return self.reply(400, {"ok": False, "error": "NO_MODEL", "message": "Job chưa dựng ra model.stl."})
-                report = run_script(directory, "dfam.py", ["out"], DFAM_TIMEOUT_S, "Kiểm tra DfAM")
+                report = run_script(directory, "dfam.py", ["out"], option(body, "timeout_s", 60, 2400, DFAM_TIMEOUT_S),
+                                    "Kiểm tra DfAM")
             report.pop("traceback", None)
             # A drawing or a check that failed is still an answer: its report says why
             return self.reply(200, report)
@@ -633,14 +679,18 @@ class Handler(BaseHTTPRequestHandler):
             with lock:
                 if job_id in running:
                     return self.reply(409, {"ok": False, "error": "JOB_RUNNING", "message": "Job đang chạy."})
-            guide = run_guide(directory)
+            guide = run_guide(directory, option(body, "timeout_s", 60, 1800, GUIDE_TIMEOUT_S),
+                              option(body, "grid_cells", 100, 1000, 0) or None, body.get("video") is not False)
             if guide is None:
                 return self.reply(409, {"ok": False, "error": "NO_ASSEMBLY",
                                         "message": "Mô hình không khai báo components nên không có hướng dẫn lắp."})
             status = read_json(directory / "status.json", {})
             status["guide"] = guide
             write_json(directory / "status.json", status)
-            return self.reply(200 if guide["ok"] else 500, {"ok": guide["ok"], "guide": guide})
+            # The error as the message too, so what the gateway shows is why, not "HTTP 500"
+            return self.reply(200 if guide["ok"] else 500, {"ok": guide["ok"], "guide": guide,
+                                                            **({} if guide["ok"] else {"error": "GUIDE_FAILED",
+                                                                                       "message": guide["error"]})})
 
         with lock:
             proc = running.get(job_id)
@@ -678,9 +728,9 @@ class Handler(BaseHTTPRequestHandler):
         return self.reply(200, {**report, "job_id": job_id})
 
 
-def generate_safely(job_id, model):
+def generate_safely(job_id, model, retry=None, timeout_s=None):
     try:
-        generate(job_id, model)
+        generate(job_id, model, retry=retry, timeout_s=timeout_s)
     except Exception as err:  # noqa: BLE001 - whatever went wrong belongs in the job's status
         with lock:
             running.pop(job_id, None)

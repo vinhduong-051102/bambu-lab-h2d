@@ -21,7 +21,8 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 
-MAX_SHEETS = 12
+# Fewer on a retry of a drawing that ran out of time (DRAWING_MAX_SHEETS)
+MAX_SHEETS = int(os.environ.get("DRAWING_MAX_SHEETS") or 12)
 # ISO 5455 reduction scales, tried in turn until every sheet's views fit its A3 frame
 SCALES = (1.0, 0.5, 0.2, 0.1, 0.05)
 

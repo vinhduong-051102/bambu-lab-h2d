@@ -228,5 +228,23 @@ class WorkerConvertTest(unittest.TestCase):
             self.assertIn(words, body["message"], request)
 
 
+class RetryOptionsTest(unittest.TestCase):
+    """What a retry may ask the worker for (the gateway's analysis of the failure before)"""
+
+    def test_options_stay_within_bounds(self):
+        self.assertEqual(worker.option({"timeout_s": 840}, "timeout_s", 60, 1800, 420), 840)
+        self.assertEqual(worker.option({"timeout_s": 99999}, "timeout_s", 60, 1800, 420), 1800)
+        self.assertEqual(worker.option({"timeout_s": "x"}, "timeout_s", 60, 1800, 420), 420)
+        self.assertEqual(worker.option({}, "grid_cells", 100, 1000, 0), 0)
+
+    def test_claude_is_told_why_the_run_before_failed(self):
+        self.assertEqual(worker.retry_note(None), "")
+        note = worker.retry_note({"error": "Claude chạy quá 40 phút", "details": ["Lần dựng cuối: NameError: Box2"],
+                                  "cause": "Hết giờ.", "hint": "Dựng ít lần hơn."})
+        for text in ("THẤT BẠI", "Claude chạy quá 40 phút", "NameError: Box2", "Phân tích: Hết giờ.",
+                     "Hướng sửa: Dựng ít lần hơn.", "không làm lại từ đầu"):
+            self.assertIn(text, note)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -9,6 +9,7 @@ import { AiSessionStore, PRINT_ISSUE_LABELS, PRINT_OUTCOME_LABELS } from '../../
 import { isVideoName, matchPrint, TimelapseLibrary } from '../../domain/timelapse/TimelapseLibrary';
 import { ClaudeCodeVision, FfmpegFrames, TimelapseReviewer, type TimelapseReview } from '../../domain/timelapse/TimelapseReviewer';
 import { startTask } from '../../domain/backgroundTasks';
+import type { Doctor } from '../../domain/retryDoctor';
 import { handler, json, readJsonBody } from '../http';
 
 let library: TimelapseLibrary | null = null;
@@ -175,6 +176,15 @@ const invalidPayload = (error: z.ZodError) => {
 
 // POST /api/timelapse/:name/review {print_id?} - Has Claude (claude -p on this machine) review the video. The
 // review is only shown: POST .../review/use puts it to use for later prints
+/** A timelapse review: nothing to turn on a retry, the rules (quota, video gone) and Claude say whether it can help */
+const REVIEW_DOCTOR: Doctor = {
+  about: 'Claude xem 4 khung hình của video timelapse một bản in (ffmpeg cắt trong gateway) và nhận xét bản in.',
+  knobs: {},
+  rules: [
+    { match: /Máy in không còn video này/, cause: 'Video đã bị xoá khỏi máy in.', stop: 'Video không còn trên máy in nên không xem lại được.' },
+  ],
+};
+
 export const startTimelapseReview = handler<{ name: string }>(async ({ request, params }) => {
   if (!isVideoName(params.name)) return notFound();
   const body = reviewBodySchema.safeParse((await readJsonBody(request).catch(() => null)) ?? {});
@@ -209,7 +219,7 @@ export const startTimelapseReview = handler<{ name: string }>(async ({ request, 
       const state = await reviews().state(video.name);
       if (state.status === 'failed') throw new Error(state.error);
     },
-    { info: { kind: 'timelapse-review', label: print?.job_name ?? video.name, page: 'prints' } }
+    { info: { kind: 'timelapse-review', label: print?.job_name ?? video.name, page: 'prints' }, doctor: REVIEW_DOCTOR }
   );
   return json({ success: true, ...reviewInfo(), ...(await reviews().state(video.name)) }, 202);
 });

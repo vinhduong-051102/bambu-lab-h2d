@@ -6,6 +6,7 @@ become components/<name>.stl in their assembled places and assembly.json; a sing
 """
 
 import json
+import os
 import re
 import struct
 import subprocess
@@ -39,9 +40,9 @@ def build(code):
     return done, job / "out"
 
 
-def guide(out):
+def guide(out, env=None):
     done = subprocess.run([sys.executable, str(HERE / "assembly_guide.py"), str(out)],
-                          capture_output=True, text=True, timeout=300, check=False)
+                          capture_output=True, text=True, timeout=300, check=False, env={**os.environ, **(env or {})})
     return done, json.loads(done.stdout)
 
 
@@ -121,6 +122,17 @@ class AssemblyTest(unittest.TestCase):
         self.assertEqual([s["parts"] for s in result["steps"]], [["arm"], ["base"]])
         self.assertEqual(result["steps"][0]["text"], "Đặt tay lên trước.")
         self.assertEqual(result["steps"][0]["moves_along"]["arm"], [0, 0, -1])
+
+    def test_guide_without_video_on_a_retry(self):
+        # A retry of a guide that ran out of time: the pictures of every step, coarser, and no video
+        _, out = build(HINGE)
+        done, result = guide(out, {"GUIDE_VIDEO": "0", "GUIDE_GRID_CELLS": "150"})
+        self.assertEqual(done.returncode, 0, result.get("error"))
+        self.assertIsNone(result["video"])
+        self.assertIn("Bỏ video", result["video_error"])
+        self.assertFalse((out / "guide" / "assembly.mp4").exists())
+        for name in ("step-01.png", "step-02.png", "done.png"):
+            self.assertTrue((out / "guide" / name).stat().st_size > 0)
 
     def test_bad_steps_fail_the_build(self):
         done, out = build(HINGE + 'assembly_steps = [{"parts": ["lid"]}]\n')

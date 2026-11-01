@@ -571,3 +571,10 @@ body {
   border-radius: 6px;
   background: rgba(128, 128, 128, 0.1);
 }
+/* A retried task's analysis of the failure before it */
+.task-diagnosis {
+  padding: 6px 10px;
+  border-left: 3px solid var(--primary-accent);
+  border-radius: 4px;
+  background: rgba(59, 130, 246, 0.08);
+}

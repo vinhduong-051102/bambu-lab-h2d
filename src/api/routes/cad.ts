@@ -35,6 +35,8 @@ import { suggestMix } from '../../domain/filaments/colourMixing';
 import { saveStudioImport, safeFileName } from '../../domain/studio/studioImports';
 import { serveFile } from './timelapse';
 import { startTask } from '../../domain/backgroundTasks';
+import { diagnose, failureSignature, SAME_FAILURE_LIMIT } from '../../domain/retryDoctor';
+import { CLAUDE_MODEL_DOCTOR, CODE_MODEL_DOCTOR, DFAM_DOCTOR, DRAWING_DOCTOR, FIGURE_DOCTOR, GUIDE_DOCTOR } from '../../domain/cad/cadDoctors';
 import { handler, json, readJsonBody } from '../http';
 
 /** Models the dashboard offers for writing a model; the first is used when a request names none */
@@ -270,8 +272,11 @@ export const cancelCadJob = handler<{ id: string }>(async ({ params }) => {
   return json({ success: true, job: await store().get(params.id) });
 });
 
-// POST /api/cad/jobs/:id/retry - Runs a failed (or cancelled) model again in place, as it was asked: Claude from the
-// same request.md, ready-made code built again, a figure from the same picture and settings, a fix of the same figure
+// POST /api/cad/jobs/:id/retry - Runs a failed (or cancelled) model again in place, after its failure is analysed
+// (retryDoctor.ts: rules, then Claude): Claude from the same request.md told what went wrong and what to do
+// differently, ready-made code built with more time or fixed by Claude, a figure from the same picture and settings
+// with the failure in Claude's prompt. A failure that running again won't mend (no Claude quota, the same failure twice
+// with the same settings) is answered 409 RETRY_STOPPED with why, and the analysis is kept (the job's `retry`)
 export const retryCadJob = handler<{ id: string }>(async ({ params }) => {
   const job = await store().get(params.id);
   if (!job) return jobNotFound();
@@ -279,16 +284,41 @@ export const retryCadJob = handler<{ id: string }>(async ({ params }) => {
     return json({ success: false, error: 'JOB_RUNNING', message: 'Bản này đang chạy.' }, 409);
   }
   const model = job.model ?? env.CAD_AI_MODEL;
+  const failure = { error: job.error ?? (job.state === 'cancelled' ? 'Đã hủy.' : ''), details: job.error_details ?? [] };
+  const doctor = job.source === 'mesh' ? FIGURE_DOCTOR : job.source === 'code' ? CODE_MODEL_DOCTOR : CLAUDE_MODEL_DOCTOR;
+  const before = job.retry ?? { attempt: 1, tuning: {}, diagnosis: null, history: [] };
+  // A cancelled run is not a failure to analyse: it runs again as it was
+  const diagnosis =
+    job.state === 'cancelled'
+      ? { by: 'none' as const, cause: 'Bản này đã bị hủy: chạy lại như cũ.', changes: [], tuning: before.tuning, stop: null, hint: null }
+      : await diagnose(job.source === 'mesh' ? 'cad-figure' : 'cad-model', doctor, failure, before.tuning);
+  const history = job.state === 'cancelled' ? before.history : [...before.history, failureSignature(failure.error, before.tuning)];
+  const record = { attempt: before.attempt + 1, tuning: diagnosis.tuning, diagnosis, history };
+  const repeated = history.filter((h) => h === failureSignature(failure.error, diagnosis.tuning)).length >= SAME_FAILURE_LIMIT;
+  if (diagnosis.stop || repeated) {
+    const why = diagnosis.stop ?? `lỗi này đã lặp lại ${SAME_FAILURE_LIMIT} lần với cùng cách chạy, cần người xem.`;
+    await store().saveRetry(job.id, { ...record, attempt: before.attempt, diagnosis: { ...diagnosis, stop: why } });
+    return json({ success: false, error: 'RETRY_STOPPED', message: `Không chạy lại: ${why}`, diagnosis }, 409);
+  }
+  await store().saveRetry(job.id, record);
+  const note = { ...failure, cause: diagnosis.cause, ...(diagnosis.hint && { hint: diagnosis.hint }) };
+  const firstRun = job.state === 'cancelled' || !job.error;
+  const tuning = diagnosis.tuning;
   try {
     if (job.source !== 'mesh') {
       const w = worker();
       if (!w) return disabled();
-      if (job.source === 'code') await w.build(job.id);
-      else await w.generate(job.id, model);
+      if (job.source === 'code' && !tuning.claude_fix) await w.build(job.id, tuning);
+      else {
+        await w.generate(job.id, model, {
+          ...(!firstRun && { retry: note }),
+          ...(typeof tuning.timeout_s === 'number' && job.source === 'claude' && { timeout_s: tuning.timeout_s }),
+        });
+      }
     } else {
       const m = meshWorker();
       if (!m) return meshDisabled();
-      if (job.input === 'fix' && job.parent_id) await m.fix(job.id, job.parent_id, model);
+      if (job.input === 'fix' && job.parent_id) await m.fix(job.id, job.parent_id, model, firstRun ? undefined : note);
       else {
         const asked = await store().meshParams(job.id);
         if (!asked) {
@@ -297,14 +327,14 @@ export const retryCadJob = handler<{ id: string }>(async ({ params }) => {
             409
           );
         }
-        await m.generate(job.id, asked);
+        await m.generate(job.id, asked, firstRun ? undefined : note);
       }
     }
   } catch (err) {
     if (err instanceof CadWorkerError) return workerFailed(err);
     throw err;
   }
-  return json({ success: true, job: await store().get(job.id) }, 202);
+  return json({ success: true, diagnosis, job: await store().get(job.id) }, 202);
 });
 
 // DELETE /api/cad/jobs/:id?family=1 - Deletes a model (with family=1 also every fix, revision and remake made from
@@ -724,8 +754,9 @@ export const remakeCadGuide = handler<{ id: string }>(async ({ params }) => {
   }
   const w = worker();
   if (!w) return disabled();
-  const { outcome } = await startTask(guideTaskKey(params.id), () => w.guide(params.id), {
+  const { outcome } = await startTask(guideTaskKey(params.id), (_, tuning) => w.guide(params.id, tuning), {
     info: { kind: 'cad-guide', label: job.title || job.prompt.slice(0, 80), page: 'cad' },
+    doctor: GUIDE_DOCTOR,
     waitMs: GUIDE_WAIT_MS,
     failed: (guide) => (guide.ok ? null : guide.error ?? 'Không vẽ được hướng dẫn lắp.'),
     // A guide drawn without its video still counts, the reason why is kept
@@ -775,8 +806,9 @@ export const makeCadDrawing = handler<{ id: string }>(async ({ params }) => {
   if (job instanceof Response) return job;
   const w = worker();
   if (!w) return disabled();
-  const { outcome } = await startTask(drawingTaskKey(params.id), () => w.drawing(params.id, job.title || job.prompt.slice(0, 60)), {
+  const { outcome } = await startTask(drawingTaskKey(params.id), (_, tuning) => w.drawing(params.id, job.title || job.prompt.slice(0, 60), tuning), {
     info: { kind: 'cad-drawing', label: `Bản vẽ: ${job.title || job.prompt.slice(0, 70)}`, page: 'cad' },
+    doctor: DRAWING_DOCTOR,
     waitMs: GUIDE_WAIT_MS,
     failed: (drawing) => (drawing.ok ? null : drawing.error ?? 'Không vẽ được bản vẽ.'),
     explain: (drawing) => drawing.notices ?? [],
@@ -800,8 +832,9 @@ export const checkCadDfam = handler<{ id: string }>(async ({ params }) => {
   if (job instanceof Response) return job;
   const w = worker();
   if (!w) return disabled();
-  const { outcome } = await startTask(dfamTaskKey(params.id), () => w.dfam(params.id), {
+  const { outcome } = await startTask(dfamTaskKey(params.id), (_, tuning) => w.dfam(params.id, tuning), {
     info: { kind: 'cad-dfam', label: `DfAM: ${job.title || job.prompt.slice(0, 70)}`, page: 'cad' },
+    doctor: DFAM_DOCTOR,
     waitMs: GUIDE_WAIT_MS,
     failed: (dfam) => (dfam.ok ? null : dfam.error ?? 'Không kiểm tra được.'),
   });

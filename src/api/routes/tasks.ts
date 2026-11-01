@@ -1,4 +1,5 @@
 import { listTasks, retryTask } from '../../domain/backgroundTasks';
+import type { Diagnosis } from '../../domain/retryDoctor';
 import { handler, json, readJsonBody } from '../http';
 import { recentCadJobs } from './cad';
 
@@ -6,7 +7,7 @@ import { recentCadJobs } from './cad';
  * The dashboard's task panel: everything the user waits on that goes on when the page closes, in one list. The
  * gateway's own background tasks (engineering checks, assembly guides, part analyses, timelapse reviews, measuring
  * the earlier prints) and the AI models (CAD and mesh workers). A failed one says why, with details, and how to run
- * it again (`retry_url`, POST).
+ * it again (`retry_url`, POST): a retry is analysed first (retryDoctor.ts), and the analysis is shown with it.
  */
 
 export interface PanelTask {
@@ -24,6 +25,10 @@ export interface PanelTask {
   /** POST here runs it again; null when it cannot be run again from the panel (with `retry_hint` saying how) */
   retry_url: string | null;
   retry_hint?: string;
+  /** Runs so far (1 the first) */
+  attempt: number;
+  /** A retry's analysis of the failure before it: why, and what this run changed; {pending} while it is made */
+  diagnosis: Diagnosis | { pending: true } | null;
 }
 
 // Finished ones stay listed this long; failed ones longer, until they are run again or dismissed in the panel
@@ -54,6 +59,8 @@ async function cadTasks(now: number): Promise<PanelTask[]> {
         details: job.error_details ?? [],
         progress: job.progress,
         retry_url: failed && job.retryable ? `/api/cad/jobs/${encodeURIComponent(job.id)}/retry` : null,
+        attempt: job.retry?.attempt ?? 1,
+        diagnosis: job.retry?.diagnosis ?? null,
         ...(failed && !job.retryable && { retry_hint: 'Bản này tạo trước khi lưu thông số: dùng “Làm lại” trên thẻ mẫu để tạo bản mới.' }),
       },
     ];
@@ -75,6 +82,8 @@ function gatewayTasks(now: number): PanelTask[] {
       details: t.details,
       progress: t.progress,
       retry_url: !t.running && t.error ? `/api/tasks/retry?key=${encodeURIComponent(t.key)}` : null,
+      attempt: t.attempt,
+      diagnosis: t.diagnosis,
     }));
 }
 
@@ -90,7 +99,8 @@ export const getTasks = handler(async () => {
   return json({ success: true, tasks });
 });
 
-// POST /api/tasks/retry?key= - Runs one of the gateway's background tasks again, as it was first started
+// POST /api/tasks/retry?key= - Runs one of the gateway's background tasks again: its failure analysed first (rules,
+// then Claude), with the settings that gives; the task's `diagnosis` says why it failed and what changed
 export const retryGatewayTask = handler(async ({ request }) => {
   const url = new URL(request.url);
   const body = (await readJsonBody(request).catch(() => null)) as { key?: unknown } | null;

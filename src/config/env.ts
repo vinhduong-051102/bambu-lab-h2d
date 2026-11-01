@@ -86,6 +86,8 @@ const envSchema = z.object({
   TIMELAPSE_CACHE_DIR: z.preprocess((val) => (typeof val === 'string' && val.trim() === '' ? undefined : val), z.string().default('./data/timelapse')),
   // The Claude model that reviews timelapses ("AI nhận xét"), through `claude -p` on CLAUDE_CODE_OAUTH_TOKEN
   TIMELAPSE_AI_MODEL: z.preprocess((val) => (typeof val === 'string' && val.trim() === '' ? undefined : val), z.string().default('claude-opus-5-5')),
+  // The Claude model that analyses why a background task failed when "Thử lại" is pressed on a failure no rule knows
+  RETRY_AI_MODEL: z.preprocess((val) => (typeof val === 'string' && val.trim() === '' ? undefined : val), z.string().default('claude-sonnet-5-5')),
   // CAD worker container (docker-compose.cad.yml) behind "Thiết kế mô hình bằng AI"; unset turns the feature off
   CAD_WORKER_URL: z.preprocess((val) => (typeof val === 'string' && val.trim() === '' ? undefined : val), z.string().url().optional()),
   // text-to-cad's CAD Viewer (docs/text-to-cad.md): the port the gateway serves it on (HTTPS when HTTPS_PORT is set),

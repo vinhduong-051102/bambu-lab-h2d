@@ -191,6 +191,12 @@ class Handler(BaseHTTPRequestHandler):
         if action in ("generate", "fix") and not claude_ready():
             return self.reply(501, {"ok": False, "error": "AI_DISABLED",
                                     "message": "Container mesh3d chưa có CLAUDE_CODE_OAUTH_TOKEN (claude setup-token)."})
+        if action in ("generate", "fix"):
+            # A retry carries why the run before failed: Claude reads it (review.retry_note); a new run has none
+            if isinstance(body.get("retry"), dict):
+                review.write_json(directory / review.RETRY_FILE, body["retry"])
+            else:
+                (directory / review.RETRY_FILE).unlink(missing_ok=True)
 
         if action == "generate":
             if (directory / "input.png").exists():

@@ -7,6 +7,7 @@ import { PrinterCommandService } from '../src/domain/commands/PrinterCommandServ
 import { PrinterService } from '../src/domain/PrinterService';
 import { engGetPath, setEngWorkerUrl } from '../src/api/routes/eng';
 import { clearTasks } from '../src/domain/backgroundTasks';
+import { setAnalyst } from '../src/domain/retryDoctor';
 import { createTestApp, type TestApp } from './helpers/testApp';
 
 const PNG = Buffer.from([0x89, 0x50, 0x4e, 0x47, 1, 2, 3]);
@@ -71,6 +72,7 @@ describe('Engineering analysis (/api/eng)', () => {
   afterEach(async () => {
     worker.release();
     setEngWorkerUrl(null);
+    setAnalyst(null);
     await new Promise<void>((resolve) => worker.server.close(() => resolve()));
     app.close();
   });
@@ -135,16 +137,26 @@ describe('Engineering analysis (/api/eng)', () => {
       error: 'Thông số in sai',
       details: ['HTTP 422 · INVALID_INPUT', 'print.nozzle_mm: Phải lớn hơn 0'],
     });
+    // No rule knows this failure: Claude analyses it, and says running again cannot mend wrong print settings
+    const asked: string[] = [];
+    setAnalyst(async (_doctor, failure) => {
+      asked.push(failure.error);
+      return { cause: 'Đường kính đầu phun bằng 0.', tuning: { render: false, nozzle_mm: 4 }, stop: 'Sửa nozzle_mm (> 0) rồi kiểm tra lại.', hint: '' };
+    });
     const again = await app.inject({ method: 'POST', url: task.retry_url, payload: {} });
     expect(again.statusCode).toBe(202);
-    const state = async () =>
-      (await app.inject({ method: 'GET', url: '/api/tasks' })).json().tasks.find((t: { key: string }) => t.key === `eng-check:${job}`).state;
-    await expect.poll(state).toBe('failed');
-    // Run again as first asked
-    expect(worker.seen.filter((r) => r.url === '/eng/check').map((r) => r.body)).toEqual([
-      { job_id: job, name: 'Giá đỡ', print: { nozzle_mm: 0 } },
-      { job_id: job, name: 'Giá đỡ', print: { nozzle_mm: 0 } },
-    ]);
+    const panel = async () =>
+      (await app.inject({ method: 'GET', url: '/api/tasks' })).json().tasks.find((t: { key: string }) => t.key === `eng-check:${job}`);
+    await expect.poll(async () => (await panel()).state).toBe('failed');
+    expect(asked).toEqual(['Thông số in sai']);
+    expect(await panel()).toMatchObject({
+      attempt: 2,
+      error: 'Không chạy lại: Sửa nozzle_mm (> 0) rồi kiểm tra lại.',
+      // Only its own knobs are kept from Claude's answer
+      diagnosis: { by: 'claude', cause: 'Đường kính đầu phun bằng 0.', tuning: { render: false } },
+    });
+    // Not sent to the worker again
+    expect(worker.seen.filter((r) => r.url === '/eng/check')).toHaveLength(1);
     expect((await app.inject({ method: 'POST', url: '/api/tasks/retry?key=nope', payload: {} })).statusCode).toBe(409);
   });
 

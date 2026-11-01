@@ -100,6 +100,26 @@ def ids():
         return list(running)
 
 
+# Why the run before failed, when this one is a retry (written by worker.py from the gateway's analysis)
+RETRY_FILE = "retry.json"
+
+
+def retry_note(directory):
+    """What Claude is told on a retry: the run before's error and the gateway's analysis of it; "" on a first run"""
+    retry = read_json(directory / RETRY_FILE, None)
+    if not isinstance(retry, dict):
+        return ""
+    lines = ["", "Lần chạy trước của job này THẤT BẠI. Đừng lặp lại cách đã hỏng:",
+             f"- Lỗi: {str(retry.get('error') or '')[:1500]}"]
+    lines += [f"  {str(d)[:400]}" for d in (retry.get("details") or [])[:16]]
+    if retry.get("cause"):
+        lines.append(f"- Phân tích: {str(retry['cause'])[:1500]}")
+    if retry.get("hint"):
+        lines.append(f"- Hướng sửa: {str(retry['hint'])[:1500]}")
+    lines.append("Những gì lần trước đã làm còn trong work/ và out/: xem lại, tìm nguyên nhân rồi đi hướng khác.")
+    return "\n".join(lines) + "\n"
+
+
 def prepare(directory, parent):
     """The figure being revised into source/, its picture (as a real PNG, whatever was uploaded) to concept.png"""
     from PIL import Image
@@ -551,7 +571,7 @@ def run(job_id, model, params=None, tokens=None, mode="fix", session=None):
             proc = subprocess.Popen(command, cwd=directory, env=env, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                                     stderr=stderr_file, text=True, encoding="utf-8", start_new_session=True)
         running[job_id] = proc
-    proc.stdin.write("Làm theo yêu cầu trong request.md.\n")
+    proc.stdin.write("Làm theo yêu cầu trong request.md.\n" + retry_note(directory))
     proc.stdin.close()
     timer = threading.Timer(CLAUDE_TIMEOUT_S, lambda: kill(proc))
     timer.start()
