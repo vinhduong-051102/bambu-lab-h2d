@@ -6,7 +6,6 @@ scene (visualize_blender.py), saving a .blend to open and a PNG with its colour 
   undeformed part translucent
 - interference: the components translucent, their overlaps in red
 - thickness: each component coloured by wall thickness (mm), red under the limit
-- motion: a finished Chrono run played back (the simulation's own Blender playback)
 """
 
 import subprocess
@@ -16,7 +15,7 @@ import numpy as np
 import trimesh
 
 from . import clearance, geometry, schema
-from .schema import PASS, WARNING, check
+from .schema import PASS, check
 from .store import EngError, analysis_dir, new_analysis, now, read_json, write_json, BLENDER_CMD
 
 GREY = np.array([170, 175, 185, 255])
@@ -55,8 +54,7 @@ def ramp(values, lo, hi):
     return np.column_stack([rgb, np.full(len(t), 255)]).astype(np.uint8)
 
 
-FONTS = ["/opt/fea/fonts/DejaVuSans.ttf", "/opt/chrono/fonts/DejaVuSans.ttf",
-         "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"]
+FONTS = ["/opt/fea/fonts/DejaVuSans.ttf", "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"]
 
 
 def font(size):
@@ -108,9 +106,9 @@ def export(mesh, colors, path):
     m.export(path)
 
 
-def visualize(model, mode, analysis_id=None, sim_id=None, print_config=None, deformation_scale=None):
+def visualize(model, mode, analysis_id=None, print_config=None, deformation_scale=None):
     out_id, folder = new_analysis("visualize")
-    result = schema.new_result("visualize", model, {"mode": mode, "analysis_id": analysis_id, "sim_id": sim_id})
+    result = schema.new_result("visualize", model, {"mode": mode, "analysis_id": analysis_id})
     result.update(analysis_id=out_id, started_at=now())
     objects = []
     if mode == "fea":
@@ -192,21 +190,8 @@ def visualize(model, mode, analysis_id=None, sim_id=None, print_config=None, def
         hi = limit * 3 if limit else top
         colorbar(folder / "result.png", 0, hi, "mm", f"{model['name']}: độ dày thành, đỏ = mỏng", reverse=True,
                  note=f"Đỏ = 0 mm, xanh = ≥ {hi:.3g} mm" + (f"; giới hạn {limit:g} mm" if limit else ""))
-    elif mode == "motion":
-        from sim import runs as sim
-
-        try:
-            play = sim.start_playback(sim_id, {"render": True})
-        except sim.SimError as err:
-            raise EngError(err.status, err.code, err.message) from err
-        result.update(status=WARNING, data={"sim_id": sim_id, "playback": play},
-                      checks=[check("playback", WARNING, "Phát lại chuyển động trong Blender",
-                                    "Đang dựng trong nền: theo dõi bằng sim_get_simulation_status; video ở "
-                                    "/api/sim/runs/<sim id>/files/blender/playback.mp4.")])
-        write_json(folder / "result.json", result)
-        return result
     else:
-        raise EngError(400, "BAD_MODE", "mode phải là fea, interference, thickness hoặc motion.")
+        raise EngError(400, "BAD_MODE", "mode phải là fea, interference hoặc thickness.")
     result["files"] = {"result.png": "result.png", "result.blend": "result.blend", "blender.log": "blender.log"}
     result["checks"].append(check("render", PASS, "Hình kết quả trong Blender", "result.png, result.blend"))
     result.update(status=PASS, state="completed", finished_at=now(), engine={"blender": blender_version()})

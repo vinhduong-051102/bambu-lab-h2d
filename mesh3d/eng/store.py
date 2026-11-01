@@ -22,7 +22,6 @@ from pathlib import Path
 
 ENG_DIR = Path(os.environ.get("ENG_DIR", "/eng"))
 JOBS_DIR = Path(os.environ.get("JOBS_DIR", "/jobs"))
-SIM_DIR = Path(os.environ.get("SIM_DIR", "/sim"))
 BLENDER_CMD = [os.environ.get("BLENDER", "blender")]
 ID_RE = re.compile(r"^[a-z][a-z0-9-]{5,63}$")
 NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9 _.()+-]{0,120}$")
@@ -72,15 +71,15 @@ def sha256(path):
 
 
 def resolve_input(name):
-    """A file the worker may read: jobs/<job id>/…, sim/files/… or eng/uploads/…"""
+    """A file the worker may read: jobs/<job id>/… or eng/uploads/…"""
     if not isinstance(name, str) or not name:
         raise EngError(400, "BAD_FILE", "Cần đường dẫn file.")
     name = name.replace("\\", "/").lstrip("/")
     head, _, rest = name.partition("/")
-    roots = {"jobs": JOBS_DIR, "sim": SIM_DIR, "eng": ENG_DIR}
-    if head not in roots or not rest or (head == "sim" and not rest.startswith("files/")) or (
+    roots = {"jobs": JOBS_DIR, "eng": ENG_DIR}
+    if head not in roots or not rest or (
             head == "eng" and not rest.startswith("uploads/")):
-        raise EngError(400, "BAD_FILE", f"Đường dẫn {name!r} phải là jobs/<job id>/…, sim/files/… hoặc eng/uploads/….")
+        raise EngError(400, "BAD_FILE", f"Đường dẫn {name!r} phải là jobs/<job id>/… hoặc eng/uploads/….")
     root = roots[head].resolve()
     path = (root / rest).resolve()
     if root not in path.parents:

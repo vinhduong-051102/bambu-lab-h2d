@@ -12,8 +12,6 @@ services:
       - JOBS_DIR=/jobs
       - IMPORTS_DIR=/imports
       - ANALYSES_DIR=/analyses
-      # Mechanism simulation (docs/mechanical-simulation.md): mechanisms, runs and their playback
-      - SIM_DIR=/sim
       # Engineering analysis of printed parts (docs/engineering-analysis.md): models, analyses, uploads
       - ENG_DIR=/eng
       - FEA_PYTHON=/opt/fea/bin/python
@@ -37,8 +35,6 @@ services:
       # "Thành phần của mẫu" (analyze.py): Studio's import folder, read only, and the renders of each analysis
       - ${STUDIO_IMPORT_DIR:-./data/studio/imports}:/imports:ro
       - ${MODEL_ANALYSIS_DIR:-./data/studio/analyses}:/analyses
-      # Mechanism simulation: mechanisms/, runs/<sim id>/ (CSV, JSON, log, Blender playback), files/ (meshes)
-      - ./data/sim:/sim
       # Engineering analysis: models/<id>/v<n>/ (the files as given, components, assembly, FEA setups),
       # analyses/<id>/ (result.json, solver files, renders, reports), uploads/
       - ./data/eng:/eng

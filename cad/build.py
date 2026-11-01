@@ -10,8 +10,8 @@ them) and report.json, which it also prints. Exits 1 when the model could not be
 An assembly keeps its parts: a `@model` that returns a Compound of labelled children (text-to-cad's assembly), a
 model that assigns `components` ({name: solid}, in their assembled places), or whose `result` holds several
 solids, also gets components/<name>.stl and assembly.json (each component's file, volume and
-centre, and the model's `mechanism` dict when it has one: what moves, how, and what is fixed, for simulation). With
-`components`, assembly.png shows them assembled: what is simulated, where preview.png shows the print layout; the
+centre, and the model's `mechanism` dict when it has one: what is fixed, how the parts join, and their materials, for the assembly guide and the print layout). With
+`components`, assembly.png shows them assembled, where preview.png shows the print layout; the
 model's `assembly_steps` (the order a person puts the parts together) go in assembly.json too, for the assembly guide
 the worker draws after the last build (assembly_guide.py).
 
@@ -241,20 +241,36 @@ def load(model):
     return namespace, models[-1]()
 
 
-def assembly_children(shape):
-    """{name: child, in the model's frame} of a text-to-cad assembly (a Compound of labelled children: parts or
-    sub-assemblies), by label (part_1, part_2… where it has none); {} for a part"""
+def world_parts(node, parent=None):
+    """Every part (leaf) of an assembly tree, each a copy placed in the model's frame: its parents' placements
+    accumulated, as text-to-cad's inspection reference does it"""
     from build123d import Location
 
+    here = (Location() if parent is None else parent) * node.location
+    if node.children:
+        for child in node.children:
+            yield from world_parts(child, here)
+    else:
+        yield node.located(here)
+
+
+def assembly_children(shape, printed=None):
+    """{name: part, in the model's frame} of a text-to-cad assembly, by label (label_2… for a label used again,
+    part_1… where there is none); {} for a part. An assembly of parts gives its children; one of sub-assemblies
+    (a robot's links, each with its printed parts, servos and bearings) gives every part in them. `printed`, the
+    model's `print_parts`, keeps only the parts with those labels: the rest is bought, wired or drawn for fit"""
     children = list(getattr(shape, "children", None) or ())
-    if len(children) < 2:
+    if len(children) < 2 and not (children and children[0].children):
         return {}
-    root = shape.location or Location()
+    parts = list(world_parts(shape))
     out = {}
-    for k, child in enumerate(children, 1):
-        label = re.sub(r"[^A-Za-z0-9_-]", "_", str(getattr(child, "label", "") or ""))[:44].strip("_")
+    for k, part in enumerate(parts, 1):
+        raw = str(getattr(part, "label", "") or "")
+        if printed is not None and raw not in printed:
+            continue
+        label = re.sub(r"[^A-Za-z0-9_-]", "_", raw)[:44].strip("_")
         name = label if label and label not in out else f"{label}_{k}" if label else f"part_{k}"
-        out[name] = child.located(root * child.location)
+        out[name] = part
     return out
 
 
@@ -355,7 +371,7 @@ def write_components(components, mechanism, out, from_solids, steps=None, assemb
         "from": "solids of result" if from_solids else "components"}, indent=2, ensure_ascii=False))
     files = [entry["file"] for entry in listed] + ["assembly.json"]
     if not from_solids:
-        # Assembled, unlike `result` (laid out to print): the model as the dashboard simulates it
+        # Assembled, unlike `result` (laid out to print): the model as it is put together
         triangles = [t for entry in listed for t in read_stl(out / entry["file"])]
         lows = [min(v[a] for t in triangles for v in t) for a in range(3)]
         highs = [max(v[a] for t in triangles for v in t) for a in range(3)]
@@ -432,8 +448,15 @@ def build(model, out):
     namespace, document = load(model)
     shape = document.shape if document is not None else namespace.get("result")
     if document is not None and namespace.get("components") is None:
-        # A text-to-cad assembly: its labelled children are the components, in their assembled places
-        children = assembly_children(shape)
+        # A text-to-cad assembly: its labelled parts are the components, in their assembled places
+        printed = namespace.get("print_parts")
+        if printed is not None and (not isinstance(printed, (list, tuple, set)) or not all(isinstance(n, str) for n in printed)):
+            raise ValueError("`print_parts` must be a list of part labels.")
+        children = assembly_children(shape, set(printed) if printed is not None else None)
+        if printed is not None:
+            missing = sorted(set(printed) - {str(getattr(p, "label", "")) for p in world_parts(shape)})
+            if missing:
+                raise ValueError(f"`print_parts` names labels no part of the model has: {missing}.")
         if children:
             namespace["components"] = children
     assembled = document if document is not None and isinstance(namespace.get("components"), dict) else None

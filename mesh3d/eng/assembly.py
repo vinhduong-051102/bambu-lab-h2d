@@ -7,7 +7,7 @@ Step 3: an assembly of components. What can be measured on the meshes is measure
 - Coaxial pairs: a hole of one component and a shaft of another on the same line (axes within 1°, offset within
   the radial clearance): a revolute (or cylindrical) joint is *suggested*, never assumed.
 - Touching pairs: components closer than `touch_mm`.
-- Joints the user confirms are kept in the model version's assembly.json and used by the motion setup.
+- Joints the user confirms are kept in the model version's assembly.json.
 """
 
 import math

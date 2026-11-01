@@ -13,8 +13,7 @@ worker's Python, with FEA_PYTHON pointing at the gmsh + CalculiX environment for
 - printability: a T's overhang area, a horizontal hole, no bed contact
 - FEA: a cantilever's tip deflection (Timoshenko) and its stress at mid-span (M·c/I), mesh convergence, no safety
   factor without strengths
-- motion: an arm turned by a motor hits a stop block at the angle geometry predicts
-- report: eleven sections; nothing run is NOT_EVALUATED, never PASS
+- report: ten sections; nothing run is NOT_EVALUATED, never PASS
 """
 
 import math
@@ -330,41 +329,6 @@ class Structure(unittest.TestCase):
         self.assertIn("material", str(caught.exception))
 
 
-class Motion(unittest.TestCase):
-    @unittest.skipUnless(Path(os.environ.get("CHRONO_PYTHON", "/opt/chrono/bin/python")).exists(), "no Chrono")
-    def test_arm_hits_stop(self):
-        from eng import motion
-        from sim import runs as sim
-
-        sim.start()
-        base = box((20, 20, 10), (0, 0, -5))
-        # The arm: x from -3 to 40, y from -3 to 3, turning counter-clockwise about Z at 90°/s
-        arm = trimesh.boolean.union([box((40, 6, 4), (20, 0, 2.5)), box((6, 6, 4), (0, 0, 2.5))], engine="manifold")
-        # A stop at x -3…3, y 27…33: the arm's leading side (y' = 3) reaches its corner (3, 27) when
-        # √(3² + 27²)·sin(atan2(27, 3) − θ) = 3, θ = 77.3°, t = 0.859 s
-        stop = box((6, 6, 4), (0, 30, 2.5))
-        model = model_of(save(base, "base.stl"), save(arm, "arm.stl"), save(stop, "stop.stl"))
-        cfg = motion.configure(model, components={"base": {"fixed": True}, "stop": {"fixed": True},
-                                                  "arm": {"density_kg_m3": 1240}},
-                               joints=[{"id": "pivot", "type": "revolute", "body_a": "base", "body_b": "arm",
-                                        "position": [0, 0, 0], "axis": [0, 0, 1]}],
-                               actuators=[{"id": "drive", "type": "rotational_motor", "mode": "speed", "body_a": "base",
-                                           "body_b": "arm", "position": [0, 0, 0], "axis": [0, 0, 1],
-                                           "law": {"type": "constant", "value": 90}}],
-                               simulation={"duration": 1.0, "time_step": 0.001, "output_interval": 0.01,
-                                           "gravity": [0, 0, 0]})
-        result = motion.run(model, cfg["mechanism_id"], wait_s=120, frames=101)
-        s = statuses(result)
-        self.assertEqual(s["motion.arm/stop"], "FAIL")
-        first = result["data"]["motion_clearance"]["pairs"]["arm/stop"]["overlap_times"][0]
-        r = math.hypot(3, 27)
-        theta = math.atan2(27, 3) - math.asin(3 / r)
-        # Sampled every 0.01 s: the first sample after contact
-        self.assertGreaterEqual(first, math.degrees(theta) / 90)
-        self.assertLess(first, math.degrees(theta) / 90 + 0.02)
-        self.assertEqual(s["motion.base/stop"], "PASS")
-
-
 @unittest.skipUnless(shutil.which(os.environ.get("BLENDER", "blender")), "no Blender")
 class Visual(unittest.TestCase):
     def test_thickness_colours_the_thin_plate(self):
@@ -405,10 +369,9 @@ class JobCheck(unittest.TestCase):
         walls = next(c for c in first["results"]["clearance"]["checks"] if c["id"] == "model.wall")
         self.assertEqual(walls["status"], "WARNING")
         self.assertAlmostEqual(walls["value"], 1.0, delta=0.01)
-        # FEA and motion were not run: never a pass
+        # FEA was not run: never a pass
         sections = {s["title"][:2]: s["status"] for s in first["report"]["data"]["sections"]}
         self.assertEqual(sections["6."], "NOT_EVALUATED")
-        self.assertEqual(sections["7."], "NOT_EVALUATED")
         # Each check is a new version of the job's model; the latest is read back
         second = service.check_job(body)
         self.assertEqual(second["model"]["version"], first["model"]["version"] + 1)
@@ -448,11 +411,11 @@ class Report(unittest.TestCase):
         model = model_of(save(box((10, 10, 10)), "rep.stl"))
         service.finish(geometry.inspect(model), service.begin())
         result, text = report.build(model)
-        for k in range(1, 12):
+        for k in range(1, 11):
             self.assertIn(f"## {k}.", text)
         sections = {s["title"]: s["status"] for s in result["data"]["sections"]}
-        self.assertEqual(sections["7. Phân tích độ bền (FEM)"], "NOT_EVALUATED")
-        self.assertEqual(sections["6. Mô phỏng chuyển động"], "NOT_EVALUATED")
+        self.assertEqual(sections["6. Phân tích độ bền (FEM)"], "NOT_EVALUATED")
+        self.assertNotIn("## 11.", text)
         self.assertNotEqual(result["status"], "PASS")
         html = (ENG_DIR / "analyses" / result["analysis_id"] / "report.html").read_text(encoding="utf-8")
         self.assertIn("<table>", html)

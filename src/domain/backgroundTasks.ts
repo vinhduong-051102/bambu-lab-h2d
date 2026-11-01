@@ -1,6 +1,6 @@
 /**
- * Work the dashboard waits on (an engineering check, an assembly guide, a part analysis, a simulation setup, a
- * timelapse review, measuring the earlier prints) runs here, detached from the request that started it: closing the
+ * Work the dashboard waits on (an engineering check, an assembly guide, a part analysis, a timelapse review,
+ * measuring the earlier prints) runs here, detached from the request that started it: closing the
  * page does not stop it, and whoever opens the page again reads how far it is from `getTask` and keeps watching. The
  * dashboard's task panel lists them all (`listTasks`), with why one failed and a way to run it again (`retryTask`).
  * The result itself is stored where the work stores it (the worker's files); this keeps only whether it runs, since
@@ -9,11 +9,11 @@
 
 /** What the task panel shows of a task, and where on the dashboard its result is */
 export interface TaskInfo {
-  /** eng-check, cad-guide, print-parts, mech-setup, timelapse-review, parts-backfill */
+  /** eng-check, cad-guide, print-parts, timelapse-review, parts-backfill */
   kind: string;
   /** What it is about, in the user's words: the model's or the print's name */
   label: string;
-  /** The dashboard tab its result shows on (cad, sim, prints) */
+  /** The dashboard tab its result shows on (cad, prints) */
   page?: string;
 }
 

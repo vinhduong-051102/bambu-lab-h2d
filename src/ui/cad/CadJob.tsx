@@ -15,7 +15,7 @@ import {
   SendOutlined,
   StopOutlined,
 } from '@ant-design/icons';
-import { Alert, App, Button, Card, Collapse, Flex, Image, Input, Modal, Popconfirm, Progress, Space, Tag, Timeline, Tooltip, Typography } from 'antd';
+import { Alert, App, Button, Card, Collapse, Flex, Image, Input, Popconfirm, Progress, Space, Tag, Timeline, Tooltip, Typography } from 'antd';
 import { useEffect, useMemo, useState, type ClipboardEvent, type ReactNode } from 'react';
 import Markdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
@@ -23,7 +23,6 @@ import { deltaLabel } from '../../domain/filaments/colourMixing';
 import { fileUrl, formatDuration, formatProgress, formatSize, isBusy, jobSteps, modelName, ORIGINS, REVISE_PLACEHOLDERS, STATE_LABELS, STEP_LABELS, versionLabel } from '../cad';
 import { checkedSettings, settingsSummary, sortedChecks, statusCounts } from '../eng';
 import { formatPrintTime } from '../prints';
-import { ModelSim } from '../sim/ModelSim';
 import { AssemblyGuideButton } from './AssemblyGuide';
 import { EngCheckButton } from './EngCheck';
 import { CadViewerButton, DfamButton, DrawingButton, ExportLinks } from './TextToCad';
@@ -301,21 +300,6 @@ const Bullets = ({ items }: { items: string[] }) => (
  * either: Claude then looks for problems itself). `before` is the version this one was made from: its preview is
  * shown next to this one's, before and after.
  */
-/** "⚙️ Mô phỏng": the job's own model, its components set up and run in the live Chrono viewer (docs/model-simulation.md) */
-function SimulateButton({ job }: { job: CadJob }) {
-  const [open, setOpen] = useState(false);
-  return (
-    <>
-      <Button size="small" onClick={() => setOpen(true)} title="Mô phỏng vật lý chính mô hình này: chi tiết, khớp, động cơ, chạy trong khung 3D">
-        ⚙️ Mô phỏng
-      </Button>
-      <Modal open={open} onCancel={() => setOpen(false)} footer={null} width="min(1500px, 96vw)" destroyOnHidden title={`Mô phỏng · ${job.title || job.id}`}>
-        {open && <ModelSim jobId={job.id} name={job.title || job.prompt.split('\n')[0].slice(0, 80)} />}
-      </Modal>
-    </>
-  );
-}
-
 export function CadJobCard(props: {
   job: CadJob;
   now?: number;
@@ -524,10 +508,10 @@ export function CadJobCard(props: {
               )}
             </figure>
             {job.files?.assembly && (
-              // The parts in their places: what ⚙️ Mô phỏng runs, where the preview is laid out for printing
+              // The parts in their places, where the preview is laid out for printing
               <figure className="cad-compare">
                 <Image src={url('assembly.png')} alt="Lắp ráp" width={160} height={160} style={{ objectFit: 'contain' }} />
-                <figcaption>Lắp ráp · dùng để mô phỏng</figcaption>
+                <figcaption>Lắp ráp</figcaption>
               </figure>
             )}
           </Flex>
@@ -664,7 +648,6 @@ export function CadJobCard(props: {
             {done && !figure && job.files?.stl && <DfamButton job={job} />}
             {done && <ExportLinks job={job} />}
             {done && <EngCheckButton job={job} onRevise={onRevise ? (comment) => onRevise(comment, []) : undefined} />}
-            {done && <SimulateButton job={job} />}
             {done && job.files?.assembly && <AssemblyGuideButton job={job} />}
             {job.files?.code && link('model.py', 'Code', { icon: <FileTextOutlined /> })}
             {!busy && job.files?.code && (

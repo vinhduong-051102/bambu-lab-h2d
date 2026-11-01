@@ -1,7 +1,6 @@
 """
 Assemblies keep their parts (build.py, guide.md "Assemblies that move"): a model's `components` and `mechanism`
-become components/<name>.stl in their assembled places and assembly.json, which the dashboard simulates as is
-(docs/model-simulation.md); a single part writes neither. assembly_guide.py then draws how to put them together.
+become components/<name>.stl in their assembled places and assembly.json; a single part writes neither. assembly_guide.py then draws how to put them together.
 
     cd /opt/cad && python -m unittest tests.test_assembly
 """

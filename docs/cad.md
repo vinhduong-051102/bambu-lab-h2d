@@ -287,8 +287,7 @@ profile: print the plate again for another.
 | `cad_fix_figure` | Claude reviews a finished figure and fixes it (`prompt`: what to fix, or nothing) |
 | `cad_send_to_studio` | Puts a finished model into Studio's `/imports` |
 | `cad_ask_claude` | Hands the request to Claude in the container instead (runs on the Claude subscription) |
-| `sim_*` | Mechanism simulation: Project Chrono on this computer, played back in Blender ([mechanical-simulation.md](mechanical-simulation.md)) |
-| `inspect_3d_model` … `generate_engineering_report` | Engineering checks of printed parts and assemblies: mesh, fits, motion, FEA, printability, report ([engineering-analysis.md](engineering-analysis.md)) |
+| `inspect_3d_model` … `generate_engineering_report` | Engineering checks of printed parts and assemblies: mesh, fits, FEA, printability, report ([engineering-analysis.md](engineering-analysis.md)) |
 
 Jobs built from Antigravity show up on the dashboard card too, marked **Antigravity / code**.
 

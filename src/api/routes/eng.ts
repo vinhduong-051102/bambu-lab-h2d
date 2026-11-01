@@ -3,20 +3,18 @@ import { getTask, startTask } from '../../domain/backgroundTasks';
 import { handler, json, readJsonBody } from '../http';
 
 /**
- * Engineering analysis of 3D-printed parts (docs/engineering-analysis.md): geometry, assembly, clearance, motion
- * (Chrono), FEA (gmsh + CalculiX), printability, reports and Blender renders run in the mesh container; these routes
+ * Engineering analysis of 3D-printed parts (docs/engineering-analysis.md): geometry, assembly, clearance, FEA
+ * (gmsh + CalculiX), printability, reports and Blender renders run in the mesh container; these routes
  * pass requests through to its /eng routes. Answers (JSON, or a result file) come back as the worker sent them.
  */
 
-// Geometry checks, the motion run with its wait and the Blender renders answer when they are done; FEA answers at once
+// Geometry checks and the Blender renders answer when they are done; FEA answers at once
 const TIMEOUT_MS = 15 * 60 * 1000;
 const POST_ROUTES = new Set([
   'inspect',
   'validate',
   'assembly',
   'clearance',
-  'motion/configure',
-  'motion/run',
   'fea/configure',
   'fea/run',
   'printability',

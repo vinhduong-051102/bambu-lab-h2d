@@ -8,7 +8,7 @@ import base64
 import re
 import time
 
-from . import assembly, clearance, fea, geometry, motion, printability, report, schema, visualize
+from . import assembly, clearance, fea, geometry, printability, report, schema, visualize
 from .store import (EngError, analysis_dir, list_analyses, list_models, load_analysis, load_model, new_analysis,
                     now, resolve_input, save_upload, write_json)
 
@@ -94,46 +94,8 @@ def analyze_assembly(body):
 def check_clearance(body):
     stamp = begin()
     model = model_of(body)
-    if body.get("sim_id"):
-        from sim import runs as sim
-
-        bodies = body.get("bodies") or {}
-        folder = sim.run_dir(body["sim_id"])
-        if not bodies:
-            from .store import read_json
-
-            bodies = {b["id"]: b["id"] for b in read_json(folder / "model.json", {}).get("bodies", [])
-                      if b["id"] in {c["id"] for c in model["components"]}}
-        result = clearance.motion_clearance(model, folder, bodies, int(body.get("frames", 60)), body.get("pairs"))
-    else:
-        result = clearance.analyze(model, print_config(body), body.get("fits"), body.get("gears"), body.get("pairs"),
-                                   body.get("thickness", True) is not False)
-    return {"result": finish(result, stamp)}
-
-
-def configure_motion(body):
-    model = model_of(body)
-    return motion.configure(model, body.get("components"), body.get("joints"), body.get("actuators"),
-                            body.get("forces"), body.get("simulation"), body.get("assumed_density_kg_m3"),
-                            body.get("name"))
-
-
-def run_motion(body):
-    stamp = begin()
-    model = model_of(body)
-    if body.get("sim_id"):
-        result = schema.new_result("motion", model, {"sim_id": body["sim_id"]})
-        result["warnings"].append({"path": "model", "message": motion.RIGID_NOTE})
-        result = motion.collect(model, result, body["sim_id"], body.get("check_clearance", True) is not False,
-                                int(body.get("frames", 60)))
-    else:
-        if not body.get("mechanism_id"):
-            raise EngError(400, "NO_MECHANISM", "Cần mechanism_id (configure_motion_simulation) hoặc sim_id.")
-        result = motion.run(model, body["mechanism_id"], body.get("simulation"),
-                            float(min(max(body.get("wait_s", 120), 0), 600)),
-                            body.get("check_clearance", True) is not False, int(body.get("frames", 60)))
-    if result.get("state") in ("queued", "running"):
-        return {"result": result}
+    result = clearance.analyze(model, print_config(body), body.get("fits"), body.get("gears"), body.get("pairs"),
+                               body.get("thickness", True) is not False)
     return {"result": finish(result, stamp)}
 
 
@@ -174,7 +136,7 @@ def job_model_id(job_id):
 def check_job(body):
     """The dashboard's "Kiểm tra kỹ thuật" on one finished design job: its model.stl imported as a new version of the
     job's model, then the checks that need no loads or joints (mesh, walls, printability) for the print setup given,
-    the wall thickness in Blender, and the report. FEA and motion need the user's loads and joints: through MCP."""
+    the wall thickness in Blender, and the report. FEA needs the user's loads and supports: through MCP."""
     job_id = str(body.get("job_id") or "")
     if not JOB_ID_RE.match(job_id):
         raise EngError(400, "BAD_JOB", "Mã job không hợp lệ.")
@@ -215,7 +177,7 @@ def last_job_check(job_id):
 
 def visualize_results(body):
     model = model_of(body)
-    return {"result": visualize.visualize(model, body.get("mode"), body.get("analysis_id"), body.get("sim_id"),
+    return {"result": visualize.visualize(model, body.get("mode"), body.get("analysis_id"),
                                           print_config(body), body.get("deformation_scale"))}
 
 

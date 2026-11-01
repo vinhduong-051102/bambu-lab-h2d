@@ -7,9 +7,7 @@ Step 4: fits and clearances, in mm.
   clearance for "a 3D printer": without the printer's numbers the printed fit is NOT_EVALUATED and a calibration
   print is asked for.
 - Wall thickness: rays from the surface straight in (percentiles, thinnest spots) against walls × line width.
-- Gear backlash from the centre distance of a declared gear pair (sim.schema.gear_mesh).
-- Clearance over a motion: the components moved by a finished Chrono run, the smallest gap and any overlap at
-  each sampled time.
+- Gear backlash from the centre distance of a declared gear pair (gear_mesh).
 """
 
 import math
@@ -102,11 +100,24 @@ def fit_check(pair, fit_type, print_config):
     return check(name, status, title, detail, round(printed, 4), need, "mm"), info
 
 
+def gear_mesh(teeth_a, teeth_b, module, centre_distance, pressure_angle):
+    """An external spur pair of standard involute gears (addendum m) at `centre_distance`: the working pressure
+    angle and the contact ratio. None when the gears cannot mesh there."""
+    r_a, r_b = teeth_a * module / 2, teeth_b * module / 2
+    rb_a, rb_b = r_a * math.cos(pressure_angle), r_b * math.cos(pressure_angle)
+    if centre_distance <= rb_a + rb_b:
+        return None
+    working = math.acos((rb_a + rb_b) / centre_distance)
+    length = centre_distance * math.sin(working)
+    x_end = min(math.sqrt((r_a + module) ** 2 - rb_a ** 2), length)
+    x_start = max(length - math.sqrt((r_b + module) ** 2 - rb_b ** 2), 0.0)
+    base_pitch = math.pi * module * math.cos(pressure_angle)
+    return {"working_pressure_angle": working, "contact_ratio": (x_end - x_start) / base_pitch}
+
+
 def gear_backlash(g, ms, print_config):
     """A declared gear pair: centre distance from the components' centres (perpendicular to the axis), the backlash
     it gives over the standard m(N_a + N_b)/2, less what the printer adds to each tooth"""
-    from sim import schema as sim_schema
-
     a, b = ms.get(g.get("component_a")), ms.get(g.get("component_b"))
     if a is None or b is None:
         raise EngError(422, "BAD_GEAR", "gears[].component_a / component_b phải là chi tiết của mô hình.")
@@ -124,7 +135,7 @@ def gear_backlash(g, ms, print_config):
     if distance < standard - 1e-3:
         return check(name, FAIL, title, f"Khoảng cách tâm {distance:.4g} mm < {standard:.4g} mm: răng chồng nhau.",
                      round(distance, 4), standard, "mm"), None
-    mesh = sim_schema.gear_mesh(na, nb, m / 1000, distance / 1000, alpha, 0.0)
+    mesh = gear_mesh(na, nb, m, distance, alpha)
     if mesh is None or mesh["contact_ratio"] < 1:
         return check(name, FAIL, title, f"Khoảng cách tâm {distance:.4g} mm quá lớn: hệ số trùng khớp < 1.",
                      round(distance, 4), standard, "mm"), None
@@ -223,76 +234,3 @@ def analyze(model, print_config=None, fits=None, gears=None, pairs=None, thickne
     result["status"] = schema.overall(checks)
     return result
 
-
-def poses(folder, body):
-    """[(t, 4×4 world transform of the body's own frame in mm)] from a Chrono run's body_transforms.csv"""
-    import csv
-
-    out = []
-    with open(folder / "body_transforms.csv", newline="") as f:
-        for row in csv.DictReader(f):
-            if row["body"] != body:
-                continue
-            q = [float(row[k]) for k in ("qw", "qx", "qy", "qz")]
-            m = trimesh.transformations.quaternion_matrix(q)
-            m[:3, 3] = [float(row[k]) * 1000 for k in ("x", "y", "z")]
-            out.append((float(row["t"]), m))
-    return out
-
-
-def motion_clearance(model, sim_folder, bodies, frames=60, pairs=None):
-    """Step 4 over a motion: each mapped component moves with its Chrono body (its mesh is in the assembly frame
-    at t = 0, so it moves by T(t)·T(0)⁻¹). Smallest gap per pair over the sampled times, and the times they
-    overlap."""
-    result = schema.new_result("motion_clearance", model, {"sim_id": sim_folder.name, "bodies": bodies,
-                                                           "frames": frames})
-    ms = geometry.meshes(model)
-    tracks = {}
-    for cid, body in bodies.items():
-        if cid not in ms:
-            raise EngError(422, "BAD_BODY_MAP", f"bodies: không có chi tiết {cid!r}.")
-        track = poses(sim_folder, body)
-        if not track:
-            raise EngError(422, "BAD_BODY_MAP", f"bodies: mô phỏng không có body {body!r}.")
-        tracks[cid] = track
-    n = min(len(t) for t in tracks.values())
-    picks = np.unique(np.linspace(0, n - 1, min(frames, n)).astype(int))
-    ids = list(tracks)
-    wanted = pairs or [[a, b] for i, a in enumerate(ids) for b in ids[i + 1:]]
-    worst = {f"{a}/{b}": {"min_gap": math.inf, "at_t": None, "overlap_times": []} for a, b in wanted}
-    for k in picks:
-        moved = {}
-        for cid in {c for pair in wanted for c in pair}:
-            t0 = tracks[cid][0][1]
-            tk = tracks[cid][k][1]
-            m = ms[cid].copy()
-            m.apply_transform(tk @ np.linalg.inv(t0))
-            moved[cid] = m
-        t = tracks[ids[0]][k][0]
-        for a, b in wanted:
-            entry = worst[f"{a}/{b}"]
-            over = geometry.interference({a: moved[a], b: moved[b]})
-            if over and over[0]["volume"]:
-                entry["overlap_times"].append(round(t, 5))
-                entry["min_gap"] = min(entry["min_gap"], 0.0)
-                continue
-            gap, _, _ = assembly.min_distance(moved[a], moved[b], samples=2000)
-            if gap < entry["min_gap"]:
-                entry["min_gap"], entry["at_t"] = gap, round(t, 5)
-    for key, e in worst.items():
-        if e["overlap_times"]:
-            result["checks"].append(check(f"motion.{key}", FAIL, f"Va chạm khi chuyển động {key}",
-                                          f"Chồng lên nhau tại {len(e['overlap_times'])} thời điểm, đầu tiên t = "
-                                          f"{e['overlap_times'][0]} s.", 0.0, unit="mm"))
-        else:
-            result["checks"].append(check(f"motion.{key}", PASS if e["min_gap"] > 0 else WARNING,
-                                          f"Khe hở khi chuyển động {key}",
-                                          f"Nhỏ nhất {e['min_gap']:.4g} mm tại t = {e['at_t']} s (trên {len(picks)} "
-                                          "thời điểm lấy mẫu; giữa các mẫu có thể nhỏ hơn).",
-                                          round(e["min_gap"], 5), unit="mm"))
-        e["min_gap"] = None if e["min_gap"] == math.inf else round(e["min_gap"], 5)
-    result["data"] = {"pairs": worst, "frames_sampled": int(len(picks))}
-    result["assumptions"].append({"path": "frames", "message": f"Kiểm tra tại {len(picks)} thời điểm cách đều; va "
-                                                               "chạm ngắn giữa hai mẫu có thể bị bỏ sót."})
-    result["status"] = schema.overall(result["checks"])
-    return result

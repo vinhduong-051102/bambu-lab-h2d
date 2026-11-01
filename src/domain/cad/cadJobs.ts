@@ -178,7 +178,7 @@ export interface CadJob extends CadJobMeta {
     sides: boolean;
     shaped: boolean;
     blend: boolean;
-    /** The parts assembled (components declared in model.py): what is simulated, where preview is the print layout */
+    /** The parts assembled (components declared in model.py), where preview is the print layout */
     assembly: boolean;
     /** Its assembly guide: steps (guide.json, a picture each) and a video (assembly.mp4) */
     guide: boolean;

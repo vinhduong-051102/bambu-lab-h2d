@@ -29,7 +29,8 @@ text-to-cad's own skills, as it does on this computer in `cad-projects`.
 | Nhân vật (Hunyuan3D-2 + Blender) | Có | Không | Giữ |
 | Gửi sang Studio | Có (Studio trong Docker) | Skill `bambu-labs` (Bambu Connect / Studio trên máy) | Giữ của gateway: Studio của gateway làm đúng việc này |
 | Cắt lớp G-code | Studio | Skill `gcode` (OrcaSlicer) | Không ghép: Studio của gateway cắt lớp cho H2D |
-| Mô phỏng Chrono, FEA, kiểm tra kỹ thuật | Có: động lực học (lực, trọng lực, va chạm, mô-men động cơ), ứng suất | Không: CAD Viewer chỉ đặt tư thế theo khớp và chuyển động khai báo sẵn (kinematics), không tính lực | Giữ: không trùng |
+| Mô phỏng Chrono (động lực học) | Đã bỏ theo quyết định của người dùng: không còn mô phỏng cơ cấu, mô hình cơ khí, mô phỏng tương tác | CAD Viewer đặt tư thế theo khớp và phát chuyển động khai báo sẵn (kinematics), không tính lực | Bỏ: chuyển động chỉ còn xem trong CAD Viewer qua khớp build123d |
+| FEA, kiểm tra kỹ thuật | Có: ứng suất (gmsh + CalculiX), lưới, lắp ghép, khe hở, khả năng in | Không | Giữ: không trùng |
 | MCP cho agent | `bambu-cad` (Antigravity) | `cad` (cad_show, inspect, snapshot, export) | Giữ `bambu-cad`; `cad_build` nhận cả `@model` |
 
 ## CAD Viewer

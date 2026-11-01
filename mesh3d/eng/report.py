@@ -11,7 +11,7 @@ from . import schema
 from .schema import NOT_EVALUATED
 from .store import analysis_dir, list_analyses, load_analysis, new_analysis, now, write_json
 
-KINDS = ["inspect", "validate", "assembly", "clearance", "motion", "fea", "printability", "visualize"]
+KINDS = ["inspect", "validate", "assembly", "clearance", "fea", "printability", "visualize"]
 BADGE = {"PASS": "#15803d", "WARNING": "#b45309", "FAIL": "#b91c1c", "NOT_EVALUATED": "#6b7280"}
 
 
@@ -114,16 +114,6 @@ def build(model, analysis_ids=None):
     add("4. Kiểm tra lắp ráp", "assembly", assembly_lines)
     add("5. Khe hở và dung sai", "clearance")
 
-    def motion_lines(r):
-        s = r["data"].get("summary") or {}
-        out = [f"Chạy `{r.get('sim_id')}`: {s.get('result_kind', '')}.", ""]
-        for jid, j in (s.get("joints") or {}).items():
-            out.append(f"- {jid} ({j['kind']}): giá trị {fmt(j.get('value'))}, phản lực lớn nhất "
-                       f"{fmt(j.get('max_reaction_force_N'))} N")
-        return out + [""]
-
-    add("6. Mô phỏng chuyển động", "motion", motion_lines)
-
     def fea_lines(r):
         d = r.get("data") or {}
         if not d.get("levels"):
@@ -137,16 +127,16 @@ def build(model, analysis_ids=None):
         return [f"Chi tiết {d['component']}, vật liệu {mat.get('name') or '?'}: E = {fmt(mat['young_modulus_MPa'])} MPa, "
                 f"ν = {fmt(mat['poisson_ratio'])} (nguồn: {mat.get('source')}).", ""] + rows + [""]
 
-    add("7. Phân tích độ bền (FEM)", "fea", fea_lines)
+    add("6. Phân tích độ bền (FEM)", "fea", fea_lines)
 
     def print_lines(r):
         need = r["data"].get("calibration_needed") or []
         return ([f"Cần hiệu chuẩn trước khi sản xuất: {', '.join(need)}.", ""] if need else [])
 
-    add("8. Đánh giá khả năng in 3D", "printability", print_lines)
+    add("7. Đánh giá khả năng in 3D", "printability", print_lines)
 
-    # 9. Assumptions and missing data, from every analysis
-    md += ["## 9. Giả định và dữ liệu còn thiếu", ""]
+    # 8. Assumptions and missing data, from every analysis
+    md += ["## 8. Giả định và dữ liệu còn thiếu", ""]
     seen = set()
     for kind, results in found.items():
         for r in results:
@@ -166,18 +156,17 @@ def build(model, analysis_ids=None):
                     md.append(f"- Cảnh báo ({kind}) `{w.get('path')}`: {w.get('message')}")
     md.append("")
 
-    # 10. Recommendations: from the failed and warned checks
-    md += ["## 10. Khuyến nghị sửa đổi thiết kế", ""]
+    # 9. Recommendations: from the failed and warned checks
+    md += ["## 9. Khuyến nghị sửa đổi thiết kế", ""]
     recs = [c for rs in found.values() for r in rs for c in r["checks"] if c["status"] in ("FAIL", "WARNING")]
     md += [f"- **{c['status']}** {c['title']}: {c['detail']}" for c in recs] or ["- Không có (trong những gì đã kiểm tra)."]
     md.append("")
 
-    # 11. Confidence
-    md += ["## 11. Mức độ tin cậy và giới hạn", "", "| Mục | Trạng thái | Số kiểm tra |", "|---|---|---|"]
+    # 10. Confidence
+    md += ["## 10. Mức độ tin cậy và giới hạn", "", "| Mục | Trạng thái | Số kiểm tra |", "|---|---|---|"]
     md += [f"| {t} | **{s}** | {n} |" for t, s, n in summary]
     md += ["", "- Hình học đo trên lưới tam giác: độ chính xác theo độ mịn lưới; không có thông tin CAD (dung sai, ren, "
            "vật liệu) trừ khi người dùng cung cấp.",
-           "- Chuyển động: vật rắn lý tưởng (Project Chrono); không nói gì về cong, gãy.",
            "- FEM: tuyến tính, đẳng hướng, chi tiết coi là đặc; vật in FDM dị hướng và phụ thuộc infill/số thành. Ứng "
            "suất đỉnh ở vùng ngàm/góc sắc có thể là điểm kỳ dị số học.",
            "- Khả năng in: quy tắc hình học; sai số thật phải đo bằng mẫu hiệu chuẩn trên đúng máy, vật liệu, thông số.",

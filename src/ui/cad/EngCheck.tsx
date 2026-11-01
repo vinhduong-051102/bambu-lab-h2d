@@ -25,7 +25,7 @@ import { PrintIllustration } from './PrintIllustration';
 /**
  * "Kiểm tra kỹ thuật" of a finished design job (docs/engineering-analysis.md): its model.stl checked by the mesh
  * worker for the print setup the user types (remembered in this browser): mesh, walls, printability, a Blender
- * render of the wall thickness, and the report. FEA and motion need loads, supports and joints: through Claude (MCP).
+ * render of the wall thickness, and the report. FEA needs loads and supports: through Claude (MCP).
  */
 
 type Check = {

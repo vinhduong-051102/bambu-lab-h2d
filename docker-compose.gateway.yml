@@ -20,7 +20,6 @@ services:
       # in .env are the host's, not this container's
       - CAD_WORKER_URL=http://bambu-cad:8000
       - MESH_WORKER_URL=http://bambu-mesh3d:8000
-      - SIM_LIVE_URL=http://bambu-sim-live:8000
       # text-to-cad's CAD Viewer: the CAD container forwards cadgen's engine to VIEWER_PORT, served here on its own
       # port (HTTPS with the dashboard's certificate); every page still needs the engine's token
       - CAD_VIEWER_PORT=3444

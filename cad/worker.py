@@ -693,8 +693,19 @@ def start_display():
     """Xvfb on $DISPLAY: cadgen draws its snapshots through OCCT's OpenGL view, which on Linux needs an X display.
     Started here rather than by xvfb-run, which hangs as a container's first process"""
     display = os.environ.get("DISPLAY")
-    if not display or sys.platform != "linux" or Path(f"/tmp/.X11-unix/X{display.lstrip(':')}").exists():
+    if not display or sys.platform != "linux":
         return
+    number = display.lstrip(":").split(".")[0]
+    sock = Path(f"/tmp/.X11-unix/X{number}")
+    try:
+        with socket.socket(socket.AF_UNIX) as probe:
+            probe.connect(str(sock))
+        return  # an Xvfb answers on it already
+    except OSError:
+        # None, or one left by the Xvfb of a container that was restarted (its /tmp kept): Xvfb refuses to start
+        # while its lock is there
+        sock.unlink(missing_ok=True)
+        Path(f"/tmp/.X{number}-lock").unlink(missing_ok=True)
     try:
         subprocess.Popen(["Xvfb", display, "-screen", "0", "1920x1080x24", "-nolisten", "tcp"],
                          stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)

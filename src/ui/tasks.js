@@ -10,8 +10,6 @@ export const KIND_LABELS = {
   'cad-guide': 'Hướng dẫn lắp',
   'print-parts': 'Phân tích thành phần',
   'parts-backfill': 'Phân tích bản in cũ',
-  'mech-setup': 'Chuẩn bị mô phỏng',
-  'sim-run': 'Lần chạy mô phỏng',
   'timelapse-review': 'AI xem timelapse',
 };
 

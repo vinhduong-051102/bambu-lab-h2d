@@ -78,6 +78,31 @@ mechanism = {
 """
 
 
+# A robot's way: links (sub-assemblies) each holding printed parts and a bought servo
+LINKS = """
+import build123d as bd
+from cadgen import model
+
+
+def part(label, box, at):
+    body = bd.Pos(*at) * bd.Box(*box)
+    body.label = label
+    return body
+
+
+@model
+def arm():
+    base = bd.Compound(children=[part("base_plate", (60, 60, 10), (0, 0, 5)),
+                                 part("servo", (20, 40, 36), (0, 0, 28))], label="base")
+    link = bd.Compound(children=[part("upper_arm", (80, 12, 6), (40, 0, 49)),
+                                 part("upper_cover", (30, 12, 3), (40, 0, 53.5))], label="link")
+    return bd.Compound(children=[base, link], label="robot")
+
+
+print_parts = ["base_plate", "upper_arm", "upper_cover"]
+"""
+
+
 def run(script, *args, cwd):
     return subprocess.run([sys.executable, str(HERE / script), *args], cwd=cwd, capture_output=True, text=True,
                           timeout=600, check=False)
@@ -132,6 +157,25 @@ class TextToCadTest(unittest.TestCase):
         self.assertIn("print_layout", report)
         self.assertTrue((out / "assembly.png").exists())
         self.assertTrue((out / "model.3mf").exists())
+
+    def test_an_assembly_of_links_prints_the_parts_it_names(self):
+        done, job = build(LINKS)
+        out = job / "out"
+        report = json.loads((out / "report.json").read_text(encoding="utf-8"))
+        self.assertEqual(done.returncode, 0, report.get("error"))
+        # The parts inside the links, not the links; the servo is bought
+        self.assertEqual(sorted(report["components"]), ["base_plate", "upper_arm", "upper_cover"])
+        assembly = json.loads((out / "assembly.json").read_text(encoding="utf-8"))
+        cover = next(c for c in assembly["components"] if c["name"] == "upper_cover")
+        self.assertEqual([round(v, 1) for v in cover["center_mm"]], [40.0, 0.0, 53.5])
+        placed = {p for plate in report["print_layout"]["plates"] for p in plate["parts"]}
+        self.assertEqual(placed, {"base_plate", "upper_arm", "upper_cover"})
+
+    def test_print_parts_must_name_parts_of_the_model(self):
+        done, job = build(LINKS.replace('"upper_cover"]', '"upper_cover", "lid"]'))
+        report = json.loads((job / "out" / "report.json").read_text(encoding="utf-8"))
+        self.assertEqual(done.returncode, 1)
+        self.assertIn("lid", report["error"])
 
     def test_drawing_and_dfam_of_a_built_model(self):
         done, job = build(PART)

@@ -1,13 +1,12 @@
 import { listTasks, retryTask } from '../../domain/backgroundTasks';
 import { handler, json, readJsonBody } from '../http';
 import { recentCadJobs } from './cad';
-import { simRunError, simRunList } from './sim';
 
 /**
  * The dashboard's task panel: everything the user waits on that goes on when the page closes, in one list. The
- * gateway's own background tasks (engineering checks, assembly guides, part analyses, simulation setups, timelapse
- * reviews, measuring the earlier prints), the AI models (CAD and mesh workers) and the recorded simulation runs. A
- * failed one says why, with details, and how to run it again (`retry_url`, POST).
+ * gateway's own background tasks (engineering checks, assembly guides, part analyses, timelapse reviews, measuring
+ * the earlier prints) and the AI models (CAD and mesh workers). A failed one says why, with details, and how to run
+ * it again (`retry_url`, POST).
  */
 
 export interface PanelTask {
@@ -61,31 +60,6 @@ async function cadTasks(now: number): Promise<PanelTask[]> {
   });
 }
 
-async function simTasks(now: number): Promise<PanelTask[]> {
-  const runs = (await simRunList().catch(() => null)) ?? [];
-  const shown = runs.filter((r) => r.state === 'queued' || r.state === 'running' || (r.state === 'failed' && recent(r.created_at, FAILED_FOR_MS, now)));
-  return Promise.all(
-    shown.map(async (run): Promise<PanelTask> => {
-      const failed = run.state === 'failed';
-      return {
-        key: `sim-run:${run.sim_id}`,
-        kind: 'sim-run',
-        label: run.name || run.sim_id,
-        page: 'sim',
-        state: failed ? 'failed' : 'running',
-        started_at: run.created_at,
-        finished_at: null,
-        error: failed ? ((await simRunError(run.sim_id).catch(() => null)) ?? 'Lần chạy lỗi.') : null,
-        details: [`Mã lần chạy: ${run.sim_id}`],
-        progress: !failed && typeof run.progress === 'number' ? { done: Math.round(run.progress * 100), total: 100, unit: '%' } : null,
-        // A run belongs to its model's setup revision: run it from there, so the result lands on that revision
-        retry_url: null,
-        ...(failed && { retry_hint: 'Sửa cấu hình rồi bấm “Chạy ghi kết quả” trong ⚙️ Mô phỏng của mẫu.' }),
-      };
-    })
-  );
-}
-
 function gatewayTasks(now: number): PanelTask[] {
   return listTasks()
     .filter((t) => t.running || recent(t.finished_at, t.error ? FAILED_FOR_MS : DONE_FOR_MS, now))
@@ -109,8 +83,8 @@ const ORDER = { running: 0, failed: 1, done: 2 } as const;
 // GET /api/tasks - Running, failed and recently finished background tasks, running first
 export const getTasks = handler(async () => {
   const now = Date.now();
-  const [cad, sim] = await Promise.all([cadTasks(now), simTasks(now)]);
-  const tasks = [...gatewayTasks(now), ...cad, ...sim].sort(
+  const cad = await cadTasks(now);
+  const tasks = [...gatewayTasks(now), ...cad].sort(
     (a, b) => ORDER[a.state] - ORDER[b.state] || (b.started_at ?? '').localeCompare(a.started_at ?? '')
   );
   return json({ success: true, tasks });

@@ -1,6 +1,6 @@
 # bambu-h2d-gateway
 
-Local LAN Gateway for Bambu Lab H2D (and Bambu Lab X1 / P1 / A1 series) 3D Printers over MQTT TLS & Live Camera Stream, with a web dashboard, embedded Bambu Studio, AI model design and mechanism simulation.
+Local LAN Gateway for Bambu Lab H2D (and Bambu Lab X1 / P1 / A1 series) 3D Printers over MQTT TLS & Live Camera Stream, with a web dashboard, embedded Bambu Studio, AI model design and engineering checks.
 
 ---
 
@@ -31,8 +31,7 @@ PrinterService (PrinterManager)
 Optional containers, reached over HTTP by the gateway:
  ├── Bambu Studio (docker-compose.studio.yml)      slicing & printing, embedded in the dashboard
  ├── CAD worker  (docker-compose.cad.yml)          Claude + text-to-cad (cadgen): technical parts, drawings, DfAM, STEP/IGES import
- ├── mesh3d      (docker-compose.mesh3d.yml)       Hunyuan3D-2 + Blender: figures; Chrono simulation; part analysis
- └── sim-live    (docker-compose.sim-live.yml)     Project Chrono kept running for interactive simulation
+ └── mesh3d      (docker-compose.mesh3d.yml)       Hunyuan3D-2 + Blender: figures; engineering checks (FEA); part analysis
 ```
 
 ### Dashboard features
@@ -44,8 +43,7 @@ Optional containers, reached over HTTP by the gateway:
 | Bambu Studio | Studio in the browser, `/imports` file list, "AI tối ưu" print settings from Claude | [studio.md](docs/studio.md) |
 | Print history | Each print's settings, photos, report, model parts; timelapses with "AI nhận xét" | [studio.md](docs/studio.md) |
 | Thiết kế mô hình bằng AI | Technical parts (text-to-cad: cadgen + build123d), 3D view, engineering drawings, DfAM check, figures (Hunyuan3D-2 + Blender), revisions, plate layout for the H2D, assembly guide, send to Studio | [cad.md](docs/cad.md), [text-to-cad.md](docs/text-to-cad.md) |
-| Kiểm tra kỹ thuật | Mesh, assembly, fits, motion, FEA, printability, reports for a printed part | [engineering-analysis.md](docs/engineering-analysis.md) |
-| Mô phỏng | Mechanisms in Project Chrono played back in Blender; a model simulated as it is; interactive simulation | [mechanical-simulation.md](docs/mechanical-simulation.md), [model-simulation.md](docs/model-simulation.md), [interactive-physics.md](docs/interactive-physics.md) |
+| Kiểm tra kỹ thuật | Mesh, assembly, fits, FEA, printability, reports for a printed part | [engineering-analysis.md](docs/engineering-analysis.md) |
 | Hệ thống | Claude plan limits (two subscriptions), AI usage and cost per task | — |
 
 ---
@@ -101,11 +99,10 @@ DOCKER_BUILDKIT=0 docker compose -f docker-compose.gateway.yml up -d --build
 # Optional workers, each on the same Docker network as the gateway
 docker compose -f docker-compose.studio.yml up -d            # Bambu Studio
 docker compose -f docker-compose.cad.yml up -d --build       # AI design (build123d)
-docker compose -f docker-compose.mesh3d.yml up -d --build    # figures, simulation, part analysis (GPU)
-docker compose -f docker-compose.sim-live.yml up -d          # interactive simulation
+docker compose -f docker-compose.mesh3d.yml up -d --build    # figures, engineering checks, part analysis (GPU)
 ```
 
-Inside the gateway container the workers are reached by container name (`bambu-cad`, `bambu-mesh3d`, `bambu-sim-live`); the `*_URL` values in `.env` are for `npm start` on the host.
+Inside the gateway container the workers are reached by container name (`bambu-cad`, `bambu-mesh3d`); the `*_URL` values in `.env` are for `npm start` on the host.
 
 ---
 
@@ -153,7 +150,6 @@ CAD_AI_MODEL=claude-opus-5-5
 # Workers (empty = feature off)
 CAD_WORKER_URL=
 MESH_WORKER_URL=
-SIM_LIVE_URL=
 
 # Data folders
 STUDIO_AI_DATA_DIR=./data/studio/ai
@@ -221,7 +217,7 @@ The dashboard lists every route with examples (`src/api/routeDocs.ts`); the full
 | `/api/timelapse` | GET | Timelapses copied from the printer |
 | `/api/timelapse/:name/review` | GET / POST | "AI nhận xét" on a timelapse |
 
-### AI design, engineering checks & simulation
+### AI design & engineering checks
 
 | Endpoint | Method | Description |
 |----------|--------|-------------|
@@ -232,12 +228,7 @@ The dashboard lists every route with examples (`src/api/routeDocs.ts`); the full
 | `/api/cad/meshes` | POST | Figure from a picture or description (Hunyuan3D-2 on the GPU, mesh3d) |
 | `/api/cad/builds` | POST | Build agent-written build123d code: STL/STEP, preview and checks |
 | `/api/cad/guide` | GET | Design rules for the H2D (Markdown, for agents) |
-| `/api/eng/:tool` | POST | Engineering checks (mesh, assembly, clearance, motion, FEA, printability, report) |
-| `/api/mech/:action` | POST | Mechanical model: create, validate, simulate, repair |
-| `/api/sim/mechanisms`, `/api/sim/runs` | GET / POST | Mechanisms and their Chrono runs |
-| `/api/sim/runs/:id/play` | POST | Play a run back in Blender |
-| `/api/sim/live` | GET / POST | Interactive simulation sessions |
-| `/api/sim/live/:id/stream`, `/actions` | GET / POST | Live state stream; drag, push, change motors |
+| `/api/eng/:tool` | POST | Engineering checks (mesh, assembly, clearance, FEA, printability, report) |
 | `/api/ai/limits`, `/api/ai/usage` | GET | Claude plan limits and AI usage per task |
 
 ---
@@ -257,7 +248,7 @@ Connect to `ws://HOST:PORT/ws` to receive real-time event packets:
 
 ## 🤖 MCP Server for Agents
 
-`cad/mcp/server.mjs` (stdio, no dependencies) gives Claude Code, Antigravity or another agent the gateway's design, engineering and simulation tools: `cad_build`, `cad_make_figure`, `cad_send_to_studio`, `sim_create_mechanism`, `sim_run_simulation`, `sim_start_interactive`, `run_fea_analysis`, `mech_*`, … It is registered for this repository in [`.mcp.json`](.mcp.json):
+`cad/mcp/server.mjs` (stdio, no dependencies) gives Claude Code, Antigravity or another agent the gateway's design and engineering tools: `cad_build`, `cad_make_figure`, `cad_send_to_studio`, `inspect_3d_model`, `check_clearance`, `run_fea_analysis`, … It is registered for this repository in [`.mcp.json`](.mcp.json):
 
 ```json
 {
@@ -280,13 +271,7 @@ Detailed documentation is available in `docs/`:
 - [`docs/development.md`](docs/development.md) — Developer & Testing Guide
 - [`docs/studio.md`](docs/studio.md) — Bambu Studio embedded in the dashboard (slicing & printing, "AI tối ưu", print history)
 - [`docs/cad.md`](docs/cad.md) — AI model design (Claude: technical parts in build123d; figures from Hunyuan3D-2, finished by Claude in Blender through MCP for Blender; Antigravity) for printing
-- [`docs/engineering-analysis.md`](docs/engineering-analysis.md) — Engineering checks of printed parts: mesh, assembly, fits, motion (Chrono), FEA (gmsh + CalculiX), printability, reports, through MCP
-- [`docs/mechanical-model.md`](docs/mechanical-model.md) — Mechanical model: parts, assembly, joints and physics from a design or an imported assembly
-- [`docs/mechanical-simulation.md`](docs/mechanical-simulation.md) — Mechanism simulation: Project Chrono (PyChrono) on this computer, played back in Blender, driven by an agent through MCP
-- [`docs/mechanical-simulation-plan.md`](docs/mechanical-simulation-plan.md) — Mechanism simulation: design, phases and risks
-- [`docs/model-simulation.md`](docs/model-simulation.md) — Simulating a 3D model as it is, in the live viewer
-- [`docs/interactive-physics.md`](docs/interactive-physics.md) — Interactive simulation: act on a running Chrono system
-- [`docs/interactive-physics-roadmap.md`](docs/interactive-physics-roadmap.md) — Interactive physics: survey and roadmap
+- [`docs/engineering-analysis.md`](docs/engineering-analysis.md) — Engineering checks of printed parts: mesh, assembly, fits, FEA (gmsh + CalculiX), printability, reports, through MCP
 
 ---
 

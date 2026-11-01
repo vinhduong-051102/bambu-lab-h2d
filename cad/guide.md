@@ -70,39 +70,39 @@ if __name__ == "__main__":
 ## Assemblies that move
 
 When the request is a mechanism or several parts that work together (a hinge, gears on shafts, a crank and a
-slider…), keep every part separate so the dashboard can simulate the model as it is:
+slider…), keep every part separate, in its assembled place:
 
 - Return an assembly, as the `cad` skill composes one: each part its own `@model` (or a helper), placed **in its
   assembled place** (shafts in their holes, gears meshing), labelled, and the parts returned as
   `bd.Compound(children=[...])`. Each child of the assembly is a component, named by its label (letters, digits,
-  `_`, `-`; unique). Don't lay the parts out for printing: build.py does it, each part on the face it prints best
+  `_`, `-`; unique). An assembly of sub-assemblies (a robot's links, each holding its printed parts, servos and
+  bearings) gives every part in them; name the ones to print in `print_parts = ["base", "arm", ...]` at module
+  level, and the rest (bought, wired, drawn for fit) stays out of the print layout. Don't lay the parts out for printing: build.py does it, each part on the face it prints best
   on, packed onto as many H2D plates as it takes (report.json `print_layout`; model.3mf has the plates). Parts
   that are bought, not printed (a steel shaft, a screw, a spring, a step.parts bearing): list them in
   `not_printed = ["shaft"]` at module level (a `mechanism` part of metal is left out by itself). Only when a part
   must print in a particular way the build can't guess, set `print_layout = "manual"`: the model is then printed as
   it stands, so return the parts laid out for printing.
-- build123d joints and cadgen's mechanism states (the `cad` skill's kinematics) are welcome: they pose the model in
-  the GLB and the snapshots. The dashboard's simulation reads `mechanism` below.
-- When the user said how it moves, also assign `mechanism` at module level, naming parts by their component name (mm, degrees,
-  kg, N, N·m; positions and axes in the assembled frame):
+- How it moves is shown in text-to-cad's CAD Viewer (🧭 CAD Viewer on the dashboard): give the model build123d joints
+  and cadgen's mechanism states (the `cad` skill's kinematics), which also pose the model in the GLB and the
+  snapshots. Nothing simulates the physics (forces, motor torque, masses): the motion is kinematic only.
+- When the parts are jointed together, also assign `mechanism` at module level, naming parts by their component name
+  (mm, degrees; positions and axes in the assembled frame). build.py reads it to leave metal parts off the print
+  layout, and the assembly guide below to work out the order:
 
 ```python
 mechanism = {
-    "parts": {"base": {"fixed": True, "role": "frame", "material": "pla"},
-              "arm": {"role": "arm", "material": "pla"}},
+    "parts": {"base": {"fixed": True, "material": "pla"}, "arm": {"material": "pla"},
+              "pin": {"material": "steel"}},
     "joints": [{"id": "hinge", "type": "revolute", "part_a": "base", "part_b": "arm",
                 "position": [0, 0, 20], "axis": [0, 1, 0]}],
-    "motors": [{"id": "drive", "joint": "hinge", "speed_rpm": 30}],
-    "simulation": {"duration": 2, "time_step": 0.001},
 }
 ```
 
-  Roles: frame, housing, shaft, gear, pulley, crank, rod, link, slider, rocker, arm, bearing, pin, other. Joint
-  types: fixed, revolute, prismatic, cylindrical, spherical. `gears`: `[{"id", "gear_a", "gear_b",
-  "teeth_a", "teeth_b"}]`, each gear on its own revolute joint to a common part. Parts may give `mass`
-  (kg), `collision: True` with `friction`. Only write what the user asked for or what the design itself fixes (a
-  joint is where you put the pin): never invent a motor speed, a load or a mass the user did not give. What is
-  missing is asked for in the dashboard before simulating.
+  Parts: `fixed` (the frame the others go onto), `material` (a metal one, steel or brass…, is bought, not
+  printed). Joint types: fixed, revolute, prismatic, cylindrical, spherical. `gears`: `[{"id", "gear_a", "gear_b",
+  "teeth_a", "teeth_b"}]`, each gear on its own revolute joint to a common part. Only write what the user asked for
+  or what the design itself fixes (a joint is where you put the pin).
 - The dashboard draws an assembly guide from it (a picture per step and a video): the fixed parts first, then each
   part after the one it is jointed to, along its joint's axis. When the order or the way in matters (a shaft that
   takes its gears before it goes into the housing, a lid last), assign `assembly_steps` at module level, in
