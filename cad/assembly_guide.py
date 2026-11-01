@@ -33,10 +33,15 @@ WIDTH, HEIGHT, HEADER = 960, 720, 92
 SUPERSAMPLE = 2
 # The meshes are drawn coarsened to a grid this many cells across the model: about a pixel of the picture
 GRID_CELLS = 500
+# How much of the parts going on shows over what is in front of them (0–255): enough to see them whole, while the
+# parts in front still show through
+FRONT_ALPHA = 200
 FPS = 24
 # Frames of each step: still with its arrow, moving in, still in place; then the turn round the finished model
 HOLD_BEFORE, MOVE, HOLD_AFTER, TURN = 12, 18, 8, 72
 ELEVATION, AZIMUTH = 28, -55
+# The heights the view is chosen among (degrees above the plate)
+ELEVATIONS = (15, ELEVATION, 55)
 PLACED, MOVING, BACKGROUND, ARROW, INK = (178, 188, 204), (240, 128, 32), (255, 255, 255), (28, 64, 120), (20, 28, 40)
 AXIS_JOINTS = ("revolute", "cylindrical", "prismatic")
 DOING = {
@@ -236,12 +241,14 @@ class Frame:
                          self.target[1] - (flat[..., 1] - self.middle[1]) * self.scale], axis=-1)
 
 
-def coverage(camera, meshes, size=(240, 180)):
-    """Pixels each mesh shows from this camera, at a small size, nearer faces drawn over farther ones"""
+def coverage(camera, meshes, size=(240, 180), within=None):
+    """Pixels each mesh shows from this camera, at a small size, nearer faces drawn over farther ones; `within`, the
+    meshes whose extent sets the scale (the meshes themselves when not given)"""
     tris = np.concatenate(meshes)
     owner = np.concatenate([np.full(len(m), k) for k, m in enumerate(meshes)])
     flat = camera.flat(tris)
-    lo, hi = flat.reshape(-1, 2).min(axis=0), flat.reshape(-1, 2).max(axis=0)
+    extent = camera.flat(np.concatenate(within)) if within else flat
+    lo, hi = extent.reshape(-1, 2).min(axis=0), extent.reshape(-1, 2).max(axis=0)
     scale = min((size[0] - 4) / max(hi[0] - lo[0], 1e-6), (size[1] - 4) / max(hi[1] - lo[1], 1e-6))
     corners = 2 + (flat - lo) * scale
     corners[..., 1] = size[1] - corners[..., 1]
@@ -252,22 +259,24 @@ def coverage(camera, meshes, size=(240, 180)):
     return np.bincount(np.asarray(image).ravel(), minlength=len(meshes) + 1)[1:]
 
 
-def best_camera(guide, base):
-    """The view, of a few from above, that shows most of the parts that go onto the base: a housing's wall towards
-    the viewer would hide everything inside it"""
-    inside = [guide.meshes[n] for n in guide.names if n not in base]
-    if not inside:
+def best_camera(guide):
+    """The view, of a few from above, from which the parts of the finished model are seen best: on average, the
+    largest share of each part not hidden behind others. A housing's wall towards the viewer would hide everything
+    inside it; looking down on a standing arm would hide its links behind each other"""
+    meshes = [guide.meshes[n] for n in guide.names]
+    if len(meshes) < 2:
         return Camera(ELEVATION, AZIMUTH)
-    walls = [guide.meshes[n] for n in base]
     best, score = None, -1.0
-    for elevation in (ELEVATION, 55):
+    for elevation in ELEVATIONS:
         for azimuth in range(AZIMUTH, AZIMUTH + 360, 45):
             camera = Camera(elevation, azimuth)
-            shown = coverage(camera, walls + inside)[len(walls):].sum() / max(coverage(camera, inside).sum(), 1)
+            shown = coverage(camera, meshes)
+            whole = np.array([coverage(camera, [m], within=meshes)[0] for m in meshes])
+            seen = (shown / np.maximum(whole, 1))[whole > 0].mean()
             # A little for the usual view, so a symmetric model keeps it
-            shown += 0.02 * (elevation == ELEVATION and azimuth == AZIMUTH)
-            if shown > score:
-                best, score = camera, shown
+            seen += 0.02 * (elevation == ELEVATION and azimuth == AZIMUTH)
+            if seen > score:
+                best, score = camera, seen
     return best
 
 
@@ -296,8 +305,8 @@ def wrap(draw, text, face, width):
     return lines + [line] if line else lines
 
 
-def draw(camera, frame, pieces, title, text, arrows=()):
-    """One picture: pieces [(triangles, colour)], shaded by light, far faces first; arrows [(from, to)] in mm"""
+def paint(image, camera, frame, pieces):
+    """pieces [(triangles, colour)] onto the image, shaded by light, far faces first"""
     tris = np.concatenate([t for t, _ in pieces])
     colour = np.concatenate([np.tile(np.array(c, dtype=float), (len(t), 1)) for t, c in pieces])
     normals = np.cross(tris[:, 1] - tris[:, 0], tris[:, 2] - tris[:, 0])
@@ -307,12 +316,25 @@ def draw(camera, frame, pieces, title, text, arrows=()):
     fills = np.clip(colour * shade[:, None], 0, 255).astype(int)
     corners = frame.place(camera.flat(tris))
     depth = (tris.mean(axis=1) @ camera.towards)
-
-    image = Image.new("RGB", (WIDTH * SUPERSAMPLE, HEIGHT * SUPERSAMPLE), BACKGROUND)
     pen = ImageDraw.Draw(image)
     for i in np.argsort(depth):
         fill = tuple(fills[i])
         pen.polygon([tuple(p) for p in corners[i]], fill=fill, outline=fill)
+
+
+def draw(camera, frame, pieces, title, text, arrows=(), front=()):
+    """One picture: pieces [(triangles, colour)], shaded by light, far faces first; arrows [(from, to)] in mm.
+    `front`, the parts going on, are drawn again over the rest, the parts in front of them seen through: in an
+    assembly they would often be hidden behind what is already in place"""
+    size = (WIDTH * SUPERSAMPLE, HEIGHT * SUPERSAMPLE)
+    image = Image.new("RGB", size, BACKGROUND)
+    paint(image, camera, frame, pieces)
+    if front:
+        layer = Image.new("RGB", size, BACKGROUND)
+        paint(layer, camera, frame, front)
+        covered = np.any(np.asarray(layer) != BACKGROUND, axis=2)
+        image = Image.composite(layer, image, Image.fromarray((covered * FRONT_ALPHA).astype(np.uint8), "L"))
+    pen = ImageDraw.Draw(image)
     for start, end in arrows:
         a, b = frame.place(camera.flat(np.array([start, end])))
         length = np.linalg.norm(b - a)
@@ -374,7 +396,7 @@ def make(out):
     shutil.rmtree(folder, ignore_errors=True)
     folder.mkdir()
 
-    camera = best_camera(guide, steps[0]["parts"])
+    camera = best_camera(guide)
     # One framing for every step, so the model stays put while parts come in from wherever they start
     points = [m.reshape(-1, 3) for m in guide.meshes.values()]
     points += [guide.meshes[name].reshape(-1, 3) + move["direction"] * move["distance"]
@@ -389,12 +411,12 @@ def make(out):
 
         def picture(t, arrows):
             pieces = [(guide.meshes[p], PLACED) for p in placed]
-            pieces += [(guide.meshes[p] + (moves[p]["direction"] * moves[p]["distance"] * (1 - t) if p in moves else 0), MOVING)
-                       for p in step["parts"]]
+            going = [(guide.meshes[p] + (moves[p]["direction"] * moves[p]["distance"] * (1 - t) if p in moves else 0), MOVING)
+                     for p in step["parts"]]
             lines = [(guide.centres[p] + moves[p]["direction"] * moves[p]["distance"] * (1 - t),
                       guide.centres[p] + moves[p]["direction"] * min(moves[p]["distance"] * (1 - t), 0.25 * moves[p]["distance"]))
                      for p in moves] if arrows else []
-            return draw(camera, frame, pieces, title, step["text"], lines)
+            return draw(camera, frame, pieces + going, title, step["text"], lines, front=going)
 
         start = picture(0, arrows=True)
         start.save(folder / step["image"])
