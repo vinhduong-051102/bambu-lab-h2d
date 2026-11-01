@@ -9,6 +9,8 @@ onto as many H2D plates as it takes.
 - Packing: footprints (rectangles, a gap apart, turned 90° when that fits better) go on the plate area both nozzles
   reach (H2D: X 25–325, Y 0–310 mm), at least GAP apart and MARGIN in from the edge, biggest first, each where it leaves the shortest side free (MaxRects); a part
   that fits on no plate starts a new one, one larger than a plate gets a plate of its own and a warning.
+- Prime tower: when the parts packed and spread would cover the place Studio prints its prime tower (PRIME_TOWER),
+  they are packed again around it, so the tower Studio adds at slicing stays within the right nozzle's reach.
 - Spreading: a plate's parts then move apart to use the whole area (each one's distance from the packed corner
   scaled up, which only widens the gaps), and the group is centred on the plate.
 - Plates sit where Bambu Studio puts them (plate n at its grid place, a fifth of a plate apart), so the 3MF that
@@ -30,6 +32,11 @@ MAX_HEIGHT = 320.0
 # (brim_width): a part 3 mm from the edge had its brim past what the right nozzle reaches, and parts 8 mm apart had
 # their paths flagged as colliding. A plate with room to spare spreads its parts further apart and centres them.
 MARGIN, GAP = 8.0, 12.0
+# Kept clear on every plate for the prime tower Studio adds when it slices (X0, Y0, X1, Y1 on the bed, mm). The H2D
+# process prints one 60 mm wide (prime_tower_width) at wipe_tower_x/y = 165, 250 unless moved, also for a single
+# filament when a timelapse or a nozzle change needs it; with no free spot there, Studio pushed it out of the right
+# nozzle's reach (X < 25) on a full plate. Its brim and the gap to the parts are inside this box.
+PRIME_TOWER = (155.0, 240.0, 235.0, 310.0)
 # At most this many times the packed spacing, so a few small parts don't fly to the plate's corners
 SPREAD_MAX = 3.0
 # Studio's LOGICAL_PART_PLATE_GAP: plates are a fifth of a plate apart
@@ -168,21 +175,39 @@ def sizes(placed, turned):
     return out
 
 
-def spread(placed, footprints, usable):
+def tower_box():
+    """PRIME_TOWER in packing coordinates (from the corner of the usable area): x0, y0, x1, y1"""
+    x0, y0 = REACH[0][0] + MARGIN, REACH[1][0] + MARGIN
+    return PRIME_TOWER[0] - x0, PRIME_TOWER[1] - y0, PRIME_TOWER[2] - x0, PRIME_TOWER[3] - y0
+
+
+def on_tower(x, y, footprint):
+    """Whether a part packed at x, y (its footprint, the gap after it included) covers the prime tower's place"""
+    tx0, ty0, tx1, ty1 = tower_box()
+    return x < tx1 and x + footprint[0] - GAP > tx0 and y < ty1 and y + footprint[1] - GAP > ty0
+
+
+def spread(placed, footprints, usable, clear=()):
     """The parts of each plate moved apart to use its area, then the group centred. Scaling each footprint's corner by
     s ≥ 1 keeps rectangles that did not overlap apart (s·b − s·a ≥ b − a ≥ the width of the one before), and the far
-    edge stays within the plate while s ≤ the plate's width over the packed width."""
+    edge stays within the plate while s ≤ the plate's width over the packed width. On the plates in `clear`, packed
+    around the prime tower's place, spread less (down to not at all) when spreading fully would put a part on it."""
     area = (usable[0] + GAP, usable[1] + GAP)
     out = dict(placed)
     for k in {v[0] for v in placed.values()}:
         names = [n for n, v in placed.items() if v[0] == k]
         far = [max(placed[n][1 + a] + footprints[n][a] for n in names) for a in (0, 1)]
-        scale = [min(SPREAD_MAX, area[a] / far[a]) if far[a] > 0 else 1.0 for a in (0, 1)]
-        moved = {n: [placed[n][1] * scale[0], placed[n][2] * scale[1]] for n in names}
-        used = [max(moved[n][a] + footprints[n][a] for n in names) for a in (0, 1)]
-        shift = [max(0.0, (area[a] - used[a]) / 2) for a in (0, 1)]
+        full = [min(SPREAD_MAX, area[a] / far[a]) if far[a] > 0 else 1.0 for a in (0, 1)]
+        for t in (1.0, 0.75, 0.5, 0.25, 0.0):
+            scale = [1 + t * (s - 1) for s in full]
+            moved = {n: [placed[n][1] * scale[0], placed[n][2] * scale[1]] for n in names}
+            used = [max(moved[n][a] + footprints[n][a] for n in names) for a in (0, 1)]
+            shift = [t * max(0.0, (area[a] - used[a]) / 2) for a in (0, 1)]
+            spots = {n: (moved[n][0] + shift[0], moved[n][1] + shift[1]) for n in names}
+            if k not in clear or not any(on_tower(x, y, footprints[n]) for n, (x, y) in spots.items()):
+                break
         for n in names:
-            out[n] = (k, moved[n][0] + shift[0], moved[n][1] + shift[1], placed[n][3])
+            out[n] = (k, *spots[n], placed[n][3])
     return out
 
 
@@ -202,6 +227,54 @@ def fit_turn(tris, rotation, usable):
     return rotation if best is None else rotation_z(math.radians(best[1])) @ rotation
 
 
+def pack(turned, usable, keep_tower):
+    """The parts onto plates, biggest first: (plates [{rects, parts, tower}], {name: (plate, x, y, turned)},
+    warnings). keep_tower: each plate keeps the prime tower's place free, but for a part that only fits on a plate
+    of its own without it"""
+    plates, warnings, placed = [], [], {}
+
+    def new_plate(tower):
+        rects = MaxRects(usable[0] + GAP, usable[1] + GAP)
+        if tower:
+            # A part's footprint ends a gap past the part, so one may end on the tower's place
+            tx0, ty0, tx1, ty1 = tower_box()
+            rects.take(tx0, ty0, tx1 - tx0 + GAP, ty1 - ty0 + GAP)
+        plates.append({"rects": rects, "parts": [], "tower": tower})
+        return plates[-1]["rects"].find(w, h)
+
+    for name in sorted(turned, key=lambda n: -max(turned[n]["size"][:2])):
+        size = turned[name]["size"]
+        w, h = size[:2] + GAP
+        spot = None
+        for k, plate in enumerate(plates):
+            found = plate["rects"].find(w, h)
+            if found:
+                spot = (k, *found)
+                break
+        if spot is None:
+            found = new_plate(keep_tower)
+            if not found and keep_tower:
+                plates.pop()
+                found = new_plate(False)
+                if found:
+                    warnings.append(f"{name} ({size[0]:.0f} × {size[1]:.0f} mm) chiếm chỗ của prime tower trên bàn "
+                                    f"{len(plates)}: nếu Studio thêm prime tower, kéo nó vào chỗ trống trong vùng "
+                                    f"X {REACH[0][0]:.0f}–{REACH[0][1]:.0f} mm.")
+            spot = (len(plates) - 1, *(found or (0.0, 0.0, False)))
+            if not found:
+                warnings.append(f"{name} ({size[0]:.0f} × {size[1]:.0f} mm) lớn hơn "
+                                f"vùng in {usable[0]:.0f} × {usable[1]:.0f} mm: cần cắt nhỏ, nó nằm riêng một bàn.")
+        k, x, y, quarter = spot
+        if quarter:
+            w, h = h, w
+        plates[k]["rects"].take(x, y, w, h)
+        plates[k]["parts"].append(name)
+        placed[name] = (k, x, y, quarter)
+        if size[2] > MAX_HEIGHT:
+            warnings.append(f"{name} cao {size[2]:.0f} mm, quá {MAX_HEIGHT:.0f} mm của H2D.")
+    return plates, placed, warnings
+
+
 def plan(meshes):
     """{name: triangles (n, 3, 3) as assembled} → {"parts": {name: {matrix (4×4, assembled → plate), plate,
     footprint_mm, contact_mm2, overhang_mm2, height_mm}}, "plates": [{n, parts}], "warnings": [...]}"""
@@ -214,32 +287,15 @@ def plan(meshes):
         low, high = points.min(axis=0), points.max(axis=0)
         turned[name] = {"rotation": rotation, "low": low, "size": high - low, **measures}
 
-    plates, warnings, placed = [], [], {}
-    for name in sorted(turned, key=lambda n: -max(turned[n]["size"][:2])):
-        w, h = turned[name]["size"][:2] + GAP
-        spot = None
-        for k, plate in enumerate(plates):
-            found = plate["rects"].find(w, h)
-            if found:
-                spot = (k, *found)
-                break
-        if spot is None:
-            plates.append({"rects": MaxRects(usable[0] + GAP, usable[1] + GAP), "parts": []})
-            found = plates[-1]["rects"].find(w, h)
-            spot = (len(plates) - 1, *(found or (0.0, 0.0, False)))
-            if not found:
-                warnings.append(f"{name} ({turned[name]['size'][0]:.0f} × {turned[name]['size'][1]:.0f} mm) lớn hơn "
-                                f"vùng in {usable[0]:.0f} × {usable[1]:.0f} mm: cần cắt nhỏ, nó nằm riêng một bàn.")
-        k, x, y, quarter = spot
-        if quarter:
-            w, h = h, w
-        plates[k]["rects"].take(x, y, w, h)
-        plates[k]["parts"].append(name)
-        placed[name] = (k, x, y, quarter)
-        if turned[name]["size"][2] > MAX_HEIGHT:
-            warnings.append(f"{name} cao {turned[name]['size'][2]:.0f} mm, quá {MAX_HEIGHT:.0f} mm của H2D.")
-
-    placed = spread(placed, {name: rects for name, rects in sizes(placed, turned).items()}, usable)
+    # Packed and spread as if there were no prime tower; when that puts a part on its place, packed again around it
+    plates, placed, warnings = pack(turned, usable, keep_tower=False)
+    footprints = sizes(placed, turned)
+    spread_out = spread(placed, footprints, usable)
+    if any(on_tower(x, y, footprints[n]) for n, (_, x, y, _) in spread_out.items()):
+        plates, placed, warnings = pack(turned, usable, keep_tower=True)
+        footprints = sizes(placed, turned)
+        spread_out = spread(placed, footprints, usable, clear={k for k, p in enumerate(plates) if p["tower"]})
+    placed = spread_out
     parts = {}
     for name, (k, x, y, quarter) in placed.items():
         info = turned[name]

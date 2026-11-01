@@ -239,7 +239,9 @@ class SpacingTest(unittest.TestCase):
 
         meshes = {"forearm": box(310, 60, 40), "pin": box(15, 15, 30)}
         layout = pl.plan(meshes)
-        self.assertEqual(layout["warnings"], [])
+        # It fits, across the prime tower's place: said, so the tower is moved by hand
+        self.assertEqual(len(layout["warnings"]), 1)
+        self.assertIn("prime tower", layout["warnings"][0])
         _, lo, hi = self.footprints(meshes, layout)["forearm"]
         self.assertGreaterEqual(lo[0], pl.REACH[0][0] + pl.MARGIN - 1e-6)
         self.assertLessEqual(hi[0], pl.REACH[0][1] - pl.MARGIN + 1e-6)
@@ -247,6 +249,20 @@ class SpacingTest(unittest.TestCase):
         self.assertLessEqual(hi[1], pl.REACH[1][1] - pl.MARGIN + 1e-6)
         # Not along an axis: turned to fit, its footprint far wider than the part
         self.assertGreater(min(layout["parts"]["forearm"]["footprint_mm"]), 100)
+
+    def test_full_plates_keep_the_prime_tower_place_free(self):
+        sys.path.insert(0, str(HERE))
+        import print_layout as pl
+
+        # Enough parts to fill more than a plate: none on the tower's place, on any plate
+        meshes = {f"p{k}": box(45, 35, 10) for k in range(40)}
+        layout = pl.plan(meshes)
+        self.assertEqual(layout["warnings"], [])
+        tx0, ty0, tx1, ty1 = pl.PRIME_TOWER
+        for name, (plate, lo, hi) in self.footprints(meshes, layout).items():
+            origin = pl.plate_origin(plate - 1, len(layout["plates"]))
+            lo, hi = lo - origin, hi - origin
+            self.assertFalse(lo[0] < tx1 and hi[0] > tx0 and lo[1] < ty1 and hi[1] > ty0, name)
 
     def test_few_parts_spread_and_centred(self):
         sys.path.insert(0, str(HERE))
