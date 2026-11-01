@@ -23,7 +23,8 @@ services:
       # Only the gateway on this machine talks to the worker: it runs the model code it is given
       - "127.0.0.1:3102:8000"
     # Model code is untrusted: keep the container small and unprivileged
-    mem_limit: 4g
+    # cadgen's engine keeps warm workers (CADGEN_ENGINE_WORKER_RSS_MB in cad/Dockerfile)
+    mem_limit: 6g
     pids_limit: 512
     security_opt:
       - no-new-privileges:true

@@ -32,6 +32,8 @@ class FakeWorker implements CadWorkerApi {
   built: string[] = [];
   cancelled: string[] = [];
   guided: string[] = [];
+  drawn: { id: string; title: string }[] = [];
+  checked: string[] = [];
   running: string[] = [];
   fail: CadWorkerError | null = null;
 
@@ -74,6 +76,25 @@ class FakeWorker implements CadWorkerApi {
     return guide;
   }
 
+  async drawing(id: string, title: string) {
+    this.drawn.push({ id, title });
+    await fs.writeFile(path.join(this.dir, id, 'out', 'drawing.pdf'), '%PDF-1.7\n');
+    return { ok: true, file: 'drawing.pdf', sheets: 1, notices: [] };
+  }
+
+  async dfam(id: string) {
+    this.checked.push(id);
+    const report = {
+      ok: true,
+      process: 'FDM',
+      source: 'text-to-cad dfam-check',
+      findings: [{ status: 'pass' as const, title: 'Lưới kín', detail: '1 khối.' }],
+      measure: { mesh: { watertight: true } },
+    };
+    await fs.writeFile(path.join(this.dir, id, 'out', 'dfam.json'), JSON.stringify(report));
+    return report;
+  }
+
   /** Claude finishing the job */
   async finish(id: string) {
     this.running = this.running.filter((r) => r !== id);
@@ -91,6 +112,7 @@ class FakeWorker implements CadWorkerApi {
     await fs.mkdir(out, { recursive: true });
     await fs.writeFile(path.join(out, 'model.stl'), CUBE);
     await fs.writeFile(path.join(out, 'model.step'), 'ISO-10303-21;\n');
+    await fs.writeFile(path.join(out, 'model.glb'), Buffer.from('glTF'));
     await fs.writeFile(path.join(out, 'preview.png'), Buffer.from([0x89, 0x50, 0x4e, 0x47]));
   }
 
@@ -321,6 +343,47 @@ describe('AI modelling API (/api/cad)', () => {
 
     expect((await app.inject({ method: 'GET', url: `/api/cad/jobs/${job.id}/files/job.json` })).statusCode).toBe(404);
     expect((await app.inject({ method: 'GET', url: `/api/cad/jobs/..%2F..%2Fetc/files/model.py` })).statusCode).toBe(404);
+  });
+
+  it('makes the engineering drawing and the DfAM check of a built model (text-to-cad)', async () => {
+    const { job } = (await create({ prompt: 'Hộp vuông cạnh 10 mm' })).json();
+    // Not built yet
+    expect((await app.inject({ method: 'POST', url: `/api/cad/jobs/${job.id}/drawing` })).statusCode).toBe(409);
+    await worker.finish(job.id);
+
+    const drawing = await app.inject({ method: 'POST', url: `/api/cad/jobs/${job.id}/drawing` });
+    expect(drawing.statusCode).toBe(200);
+    expect(drawing.json()).toMatchObject({ success: true, drawing: { sheets: 1 }, job: { files: { drawing: true, glb: true } } });
+    expect(worker.drawn).toEqual([{ id: job.id, title: 'Hộp vuông 10 mm' }]);
+    const pdf = await app.inject({ method: 'GET', url: `/api/cad/jobs/${job.id}/files/drawing.pdf` });
+    expect(pdf.headers.get('content-type')).toBe('application/pdf');
+    const glb = await app.inject({ method: 'GET', url: `/api/cad/jobs/${job.id}/files/model.glb` });
+    expect(glb.headers.get('content-type')).toBe('model/gltf-binary');
+
+    const dfam = await app.inject({ method: 'POST', url: `/api/cad/jobs/${job.id}/dfam` });
+    expect(dfam.statusCode).toBe(200);
+    // The job carries the findings, not the raw measurements
+    const checked = dfam.json().job.dfam;
+    expect(checked).toMatchObject({ ok: true, process: 'FDM', findings: [{ status: 'pass', title: 'Lưới kín' }] });
+    expect(checked.measure).toBeUndefined();
+  });
+
+  it('lists and serves the files Claude made with the other skills, and nothing outside them', async () => {
+    const { job } = (await create({ prompt: 'Tấm đế cắt laser' })).json();
+    await worker.finish(job.id);
+    const exports = path.join(jobsDir, job.id, 'out', 'exports');
+    await fs.mkdir(exports, { recursive: true });
+    await fs.writeFile(path.join(exports, 'plate.dxf'), '0\nSECTION\n');
+    await fs.writeFile(path.join(exports, '.hidden'), 'x');
+
+    const got = (await app.inject({ method: 'GET', url: `/api/cad/jobs/${job.id}` })).json();
+    expect(got.job.exports).toEqual(['plate.dxf']);
+    const dxf = await app.inject({ method: 'GET', url: `/api/cad/jobs/${job.id}/exports/plate.dxf?download=1` });
+    expect(dxf.statusCode).toBe(200);
+    expect(dxf.headers.get('content-type')).toBe('image/vnd.dxf');
+    expect(dxf.headers.get('content-disposition')).toBe('attachment; filename="plate.dxf"');
+    expect((await app.inject({ method: 'GET', url: `/api/cad/jobs/${job.id}/exports/..%2Fmodel.stl` })).statusCode).toBe(404);
+    expect((await app.inject({ method: 'GET', url: `/api/cad/jobs/${job.id}/exports/.hidden` })).statusCode).toBe(404);
   });
 
   it('draws and serves the assembly guide of a model with components', async () => {

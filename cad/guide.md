@@ -1,17 +1,22 @@
-# Modelling for the Bambu Lab H2D with build123d
+# Modelling for the Bambu Lab H2D with text-to-cad (cadgen + build123d)
 
-A model is one Python file that builds the part with build123d (https://build123d.readthedocs.io) and
-assigns the finished solid to a variable named `result`. The build runner executes the file, exports
-`result` to STL and STEP, renders a preview and checks it.
+A model is one Python file, `model.py`, written the way text-to-cad's `cad` skill writes models: a function with
+no parameters, decorated `@model` from `cadgen`, that returns a build123d shape
+(https://build123d.readthedocs.io). cadgen's engine builds it. The build runner (`python /opt/cad/build.py
+model.py`) builds the file's last `@model` (or the one `MODEL = "name"` names), exports it to STL, STEP and GLB,
+draws a preview with `cadgen snapshot` and checks it against the printer. The `cad` skill and its references
+(model contract, build123d, positioning, inspection, kinematics) are the rules for the code itself; this guide adds
+what printing on the H2D needs.
 
 ## Rules
 
 - Units are millimetres. Z points up; the part sits on the build plate at Z = 0 (its lowest point at Z = 0)
   in the orientation it should be printed in, with its largest flat face down where possible.
-- `result` must be one solid, or a `Compound` of solids for a set of parts printed together, with a real
-  volume. Not a sketch, a face or a wire.
-- Keep every dimension that a user might want to change as a named variable at the top of the file, with a
-  short comment, e.g. `wall = 2.0  # wall thickness`.
+- The model returns one solid, or for parts that work together an assembly: a `Compound` of labelled children,
+  each part (or sub-assembly) in its assembled place (see below). Not a sketch, a face or a wire.
+- Keep every dimension that a user might want to change as a named constant at the top of the file (numbers at
+  module level, kernel objects inside the function), with a short comment, e.g. `WALL = 2.0  # wall thickness`.
+- Give every part a `label` and a `color` (sRGB, `"#4a6fa5"`); a `material` from `bd_materials` when it matters.
 - Fit the H2D: one part at most 320 × 320 × 320 mm (X × Y × Z). Leave room on the plate between parts.
 - Design for FDM printing with a 0.4 mm nozzle:
   - walls at least 1.2 mm (3 lines), thin features no thinner than 0.8 mm;
@@ -21,56 +26,64 @@ assigns the finished solid to a variable named `result`. The build runner execut
   - holes print about 0.2 mm small: add 0.2 mm to the diameter of holes for screws, pins and shafts;
   - parts that fit together need 0.2–0.3 mm clearance per side;
   - text embossed or engraved at least 0.6 mm deep and 5 mm tall.
-- No imports beyond build123d, math and the standard library. No file or network access. The one exception:
-  for a tolerance calibration print (holes, pins and fit slots to measure the printer's real tolerances), use
-  `from calibration import calibration_plate` and `result = calibration_plate()` rather than drawing one.
+- Imports: build123d, cadgen, bd_materials, math and the standard library. Vendor parts (a bearing, a servo, a
+  screw) may come from step.parts (the `step-parts` skill) into `vendor/` beside model.py, read with `read_step`
+  in the body; they are not printed (list them in `not_printed`). For a tolerance calibration print (holes, pins
+  and fit slots to measure the printer's real tolerances), return `calibration_plate()` from
+  `from calibration import calibration_plate` rather than drawing one.
 
-## build123d in brief
+## A part
 
 ```python
-from build123d import *
+import build123d as bd
+from cadgen import model
 
-width, depth, height = 60.0, 40.0, 20.0  # outer size
-wall = 2.0                               # wall thickness
-hole_d = 3.4                             # M3 clearance hole, printed oversize
+WIDTH, DEPTH, HEIGHT = 60.0, 40.0, 20.0  # outer size
+WALL = 2.0                               # wall thickness
+HOLE_D = 3.4                             # M3 clearance hole, printed oversize
 
-with BuildPart() as part:
-    Box(width, depth, height, align=(Align.CENTER, Align.CENTER, Align.MIN))
+
+@model
+def box():
+    body = bd.Box(WIDTH, DEPTH, HEIGHT, align=(bd.Align.CENTER, bd.Align.CENTER, bd.Align.MIN))
     # Hollow it out from the top face, keeping the walls and the floor
-    offset(amount=-wall, openings=part.faces().sort_by(Axis.Z)[-1])
+    body = bd.offset(body, amount=-WALL, openings=body.faces().sort_by(bd.Axis.Z)[-1])
     # Two holes through the floor
-    with Locations((-20, 0, 0), (20, 0, 0)):
-        Cylinder(hole_d / 2, wall, align=(Align.CENTER, Align.CENTER, Align.MIN), mode=Mode.SUBTRACT)
-    chamfer(part.edges().group_by(Axis.Z)[0], length=0.6)
+    for x in (-20, 20):
+        body -= bd.Pos(x, 0, 0) * bd.Cylinder(HOLE_D / 2, WALL, align=(bd.Align.CENTER, bd.Align.CENTER, bd.Align.MIN))
+    body = bd.chamfer(body.edges().group_by(bd.Axis.Z)[0], length=0.6)
+    body.label = "box"
+    body.color = "#4a6fa5"
+    return body
 
-result = part.part
+
+if __name__ == "__main__":
+    box()
 ```
 
-- Builders: `BuildPart` (solids), `BuildSketch` (2D faces, used with `extrude`, `revolve`, `loft`, `sweep`),
-  `BuildLine` (curves for sketches and sweep paths).
-- Solids: `Box`, `Cylinder`, `Cone`, `Sphere`, `Torus`, `Wedge`, `Hole`, `CounterBoreHole`,
-  `CounterSinkHole`. 2D: `Rectangle`, `RectangleRounded`, `Circle`, `Ellipse`, `Polygon`,
-  `RegularPolygon`, `SlotOverall`, `Text`.
-- `mode=Mode.SUBTRACT` cuts, `Mode.INTERSECT` intersects; `Locations`, `GridLocations`, `PolarLocations`
-  place copies; `Plane.XZ`, `Plane.YZ` or a face (`part.faces().sort_by(Axis.Z)[-1]`) start a sketch on it.
-- Select edges/faces with `.edges()`, `.faces()`, `.filter_by(Axis.Z)`, `.sort_by(Axis.Z)`, `.group_by(...)`,
-  then `fillet(edges, radius=...)` / `chamfer(edges, length=...)`.
-- Without builders (algebra mode) shapes combine with `+`, `-`, `&` and move with `Pos(x, y, z) * shape`
-  and `Rot(0, 0, 45) * shape`.
+- `python model.py` (cadgen's own run) prints the model's id and its bounds; `cadgen snapshot <id> tmp/x.png
+  --camera top` draws one view, `cadgen inspect <id> [ref]` measures. build.py is the build the dashboard keeps:
+  run it after every change, it writes `out/`.
+- An assertion in the body on what the geometry measures (`assert abs(body.bounding_box().size.X - WIDTH) < 1e-6`)
+  checks a dimension the user gave.
 
 ## Assemblies that move
 
 When the request is a mechanism or several parts that work together (a hinge, gears on shafts, a crank and a
 slider…), keep every part separate so the dashboard can simulate the model as it is:
 
-- Assign `components = {"name": solid, ...}`: each part on its own, **in its assembled place** (shafts in their
-  holes, gears meshing). Names: letters, digits, `_`, `-`. Don't lay the parts out for printing: build.py does
-  it, each part on the face it prints best on, packed onto as many H2D plates as it takes (report.json
-  `print_layout`; model.3mf has the plates), so leave `result` out. Parts that are bought, not printed (a steel
-  shaft, a screw, a spring): list them in `not_printed = ["shaft"]` (a `mechanism` part of metal is left out by
-  itself). Only when a part must print in a particular way the build can't guess, lay everything out yourself in
-  `result` and set `print_layout = "manual"`.
-- When the user said how it moves, also assign `mechanism`, naming parts by their component name (mm, degrees,
+- Return an assembly, as the `cad` skill composes one: each part its own `@model` (or a helper), placed **in its
+  assembled place** (shafts in their holes, gears meshing), labelled, and the parts returned as
+  `bd.Compound(children=[...])`. Each child of the assembly is a component, named by its label (letters, digits,
+  `_`, `-`; unique). Don't lay the parts out for printing: build.py does it, each part on the face it prints best
+  on, packed onto as many H2D plates as it takes (report.json `print_layout`; model.3mf has the plates). Parts
+  that are bought, not printed (a steel shaft, a screw, a spring, a step.parts bearing): list them in
+  `not_printed = ["shaft"]` at module level (a `mechanism` part of metal is left out by itself). Only when a part
+  must print in a particular way the build can't guess, set `print_layout = "manual"`: the model is then printed as
+  it stands, so return the parts laid out for printing.
+- build123d joints and cadgen's mechanism states (the `cad` skill's kinematics) are welcome: they pose the model in
+  the GLB and the snapshots. The dashboard's simulation reads `mechanism` below.
+- When the user said how it moves, also assign `mechanism` at module level, naming parts by their component name (mm, degrees,
   kg, N, N·m; positions and axes in the assembled frame):
 
 ```python
@@ -92,7 +105,8 @@ mechanism = {
   missing is asked for in the dashboard before simulating.
 - The dashboard draws an assembly guide from it (a picture per step and a video): the fixed parts first, then each
   part after the one it is jointed to, along its joint's axis. When the order or the way in matters (a shaft that
-  takes its gears before it goes into the housing, a lid last), assign `assembly_steps`, in Vietnamese:
+  takes its gears before it goes into the housing, a lid last), assign `assembly_steps` at module level, in
+  Vietnamese:
 
 ```python
 assembly_steps = [

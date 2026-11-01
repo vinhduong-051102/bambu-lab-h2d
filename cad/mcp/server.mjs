@@ -1,8 +1,9 @@
 #!/usr/bin/env node
 /**
  * MCP server (stdio) that lets an agent such as Antigravity's design 3D-printable models with the gateway's CAD
- * worker (docs/cad.md): the agent writes build123d code on its own plan, this server has it built (STL, STEP,
- * preview, checks) and sends finished models to Bambu Studio. The sim_* tools simulate mechanisms with Project
+ * worker (docs/cad.md): the agent writes build123d code on its own plan, as a text-to-cad `@model`
+ * (docs/text-to-cad.md), this server has it built by cadgen (STL, STEP, GLB, preview, checks) and sends finished
+ * models to Bambu Studio. The sim_* tools simulate mechanisms with Project
  * Chrono and play them back in Blender (docs/mechanical-simulation.md). It only calls the gateway's /api/cad and
  * /api/sim routes.
  *
@@ -831,20 +832,22 @@ const TOOLS = [
     name: 'cad_guide',
     description:
       'Read this first. The rules for models on the Bambu Lab H2D (millimetres, Z up, sits on Z = 0, printable ' +
-      'walls/overhangs/clearances, assign the finished solid to `result`) and a build123d primer.',
+      'walls/overhangs/clearances) in text-to-cad\'s format: a cadgen `@model` function that returns a build123d ' +
+      'shape, or an assembly of labelled children.',
     inputSchema: { type: 'object', properties: {}, additionalProperties: false },
   },
   {
     name: 'cad_build',
     description:
-      'Build a model from build123d Python code that assigns the finished solid to `result`. Returns the build ' +
-      'report (size in mm, volume, mesh checks, warnings, or the error and traceback) and a preview image with ' +
-      'four views. Check the preview against the request and build again with fixed code until it matches. ' +
+      'Build a model with text-to-cad\'s cadgen engine from a Python file that defines a `@model` function (from ' +
+      'cadgen; the last one, or the one `MODEL = "name"` names) returning a build123d shape; a file that assigns ' +
+      '`result` (the older format) builds too. Returns the build report (size in mm, volume, mesh checks, ' +
+      'warnings, or the error and traceback) and a preview image with four views drawn by cadgen. Check the preview against the request and build again with fixed code until it matches. ' +
       'Each call makes a new job; pass parent_id to link it to the job it revises.',
     inputSchema: {
       type: 'object',
       properties: {
-        code: { type: 'string', description: 'The whole build123d model file' },
+        code: { type: 'string', description: 'The whole model file (cadgen @model + build123d)' },
         title: { type: 'string', description: 'Short name of the model, in the user\'s language' },
         prompt: { type: 'string', description: 'What the user asked for' },
         parent_id: { type: 'string', description: 'The job this one revises' },
@@ -1211,7 +1214,7 @@ function describe(job) {
     notes: job.notes?.length ? job.notes : undefined,
     summary: job.result ?? undefined,
     report: job.report,
-    files: `${GATEWAY_URL}/api/cad/jobs/${job.id}/files/<model.py|model.stl|model.step|model.3mf|preview.png|fix.py|views.png>`,
+    files: `${GATEWAY_URL}/api/cad/jobs/${job.id}/files/<model.py|model.stl|model.step|model.glb|model.3mf|preview.png|drawing.pdf|dfam.json|fix.py|views.png>`,
     sent_to_studio: job.sent?.map((s) => s.name),
   };
 }
@@ -1460,7 +1463,7 @@ async function handle(message) {
         capabilities: { tools: {} },
         serverInfo: { name: 'bambu-cad', version: '1.0.0' },
         instructions:
-          'Design 3D-printable models for the Bambu Lab H2D. Technical parts: call cad_guide once, write build123d code, call ' +
+          'Design 3D-printable models for the Bambu Lab H2D. Technical parts: call cad_guide once, write a text-to-cad @model (cadgen + build123d), call ' +
           'cad_build and check the preview. Characters and other organic shapes: cad_make_figure, then cad_fix_figure ' +
           'when the preview shows problems. Send the accepted ' +
           'model with cad_send_to_studio. Mechanisms (linkages, gears, motors, springs): call sim_guide once, describe ' +

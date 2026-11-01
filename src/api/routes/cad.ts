@@ -10,6 +10,9 @@ import {
   CadJobStore,
   CadWorkerClient,
   CadWorkerError,
+  dfamTaskKey,
+  drawingTaskKey,
+  exportType,
   FIGURE_SIDES,
   guideTaskKey,
   lineageOf,
@@ -682,8 +685,8 @@ export const sendCadToStudio = handler<{ id: string }>(async ({ request, params 
   return json({ success: true, name: saved.name, studioPath: `/imports/${saved.name}`, ...(saved.repair && { repair: saved.repair }) }, 201);
 });
 
-// GET /api/cad/jobs/:id/files/:name?download=1 - model.py, model.stl, model.step, model.3mf, preview.png, concept.png,
-// report.json, or a fixed figure's fix.py and views.png
+// GET /api/cad/jobs/:id/files/:name?download=1 - model.py, model.stl, model.step, model.glb, model.3mf, preview.png,
+// concept.png, report.json, drawing.pdf, dfam.json, or a fixed figure's fix.py and views.png
 export const getCadFile = handler<{ id: string; name: string }>(async ({ request, params }) => {
   if (!(params.name in CAD_FILES)) return json({ success: false, error: 'FILE_NOT_FOUND', message: 'Không có file này.' }, 404);
   const name = params.name as CadFileName;
@@ -749,4 +752,76 @@ export const getCadPlate = handler<{ id: string; n: string }>(async ({ params })
   return new Response(new Uint8Array(await fs.readFile(file)), {
     headers: { 'Content-Type': 'model/3mf', 'Cache-Control': 'no-cache', 'Content-Disposition': `attachment; filename="${fileStem(job)}-ban-${n}.3mf"` },
   });
+});
+
+/** A job of the CAD container that is built (has its model), or the answer saying why not */
+async function builtModel(id: string): Promise<CadJob | Response> {
+  const job = await store().get(id);
+  if (!job) return jobNotFound();
+  if (job.source === 'mesh') {
+    return json({ success: false, error: 'NOT_CAD_MODEL', message: 'Nhân vật dựng từ lưới, không có mô hình CAD để vẽ hay kiểm tra.' }, 409);
+  }
+  if (job.state !== 'done' || !job.files.stl) {
+    return json({ success: false, error: 'MODEL_NOT_READY', message: 'Mô hình chưa dựng xong.' }, 409);
+  }
+  return job;
+}
+
+// POST /api/cad/jobs/:id/drawing - text-to-cad's engineering drawing of a built model, out/drawing.pdf (A3, third
+// angle, top/front/right and an isometric with their overall dimensions; a sheet per printed part of an assembly). It
+// goes on when the page closes: 202 while it runs, `drawing_task` says how far it is
+export const makeCadDrawing = handler<{ id: string }>(async ({ params }) => {
+  const job = await builtModel(params.id);
+  if (job instanceof Response) return job;
+  const w = worker();
+  if (!w) return disabled();
+  const { outcome } = await startTask(drawingTaskKey(params.id), () => w.drawing(params.id, job.title || job.prompt.slice(0, 60)), {
+    info: { kind: 'cad-drawing', label: `Bản vẽ: ${job.title || job.prompt.slice(0, 70)}`, page: 'cad' },
+    waitMs: GUIDE_WAIT_MS,
+    failed: (drawing) => (drawing.ok ? null : drawing.error ?? 'Không vẽ được bản vẽ.'),
+    explain: (drawing) => drawing.notices ?? [],
+  });
+  if (outcome && 'value' in outcome) {
+    const drawing = outcome.value;
+    return json({ success: drawing.ok, drawing, job: await store().get(params.id) }, drawing.ok ? 200 : 422);
+  }
+  if (outcome) {
+    if (outcome.error instanceof CadWorkerError) return workerFailed(outcome.error);
+    throw outcome.error;
+  }
+  return json({ success: true, running: true, job: await store().get(params.id) }, 202);
+});
+
+// POST /api/cad/jobs/:id/dfam - text-to-cad's DfAM check of what is printed (out/model.stl) against FDM limits:
+// watertight, wall thickness, overhangs and support, a better orientation. out/dfam.json, the job's `dfam`. In the
+// background like the drawing
+export const checkCadDfam = handler<{ id: string }>(async ({ params }) => {
+  const job = await builtModel(params.id);
+  if (job instanceof Response) return job;
+  const w = worker();
+  if (!w) return disabled();
+  const { outcome } = await startTask(dfamTaskKey(params.id), () => w.dfam(params.id), {
+    info: { kind: 'cad-dfam', label: `DfAM: ${job.title || job.prompt.slice(0, 70)}`, page: 'cad' },
+    waitMs: GUIDE_WAIT_MS,
+    failed: (dfam) => (dfam.ok ? null : dfam.error ?? 'Không kiểm tra được.'),
+  });
+  if (outcome && 'value' in outcome) {
+    const dfam = outcome.value;
+    return json({ success: dfam.ok, job: await store().get(params.id) }, dfam.ok ? 200 : 422);
+  }
+  if (outcome) {
+    if (outcome.error instanceof CadWorkerError) return workerFailed(outcome.error);
+    throw outcome.error;
+  }
+  return json({ success: true, running: true, job: await store().get(params.id) }, 202);
+});
+
+// GET /api/cad/jobs/:id/exports/:name?download=1 - A file Claude made with text-to-cad's other skills (out/exports/:
+// a drawing PDF, a DXF, a URDF…)
+export const getCadExport = handler<{ id: string; name: string }>(async ({ request, params }) => {
+  const file = await store().exportFile(params.id, params.name);
+  if (!file) return json({ success: false, error: 'FILE_NOT_FOUND', message: 'Không có file này.' }, 404);
+  const headers: Record<string, string> = { 'Content-Type': exportType(params.name), 'Cache-Control': 'no-cache' };
+  if (new URL(request.url).searchParams.has('download')) headers['Content-Disposition'] = `attachment; filename="${params.name}"`;
+  return new Response(new Uint8Array(await fs.readFile(file)), { headers });
 });

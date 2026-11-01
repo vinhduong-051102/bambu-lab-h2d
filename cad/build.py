@@ -1,18 +1,21 @@
 """
 Build runner: python build.py <model.py> [out dir]
 
-Runs a build123d model file (see guide.md: it assigns the finished solid to `result`), then writes to the out
-dir (default: out/ next to the model): model.stl, model.step, preview.png (four views) and report.json, which
-it also prints. Exits 1 when the model could not be built; report.json then says why.
+Builds a model file with text-to-cad's cadgen engine (docs/text-to-cad.md, guide.md): the file's `@model` function
+(the one `MODEL` names, else the last it defines), or, in the format from before text-to-cad, the solid it assigns
+to `result`, handed to the engine as it is. Then writes to the out dir (default: out/ next to the model):
+model.stl, model.step, model.glb, preview.png (four views drawn by `cadgen snapshot`, as the CAD Viewer draws
+them) and report.json, which it also prints. Exits 1 when the model could not be built; report.json then says why.
 
-An assembly keeps its parts: a model that assigns `components` ({name: solid}, in their assembled places), or whose
-`result` holds several solids, also gets components/<name>.stl and assembly.json (each component's file, volume and
+An assembly keeps its parts: a `@model` that returns a Compound of labelled children (text-to-cad's assembly), a
+model that assigns `components` ({name: solid}, in their assembled places), or whose `result` holds several
+solids, also gets components/<name>.stl and assembly.json (each component's file, volume and
 centre, and the model's `mechanism` dict when it has one: what moves, how, and what is fixed, for simulation). With
 `components`, assembly.png shows them assembled: what is simulated, where preview.png shows the print layout; the
 model's `assembly_steps` (the order a person puts the parts together) go in assembly.json too, for the assembly guide
 the worker draws after the last build (assembly_guide.py).
 
-With `components`, the print layout is made here, not by the model (print_layout.py): every component that is printed
+With components, the print layout is made here, not by the model (print_layout.py): every component that is printed
 lies on the face it prints best on, packed onto as many H2D plates as it takes. model.stl and model.step hold the
 plates side by side, model.3mf the same with each part on its own plate for Bambu Studio, and report.json's
 "print_layout" says which part is on which plate. Not printed: the components named in `not_printed`, and those
@@ -21,6 +24,7 @@ holds each plate on its own (what is sent to Studio). `print_layout = "manual"` 
 own `result` instead.
 """
 
+import contextlib
 import json
 import math
 import re
@@ -154,6 +158,106 @@ def render_preview(triangles, size, path, face_colours=None, views=VIEWS):
     plt.close(fig)
 
 
+# (title, cadgen camera, display) of preview.png's four views, the same as VIEWS: the isometric solid, the straight
+# views in x-ray, which shows the walls, floors and holes behind the faces where a solid one is a flat silhouette
+SNAPSHOT_VIEWS = [("Isometric", "iso", None), ("Front (-Y), x-ray", "front", "xray"),
+                  ("Right (+X), x-ray", "right", "xray"), ("Top, x-ray", "top", "xray")]
+SNAPSHOT_PX = 520
+
+
+def snapshot_preview(document, size, path):
+    """A document's four views in one PNG, each drawn by cadgen's snapshot (OCCT, as text-to-cad's CAD Viewer draws
+    it), with the size above them. Raises when the engine can't draw here (no X display); render_preview then"""
+    import tempfile
+
+    import cadgen
+    from PIL import Image, ImageDraw, ImageFont
+
+    font = ImageFont.load_default(size=18)
+    caption = ImageFont.load_default(size=22)
+    head, label = 44, 30
+    sheet = Image.new("RGB", (2 * SNAPSHOT_PX, head + 2 * (label + SNAPSHOT_PX)), "white")
+    draw = ImageDraw.Draw(sheet)
+    draw.text((sheet.width / 2, head / 2), f"{size[0]:.1f} x {size[1]:.1f} x {size[2]:.1f} mm", fill="black",
+              font=caption, anchor="mm")
+    with tempfile.TemporaryDirectory() as tmp:
+        for i, (title, camera, display) in enumerate(SNAPSHOT_VIEWS):
+            target = Path(tmp) / f"{camera}.png"
+            cadgen.snapshot(document, target, camera=camera, display=display, width=SNAPSHOT_PX, height=SNAPSHOT_PX,
+                            progress=False)
+            x, y = (i % 2) * SNAPSHOT_PX, head + (i // 2) * (label + SNAPSHOT_PX)
+            draw.text((x + SNAPSHOT_PX / 2, y + label / 2), title, fill="black", font=font, anchor="mm")
+            with Image.open(target) as picture:
+                sheet.paste(picture.convert("RGB"), (x, y + label))
+    sheet.save(path)
+
+
+def draw_preview(document, shape, size, path, stl=None):
+    """preview.png (or assembly.png) of a document by cadgen; the old matplotlib drawing of its STL when the engine
+    can't draw. Returns which one drew it"""
+    try:
+        snapshot_preview(document, size, path)
+        return "cadgen"
+    except Exception:  # noqa: BLE001 - the picture still has to be made
+        if stl is None:
+            from build123d import export_stl
+
+            stl = path.with_suffix(".stl")
+            export_stl(shape, str(stl), tolerance=0.01, angular_tolerance=0.1)
+        render_preview(read_stl(stl), size, path)
+        return "matplotlib"
+
+
+def document_name(out, what):
+    """A name for a shape handed to the engine (cadgen's model(shape, name=...)): the job's, so two jobs building at
+    once never share a document"""
+    return re.sub(r"[^A-Za-z0-9_]", "_", f"job_{Path(out).resolve().parent.name}_{what}")
+
+
+def hand_over(shape, out, what):
+    """A shape the engine did not build (a `result`, a print layout) as a document of its own"""
+    from cadgen import model
+
+    return model(shape, name=document_name(out, what))
+
+
+def load(model):
+    """(namespace, document) of a model file: with `@model` functions (text-to-cad), the engine builds the one
+    `MODEL` names, else the last one the file defines (an assembly comes after the parts it calls); a file with none
+    (one that assigns `result`, as before text-to-cad) gives (namespace, None)"""
+    from cadgen.engine.model import models_in
+
+    namespace = runpy.run_path(str(model), run_name="__model__")
+    models = models_in(namespace, model)
+    if not models:
+        return namespace, None
+    wanted = namespace.get("MODEL")
+    if wanted is not None:
+        chosen = [m for m in models if m.name == wanted]
+        if not chosen:
+            raise ValueError(f"MODEL = {wanted!r}, but the file defines no @model by that name "
+                             f"(it has {[m.name for m in models]}).")
+        return namespace, chosen[0]()
+    return namespace, models[-1]()
+
+
+def assembly_children(shape):
+    """{name: child, in the model's frame} of a text-to-cad assembly (a Compound of labelled children: parts or
+    sub-assemblies), by label (part_1, part_2… where it has none); {} for a part"""
+    from build123d import Location
+
+    children = list(getattr(shape, "children", None) or ())
+    if len(children) < 2:
+        return {}
+    root = shape.location or Location()
+    out = {}
+    for k, child in enumerate(children, 1):
+        label = re.sub(r"[^A-Za-z0-9_-]", "_", str(getattr(child, "label", "") or ""))[:44].strip("_")
+        name = label if label and label not in out else f"{label}_{k}" if label else f"part_{k}"
+        out[name] = child.located(root * child.location)
+    return out
+
+
 def as_shape(value, what):
     from build123d import Compound, Shape
 
@@ -219,8 +323,9 @@ def read_steps(steps, components):
     return [{key: step[key] for key in ("parts", "text", "direction") if key in step} for step in steps]
 
 
-def write_components(components, mechanism, out, from_solids, steps=None):
-    """components/<name>.stl and assembly.json"""
+def write_components(components, mechanism, out, from_solids, steps=None, assembled=None):
+    """components/<name>.stl and assembly.json; assembly.png from the document of the assembled model when there is
+    one (`assembled`), else from the components' STLs"""
     from build123d import export_stl
 
     folder = out / "components"
@@ -254,7 +359,13 @@ def write_components(components, mechanism, out, from_solids, steps=None):
         triangles = [t for entry in listed for t in read_stl(out / entry["file"])]
         lows = [min(v[a] for t in triangles for v in t) for a in range(3)]
         highs = [max(v[a] for t in triangles for v in t) for a in range(3)]
-        render_preview(triangles, tuple(h - lo for h, lo in zip(highs, lows)), out / "assembly.png")
+        size = tuple(h - lo for h, lo in zip(highs, lows))
+        try:
+            if assembled is None:
+                raise LookupError
+            snapshot_preview(assembled, size, out / "assembly.png")
+        except Exception:  # noqa: BLE001 - no document, or the engine can't draw here
+            render_preview(triangles, size, out / "assembly.png")
         files.append("assembly.png")
     return files
 
@@ -314,32 +425,42 @@ def lay_out(namespace, components, out):
 
 
 def build(model, out):
-    from build123d import Compound, Shape, export_step, export_stl
+    from build123d import Compound, Shape, export_stl
 
-    namespace = runpy.run_path(str(model), run_name="__model__")
-    shape = namespace.get("result")
+    import cadgen
+
+    namespace, document = load(model)
+    shape = document.shape if document is not None else namespace.get("result")
+    if document is not None and namespace.get("components") is None:
+        # A text-to-cad assembly: its labelled children are the components, in their assembled places
+        children = assembly_children(shape)
+        if children:
+            namespace["components"] = children
+    assembled = document if document is not None and isinstance(namespace.get("components"), dict) else None
     layout = None
     if isinstance(namespace.get("components"), dict) and namespace.get("print_layout") != "manual":
         # Laid out for printing from the components, whatever `result` holds
         components = read_components(namespace, [])
+        if assembled is None:
+            assembled = hand_over(labelled(components), out, "assembly")
         assembly_files = write_components(components, namespace.get("mechanism"), out, False,
-                                          namespace.get("assembly_steps"))
+                                          namespace.get("assembly_steps"), assembled)
         shape, layout = lay_out(namespace, components, out)
     elif shape is None and isinstance(namespace.get("components"), dict):
         # An assembly with no separate print layout: printed as it stands
         shape = list(namespace["components"].values())
     if shape is None:
-        raise ValueError("The model file does not assign the finished part to `result`.")
+        raise ValueError("The model file defines no @model function (and assigns no `result`).")
     if isinstance(shape, (list, tuple)):
         shape = Compound(children=list(shape))
     if not isinstance(shape, Shape):
         # Builders (BuildPart) hold their part in .part
         shape = getattr(shape, "part", shape)
     if not isinstance(shape, Shape):
-        raise ValueError(f"`result` is a {type(shape).__name__}, not a build123d shape.")
+        raise ValueError(f"The model is a {type(shape).__name__}, not a build123d shape.")
     solids = shape.solids()
     if not solids:
-        raise ValueError("`result` has no solids: it must be a 3D part, not a sketch, face or wire.")
+        raise ValueError("The model has no solids: it must be a 3D part, not a sketch, face or wire.")
 
     box = shape.bounding_box()
     size = (box.size.X, box.size.Y, box.size.Z)
@@ -357,28 +478,35 @@ def build(model, out):
     if volume <= 0:
         warnings.append("The solids have no volume.")
 
-    stl, step, preview = out / "model.stl", out / "model.step", out / "preview.png"
+    # What is printed: the model's own document, or the print layout / `result` handed to the engine
+    printed = document if document is not None and not layout else hand_over(shape, out, "print" if layout else "result")
+    stl, step, glb, preview = out / "model.stl", out / "model.step", out / "model.glb", out / "preview.png"
+    # The STL for the slicer finer than cadgen's display mesh; STEP and GLB by cadgen, with names, colours and materials
     export_stl(shape, str(stl), tolerance=0.01, angular_tolerance=0.1)
-    export_step(shape, str(step))
+    cadgen.export(printed, step, progress=False)
+    # The GLB is the model as designed (an assembly assembled, with its motions as clips), for the 3D view
+    cadgen.export(assembled or printed, glb, progress=False)
     triangles = read_stl(stl)
     mesh = mesh_check(triangles)
     if not mesh["watertight"]:
         warnings.append(f"The STL mesh is not watertight ({mesh['open_edges']} open, "
                         f"{mesh['non_manifold_edges']} non-manifold edges).")
-    render_preview(triangles, size, preview)
-    files = ["model.stl", "model.step", "preview.png"]
+    renderer = draw_preview(printed, shape, size, preview, stl)
+    if renderer != "cadgen":
+        warnings.append("cadgen could not draw the preview here (no X display?): drawn by matplotlib instead.")
+    files = ["model.stl", "model.step", "model.glb", "preview.png"]
     if layout:
         files += ["model.3mf"] + layout["plate_files"] + assembly_files
         if namespace.get("result") is not None:
-            warnings.append("`result` is ignored: the print layout is made from `components` "
+            warnings.append("`result` is ignored: the print layout is made from the components "
                             '(print_layout = "manual" keeps it).')
     else:
         components = read_components(namespace, solids)
         if components:
             files += write_components(components, namespace.get("mechanism"), out, namespace.get("components") is None,
-                                      namespace.get("assembly_steps"))
+                                      namespace.get("assembly_steps"), assembled)
         elif namespace.get("mechanism") is not None:
-            warnings.append("`mechanism` is ignored: a single part has nothing to move against (give `components`).")
+            warnings.append("`mechanism` is ignored: a single part has nothing to move against (make an assembly).")
 
     return {
         "size_mm": [round(v, 2) for v in size],
@@ -390,8 +518,21 @@ def build(model, out):
         "warnings": warnings,
         "components": list(components),
         "files": files,
+        "engine": {"cadgen": cadgen.__version__, "document": (document or printed).id,
+                   "format": "model" if document is not None else "result", "preview": renderer},
         **({"print_layout": layout} if layout else {}),
     }
+
+
+def labelled(components):
+    """The components as one assembly, each child labelled with its name"""
+    from build123d import Compound
+
+    children = []
+    for name, shape in components.items():
+        shape.label = name
+        children.append(shape)
+    return Compound(children=children)
 
 
 def main():
@@ -401,7 +542,7 @@ def main():
     model = Path(sys.argv[1]).resolve()
     out = Path(sys.argv[2]).resolve() if len(sys.argv) > 2 else model.parent / "out"
     out.mkdir(parents=True, exist_ok=True)
-    for stale in ("model.stl", "model.step", "preview.png", "report.json", "assembly.json", "assembly.png"):
+    for stale in ("model.stl", "model.step", "model.glb", "preview.png", "report.json", "assembly.json", "assembly.png"):
         (out / stale).unlink(missing_ok=True)
     # A print layout's 3MF, not a coloured figure's (mesh3d writes those)
     if (out / "model.3mf").exists() and b"build.py" in zipfile.ZipFile(out / "model.3mf").read("3D/3dmodel.model")[:600]:
@@ -414,7 +555,9 @@ def main():
 
     started = time.monotonic()
     try:
-        report = {"ok": True, **build(model, out)}
+        # cadgen says what it built and wrote on stdout; the report is the one thing printed there
+        with contextlib.redirect_stdout(sys.stderr):
+            report = {"ok": True, **build(model, out)}
     except Exception as err:  # noqa: BLE001 - the model's own errors are what the report is for
         lines = traceback.format_exception(err)
         # The runner's frames say nothing about the model; keep the ones from the model file onwards

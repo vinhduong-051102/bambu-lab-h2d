@@ -1,6 +1,6 @@
 # AI model design
 
-The dashboard's **Thiết kế mô hình bằng AI** card turns a description ("giá đỡ điện thoại nghiêng 60°, rộng 80 mm, dày 3 mm") into a model ready to print. Claude writes the model as [build123d](https://build123d.readthedocs.io) Python code, builds it, looks at a preview, fixes what is off, and hands back STL, STEP, the code and a short summary. Antigravity can design models with the same tools through an MCP server.
+The dashboard's **Thiết kế mô hình bằng AI** card turns a description ("giá đỡ điện thoại nghiêng 60°, rộng 80 mm, dày 3 mm") into a model ready to print. Claude writes the model as a [text-to-cad](https://github.com/earthtojake/text-to-cad) model (a cadgen `@model` function of [build123d](https://build123d.readthedocs.io) code), with text-to-cad's skills; cadgen's engine builds it, Claude looks at the preview cadgen draws, fixes what is off, and hands back STL, STEP, GLB, the code and a short summary. A finished model can be turned in 3D, drawn as an engineering drawing and checked for printability (DfAM). What came from text-to-cad and what stayed the gateway's own: [text-to-cad.md](text-to-cad.md). Antigravity can design models with the same tools through an MCP server.
 
 Characters, animals, statues and other organic shapes, which build123d can't make, come from a second container, `mesh3d` ([Figures](#figures-nhân-vật--trang-trí)): from a picture, Tencent's Hunyuan3D-2 shapes them on the NVIDIA GPU and Claude finishes them in Blender through [MCP for Blender](https://github.com/ahujasid/blender-mcp); from a description, Claude makes them there.
 
@@ -11,8 +11,8 @@ Without either container set up, the card stays hidden. With one of them, the ca
 ## How it works
 
 1. The dashboard posts the description to `POST /api/cad/jobs`. The gateway makes a job folder in `CAD_JOBS_DIR` (`job.json`, and Claude's brief in `request.md`) and asks the worker to start.
-2. The worker (`cad/worker.py`) runs `claude -p` in that folder, with only the Bash, Read, Write and Edit tools and the instructions in `cad/prompt.md`. Claude reads the modelling rules in `cad/guide.md`, writes `model.py`, builds it with `python /opt/cad/build.py model.py`, reads `out/preview.png` (four views) and the build report, and repeats until the model matches, at most 6 builds.
-3. `cad/build.py` runs the code, exports `result` to `out/model.stl` and `out/model.step`, renders the preview, and reports the size, volume, whether the mesh is watertight and anything to check: larger than the H2D's 320 × 320 × 320 mm, not sitting on Z = 0, an invalid shape.
+2. The worker (`cad/worker.py`) runs `claude -p` in that folder, with only the Bash, Read, Write, Edit and Skill tools, text-to-cad's skills (`--plugin-dir cad/text-to-cad`) and the instructions in `cad/prompt.md`. Claude reads the H2D's rules in `cad/guide.md` and text-to-cad's `cad` skill, writes `model.py`, builds it with `python /opt/cad/build.py model.py`, reads `out/preview.png` (four views) and the build report, draws another view or measures with `cadgen snapshot` / `cadgen inspect` when it needs to, and repeats until the model matches, at most 6 builds. Bought parts can come from [step.parts](https://step.parts) (the `step-parts` skill); a drawing, a DXF or a URDF the request asks for goes into `out/exports/`.
+3. `cad/build.py` has cadgen's engine build the file's `@model` (the one `MODEL` names, else the last), exports `out/model.stl` (fine tessellation for the slicer), `out/model.step` and `out/model.glb` (cadgen, with names, colours and materials), draws the preview with `cadgen snapshot` (OCCT on Xvfb, as text-to-cad's CAD Viewer draws: the isometric solid, front, right and top in x-ray), and reports the size, volume, whether the mesh is watertight and anything to check: larger than the H2D's 320 × 320 × 320 mm, not sitting on Z = 0, an invalid shape. A `model.py` from before text-to-cad, which assigns `result` (and `components`), still builds: the shape is handed to the engine as it is.
 4. The worker writes Claude's progress lines and the result to `status.json`; the dashboard polls it. When Claude is done, the worker builds `model.py` once more so the files always match the code that was kept.
 
 Claude runs on your Claude subscription through `CLAUDE_CODE_OAUTH_TOKEN` (from `claude setup-token`), the same token as Studio's **AI tối ưu**, so models count against the plan's usage limits rather than API billing. A model takes a few minutes and usually 2 to 4 builds. Sonnet uses less of the limits than Opus; Opus is better at parts that have to fit something. A run is stopped after 40 minutes (`CAD_AI_TIMEOUT_S`) or 60 turns; when it is stopped for time, the model.py Claude had is built once more and kept if it builds, with a warning that Claude did not finish.
@@ -23,7 +23,7 @@ Claude runs on your Claude subscription through `CLAUDE_CODE_OAUTH_TOKEN` (from 
    ```bash
    docker compose -f docker-compose.cad.yml up -d --build
    ```
-   The image has Python 3.12, build123d (with OpenCascade), matplotlib and Claude Code, about 1.5 GB. The worker's scripts are mounted from `./cad`, so changes to them only need `docker compose -f docker-compose.cad.yml restart`. The worker listens on `127.0.0.1:3102` only.
+   The image has Python 3.13, cadgen 0.8.4 (text-to-cad's engine, with build123d 0.13 and OpenCascade), Xvfb and Mesa for its snapshots, trimesh for the DfAM check, and Claude Code, about 2 GB. The engine keeps a warm worker per model script (`CADGEN_ENGINE_WORKERS=3`, ~0.6 GB each), so the container has 6 GB. The worker's scripts are mounted from `./cad`, so changes to them only need `docker compose -f docker-compose.cad.yml restart`. The worker listens on `127.0.0.1:3102` only.
 2. Add to `.env`, then restart the gateway:
    ```env
    CLAUDE_CODE_OAUTH_TOKEN=<token from claude setup-token>
@@ -39,6 +39,10 @@ Claude runs on your Claude subscription through `CLAUDE_CODE_OAUTH_TOKEN` (from 
 - Describe the part, with the dimensions that matter, pick the model and click **✨ Tạo mô hình**. The card shows what Claude is doing and its notes while it works; **⏹ Hủy** stops it.
 - A finished model shows its preview (click it for full size), size, volume, warnings, and under **Chi tiết từ Claude** its summary, the assumptions it made and the dimensions you can change in the code.
 - **📤 Gửi sang Studio** puts the STL into Studio's `/imports` folder, repaired like any STL sent from the dashboard. **⬇ STL**, **⬇ STEP** and **📄 Code** download the files; the STEP opens in Fusion 360 or FreeCAD for manual changes.
+- **🧊 Xem 3D** turns the model in the browser (cadgen's GLB, each part in its colour; an assembly's motions, when the model declares them, play as clips).
+- **📐 Vẽ bản vẽ** makes an engineering drawing PDF with text-to-cad's `cadgen.eng_drawing` (`cad/drawing.py`): A3, third angle, top, front and right with hidden lines and centre marks, an isometric, each view's overall dimensions; one sheet per printed part of an assembly. Feature dimensions and tolerances need someone who knows what the part is for: ask for them in the request, and Claude draws them with the `engineering-drawing` skill.
+- **🧪 DfAM** runs text-to-cad's `dfam-check` on what is printed (`cad/dfam.py`): watertight, wall thickness (ray cast, against FDM's 1.2 mm), overhangs and an estimate of the support, and an orientation with less support. Hole sizes, small features and bridges are not measured, and it says so.
+- Files Claude made with the other skills (a DXF, a URDF, its own drawing…) are listed on the card as downloads.
 - **✏️ Sửa** asks Claude to change the model ("dày thêm 1 mm", "bo tròn các góc"). The revision is a new job that starts from the previous code and brief, so the original stays.
 
 ## Figures (Nhân vật / trang trí)
@@ -199,7 +203,7 @@ curl -s localhost:3000/api/cad/convert -F file=@bracket.step -F tolerance_mm=0.0
 The worker's Python tests (`cad/tests/`) run in the image, on the scripts of a checkout:
 
 ```bash
-docker run --rm -v "$PWD/cad:/opt/cad:ro" -e PYTHONDONTWRITEBYTECODE=1 -w /opt/cad bambu-lab-h2d/cad:latest   python -m unittest discover -s tests -t .
+docker run --rm -v "$PWD/cad:/opt/cad:ro" -e PYTHONDONTWRITEBYTECODE=1 -w /opt/cad bambu-lab-h2d/cad:latest   bash -c 'Xvfb :99 -nolisten tcp & sleep 1; python -m unittest discover -s tests -t .'
 ```
 
 ## Hiệu chuẩn dung sai
@@ -324,11 +328,15 @@ Set `GATEWAY_API_KEY` when the gateway has one. Then ask the agent, for example:
 | GET, POST | `/api/filaments/custom` | Filament của tôi: list, or save `{name, brand?, material, hex}` |
 | DELETE | `/api/filaments/custom/:id` | Removes a saved filament |
 | DELETE | `/api/cad/jobs/:id` | Deletes a model; `?family=1` also every fix, revision and remake made from it. 409 `JOB_BUSY` while one of them is being made |
-| GET | `/api/cad/jobs/:id/files/:name` | `model.py`, `model.stl`, `model.step`, `preview.png`, `concept.png` (a figure's picture), `model.3mf` (a coloured figure), `report.json`, `views.png`, `sides.png`, `shaped.png` (as Hunyuan3D shaped it), `scene.blend`, or an older fix's `fix.py`; `?download=1` as an attachment |
+| POST | `/api/cad/jobs/:id/drawing` | Engineering drawing of a built technical model, `drawing.pdf` (text-to-cad). In the background: 202 while it runs, the job's `drawing_task` |
+| POST | `/api/cad/jobs/:id/dfam` | DfAM check of a built technical model (text-to-cad), the job's `dfam` (`findings`: pass, fail, info) and `dfam.json`. In the background like the drawing |
+| GET | `/api/cad/jobs/:id/exports/:name` | A file Claude made with text-to-cad's other skills (`out/exports/`, the job's `exports`); `?download=1` as an attachment |
+| GET | `/api/cad/jobs/:id/files/:name` | `model.py`, `model.stl`, `model.step`, `model.glb`, `drawing.pdf`, `dfam.json`, `preview.png`, `concept.png` (a figure's picture), `model.3mf` (a coloured figure), `report.json`, `views.png`, `sides.png`, `shaped.png` (as Hunyuan3D shaped it), `scene.blend`, or an older fix's `fix.py`; `?download=1` as an attachment |
 
 ## Limits
 
 - build123d suits mechanical parts: boxes, brackets, mounts, enclosures, adapters. Use figures for organic shapes; they in turn have no exact dimensions besides the height.
 - Claude checks the model by eye on the preview and by the build report. Check fits and clearances yourself before printing parts that must mate with something.
 - A job interrupted by a container restart shows as failed; create it again.
-- The container has network access (Claude needs it) and runs model code as an unprivileged user with no capabilities, 4 GB of memory and the job folders as its only shared files.
+- The container has network access (Claude needs it, and step.parts) and runs model code as an unprivileged user with no capabilities, 6 GB of memory and the job folders as its only shared files.
+- cadgen's engine keeps what it built in memory and in `~/.cache/cadgen` inside the container: a restart of the container loses it, which only makes the next build of each model cold (a few seconds).

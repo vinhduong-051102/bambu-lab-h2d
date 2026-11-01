@@ -26,6 +26,7 @@ import { formatPrintTime } from '../prints';
 import { ModelSim } from '../sim/ModelSim';
 import { AssemblyGuideButton } from './AssemblyGuide';
 import { EngCheckButton } from './EngCheck';
+import { DfamButton, DrawingButton, ExportLinks, ModelViewerButton } from './TextToCad';
 
 /** As many pictures as the gateway takes with one revision */
 const MAX_PASTED_IMAGES = 4;
@@ -77,8 +78,24 @@ export interface CadJob {
   /** Whether "Thử lại" can run it again in place */
   retryable?: boolean;
   /** Its assembly guide being drawn again in the gateway (it goes on when the page closes), or how that ended */
-  guide_task?: { running: boolean; started_at: string; finished_at: string | null; error: string | null } | null;
+  guide_task?: TaskState | null;
+  /** Its engineering drawing and DfAM check (text-to-cad), the same way */
+  drawing_task?: TaskState | null;
+  dfam_task?: TaskState | null;
+  /** text-to-cad's DfAM check of what is printed, as last run */
+  dfam?: {
+    ok: boolean;
+    error?: string;
+    process?: string;
+    source?: string;
+    partial?: boolean;
+    findings?: { status: 'pass' | 'fail' | 'info'; title: string; detail: string }[];
+  } | null;
+  /** Files Claude made with text-to-cad's other skills (out/exports/) */
+  exports?: string[];
 }
+
+type TaskState = { running: boolean; started_at: string; finished_at: string | null; error: string | null };
 
 export interface PrintLayout {
   plates: { n: number; parts: string[] }[];
@@ -641,6 +658,10 @@ export function CadJobCard(props: {
             {done && job.files?.threemf && plates <= 1 && link('model.3mf', plates ? '3MF' : '3MF màu', { download: true, icon: <DownloadOutlined /> })}
             {done && link('model.stl', 'STL', { download: true, icon: <DownloadOutlined /> })}
             {done && job.files?.step && link('model.step', 'STEP', { download: true, icon: <DownloadOutlined /> })}
+            {done && job.files?.glb && <ModelViewerButton job={job} />}
+            {done && !figure && job.files?.stl && <DrawingButton job={job} />}
+            {done && !figure && job.files?.stl && <DfamButton job={job} />}
+            {done && <ExportLinks job={job} />}
             {done && <EngCheckButton job={job} onRevise={onRevise ? (comment) => onRevise(comment, []) : undefined} />}
             {done && <SimulateButton job={job} />}
             {done && job.files?.assembly && <AssemblyGuideButton job={job} />}

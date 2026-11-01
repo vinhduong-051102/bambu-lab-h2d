@@ -10,7 +10,9 @@ import { getTask, type TaskState } from '../backgroundTasks';
  * sides, for "Dựng nhiều góc"), or attachments/ (pictures the user pasted into a revision, for Claude to look at);
  * the workers write model.py (build123d code), concept.png (the figure's picture, background removed), sides.png
  * (the sides a figure was shaped from), fix.py (Claude's changes to a figure),
- * out/ (model.stl, model.step, preview.png, report.json) and status.json.
+ * out/ (model.stl, model.step, model.glb, preview.png, report.json; drawing.pdf and dfam.json when asked for, and
+ * out/exports/: what Claude made with text-to-cad's other skills) and status.json. Technical models are built by
+ * text-to-cad's cadgen engine (docs/text-to-cad.md).
  */
 
 export type CadJobSource = 'claude' | 'code' | 'mesh';
@@ -45,6 +47,8 @@ export interface CadBuildReport {
   mesh?: { triangles: number; watertight: boolean; open_edges: number; non_manifold_edges: number };
   warnings?: string[];
   seconds?: number;
+  /** What built it: cadgen's version, the document id the engine holds, the model file's format, who drew the preview */
+  engine?: { cadgen: string; document: string; format: 'model' | 'result'; preview: 'cadgen' | 'matplotlib' };
   /** An assembly laid out for printing (cad/print_layout.py): its plates, and with several, one 3MF each */
   print_layout?: { plates: { n: number; parts: string[] }[]; plate_files?: string[] };
   /**
@@ -149,6 +153,9 @@ export interface CadJob extends CadJobMeta {
   guide: CadGuideOutcome | null;
   /** "Vẽ lại" of its assembly guide, running in the gateway (it goes on when the page closes) or how it ended */
   guide_task: TaskState | null;
+  /** Its engineering drawing and DfAM check being made, the same way */
+  drawing_task: TaskState | null;
+  dfam_task: TaskState | null;
   /** A failed job's details under its error: the last build's error, Claude's last notes, Claude Code's stderr */
   error_details: string[];
   /** Whether POST /api/cad/jobs/:id/retry can run it again in place (a figure needs the settings it was asked with) */
@@ -175,7 +182,34 @@ export interface CadJob extends CadJobMeta {
     assembly: boolean;
     /** Its assembly guide: steps (guide.json, a picture each) and a video (assembly.mp4) */
     guide: boolean;
+    /** The model as designed, for the 3D view (cadgen's GLB: colours, names, an assembly assembled) */
+    glb: boolean;
+    /** Its engineering drawing (POST /api/cad/jobs/:id/drawing) */
+    drawing: boolean;
   };
+  /** Files Claude made with text-to-cad's other skills (out/exports/: a drawing, a DXF, a URDF…), by name */
+  exports: string[];
+  /** Its DfAM check (POST /api/cad/jobs/:id/dfam), as last run */
+  dfam: CadDfam | null;
+}
+
+/** text-to-cad's dfam-check of out/model.stl against its FDM limits (cad/dfam.py), without the raw measurements */
+export interface CadDfam {
+  ok: boolean;
+  error?: string;
+  process?: string;
+  source?: string;
+  partial?: boolean;
+  findings?: { status: 'pass' | 'fail' | 'info'; title: string; detail: string }[];
+}
+
+/** What drawing an engineering drawing came to (cad/drawing.py) */
+export interface CadDrawingOutcome {
+  ok: boolean;
+  error?: string;
+  file?: string;
+  sheets?: number;
+  notices?: string[];
 }
 
 /** Files of a job the API serves, by name, with where they are in its folder */
@@ -183,6 +217,9 @@ export const CAD_FILES = {
   'model.py': { path: 'model.py', type: 'text/x-python; charset=utf-8' },
   'model.stl': { path: 'out/model.stl', type: 'model/stl' },
   'model.step': { path: 'out/model.step', type: 'model/step' },
+  'model.glb': { path: 'out/model.glb', type: 'model/gltf-binary' },
+  'drawing.pdf': { path: 'out/drawing.pdf', type: 'application/pdf' },
+  'dfam.json': { path: 'out/dfam.json', type: 'application/json; charset=utf-8' },
   'preview.png': { path: 'out/preview.png', type: 'image/png' },
   'concept.png': { path: 'concept.png', type: 'image/png' },
   'model.3mf': { path: 'out/model.3mf', type: 'model/3mf' },
@@ -200,6 +237,35 @@ export type CadFileName = keyof typeof CAD_FILES;
 
 const JOB_ID_RE = /^[a-z0-9][a-z0-9-]{5,63}$/;
 const GUIDE_PICTURE_RE = /^(step-\d{2,3}|done)\.png$/;
+/** A file in out/exports/ the API serves: a plain name, no folders */
+const EXPORT_NAME_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
+export const EXPORTS_DIR = 'exports';
+
+/** Content types of the files text-to-cad's skills write, by extension */
+export const EXPORT_TYPES: Record<string, string> = {
+  pdf: 'application/pdf',
+  dxf: 'image/vnd.dxf',
+  step: 'model/step',
+  stp: 'model/step',
+  stl: 'model/stl',
+  glb: 'model/gltf-binary',
+  '3mf': 'model/3mf',
+  urdf: 'application/xml; charset=utf-8',
+  srdf: 'application/xml; charset=utf-8',
+  sdf: 'application/xml; charset=utf-8',
+  xml: 'application/xml; charset=utf-8',
+  json: 'application/json; charset=utf-8',
+  md: 'text/markdown; charset=utf-8',
+  txt: 'text/plain; charset=utf-8',
+  py: 'text/x-python; charset=utf-8',
+  png: 'image/png',
+  svg: 'image/svg+xml',
+  xbf: 'application/octet-stream',
+};
+
+export function exportType(name: string): string {
+  return EXPORT_TYPES[name.split('.').pop()?.toLowerCase() ?? ''] ?? 'application/octet-stream';
+}
 
 /** What drawing an assembly guide came to: its steps, and its video unless ffmpeg failed (`error` says why) */
 export interface CadGuideOutcome {
@@ -281,10 +347,11 @@ export class CadJobStore {
     const meta = await readJson<CadJobMeta>(path.join(dir, 'job.json'));
     if (!meta) return null;
     const status = await readJson<WorkerStatus>(path.join(dir, 'status.json'));
-    const names = ['model.py', 'model.stl', 'model.step', 'preview.png', 'concept.png', 'model.3mf', 'fix.py', 'views.png', 'sides.png', 'shaped.png', 'scene.blend', 'assembly.png', 'guide.json'] as const;
-    const [code, stl, step, preview, concept, threemf, fix, views, sides, shaped, blend, assembly, guide] = await Promise.all(
+    const names = ['model.py', 'model.stl', 'model.step', 'preview.png', 'concept.png', 'model.3mf', 'fix.py', 'views.png', 'sides.png', 'shaped.png', 'scene.blend', 'assembly.png', 'guide.json', 'model.glb', 'drawing.pdf'] as const;
+    const [code, stl, step, preview, concept, threemf, fix, views, sides, shaped, blend, assembly, guide, glb, drawing] = await Promise.all(
       names.map((name) => exists(path.join(dir, CAD_FILES[name].path)))
     );
+    const dfam = await readJson<CadDfam & { measure?: unknown; orientations?: unknown }>(path.join(dir, CAD_FILES['dfam.json'].path));
     return {
       ...meta,
       title: status?.result?.title || meta.title,
@@ -304,9 +371,13 @@ export class CadJobStore {
       result: status?.result ?? null,
       report: status?.report ?? null,
       // A fix's source/ is the version before it, already shown as such: only a figure Hunyuan3D shaped has its own
-      files: { code, stl, step, preview, concept, threemf, fix, views, sides, shaped: shaped && status?.maker === 'hunyuan', blend, assembly, guide },
+      files: { code, stl, step, preview, concept, threemf, fix, views, sides, shaped: shaped && status?.maker === 'hunyuan', blend, assembly, guide, glb, drawing },
+      exports: await this.exports(dir),
+      dfam: dfam && { ok: dfam.ok, error: dfam.error, process: dfam.process, source: dfam.source, partial: dfam.partial, findings: dfam.findings },
       guide: status?.guide ?? null,
       guide_task: getTask(guideTaskKey(id)),
+      drawing_task: getTask(drawingTaskKey(id)),
+      dfam_task: getTask(dfamTaskKey(id)),
       error_details: status?.state === 'failed' ? await failureDetails(dir, status) : [],
       retryable:
         meta.source === 'claude'
@@ -369,6 +440,20 @@ export class CadJobStore {
     const dir = this.jobDir(id);
     if (!dir) return null;
     const file = path.join(dir, CAD_FILES[name].path);
+    return (await exists(file)) ? file : null;
+  }
+
+  /** The files in a job folder's out/exports/, by name */
+  private async exports(dir: string): Promise<string[]> {
+    const names = await fs.readdir(path.join(dir, 'out', EXPORTS_DIR), { withFileTypes: true }).catch(() => []);
+    return names.filter((entry) => entry.isFile() && EXPORT_NAME_RE.test(entry.name)).map((entry) => entry.name).sort();
+  }
+
+  /** Where one of a job's out/exports/ files is on disk, or null */
+  async exportFile(id: string, name: string): Promise<string | null> {
+    const dir = this.jobDir(id);
+    if (!dir || !EXPORT_NAME_RE.test(name)) return null;
+    const file = path.join(dir, 'out', EXPORTS_DIR, name);
     return (await exists(file)) ? file : null;
   }
 
@@ -483,6 +568,9 @@ async function failureDetails(dir: string, status: WorkerStatus): Promise<string
 
 /** The background task that draws a job's assembly guide again (POST /api/cad/jobs/:id/guide) */
 export const guideTaskKey = (id: string) => `cad-guide:${id}`;
+/** Background tasks of a job's engineering drawing and DfAM check (text-to-cad), like its guide's */
+export const drawingTaskKey = (id: string) => `cad-drawing:${id}`;
+export const dfamTaskKey = (id: string) => `cad-dfam:${id}`;
 
 /**
  * Claude's brief for a new model, or for changing the model of `parent` (whose brief it was given); `attached`
@@ -550,6 +638,10 @@ export interface CadWorkerApi {
   cancel(id: string): Promise<void>;
   /** Draws the assembly guide of a built assembly again */
   guide(id: string): Promise<CadGuideOutcome>;
+  /** Draws the engineering drawing of a built model (out/drawing.pdf) */
+  drawing(id: string, title: string): Promise<CadDrawingOutcome>;
+  /** Runs the DfAM check of a built model (out/dfam.json) */
+  dfam(id: string): Promise<CadDfam>;
 }
 
 /** JSON over HTTP to a worker container; errors as CadWorkerError with the worker's message */
@@ -605,6 +697,16 @@ export class CadWorkerClient extends WorkerHttp implements CadWorkerApi {
   async guide(id: string) {
     // The worker allows a guide 420 s (a frame of video for every step's every move)
     return (await this.call<{ guide: CadGuideOutcome }>('POST', `/jobs/${id}/guide`, {}, 450000)).guide;
+  }
+
+  drawing(id: string, title: string) {
+    // The worker allows a drawing 300 s (hidden lines of every view, a sheet per printed part)
+    return this.call<CadDrawingOutcome>('POST', `/jobs/${id}/drawing`, { title }, 320000);
+  }
+
+  dfam(id: string) {
+    // The worker allows a check 600 s (ray casting the wall thickness of a large mesh)
+    return this.call<CadDfam>('POST', `/jobs/${id}/dfam`, {}, 620000);
   }
 }
 

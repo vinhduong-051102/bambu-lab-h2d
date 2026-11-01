@@ -1,0 +1,9 @@
+{
+  "name": "text-to-cad",
+  "version": "0.8.4",
+  "description": "text-to-cad's skills (earthtojake/text-to-cad, MIT) for Claude in the cad container: cadgen models, exports, drawings, DfAM/DFM checks, step.parts, DXF, URDF/SRDF/SDF. Its MCP server and the skills that need a desktop app (bambu-labs, gcode) are left out.",
+  "author": { "name": "earthtojake", "url": "https://github.com/earthtojake" },
+  "repository": "https://github.com/earthtojake/text-to-cad",
+  "license": "MIT",
+  "skills": "./skills/"
+}

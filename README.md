@@ -30,7 +30,7 @@ PrinterService (PrinterManager)
 
 Optional containers, reached over HTTP by the gateway:
  ├── Bambu Studio (docker-compose.studio.yml)      slicing & printing, embedded in the dashboard
- ├── CAD worker  (docker-compose.cad.yml)          Claude + build123d: technical parts, STEP/IGES import
+ ├── CAD worker  (docker-compose.cad.yml)          Claude + text-to-cad (cadgen): technical parts, drawings, DfAM, STEP/IGES import
  ├── mesh3d      (docker-compose.mesh3d.yml)       Hunyuan3D-2 + Blender: figures; Chrono simulation; part analysis
  └── sim-live    (docker-compose.sim-live.yml)     Project Chrono kept running for interactive simulation
 ```
@@ -43,7 +43,7 @@ Optional containers, reached over HTTP by the gateway:
 | AMS & filaments | Load/unload/settings per tray, RFID, Bambu colour catalogue, mixing recipes, "Filament của tôi" | [bambu-h2d-ams-protocol.md](docs/bambu-h2d-ams-protocol.md) |
 | Bambu Studio | Studio in the browser, `/imports` file list, "AI tối ưu" print settings from Claude | [studio.md](docs/studio.md) |
 | Print history | Each print's settings, photos, report, model parts; timelapses with "AI nhận xét" | [studio.md](docs/studio.md) |
-| Thiết kế mô hình bằng AI | Technical parts (build123d), figures (Hunyuan3D-2 + Blender), revisions, plate layout for the H2D, assembly guide, send to Studio | [cad.md](docs/cad.md) |
+| Thiết kế mô hình bằng AI | Technical parts (text-to-cad: cadgen + build123d), 3D view, engineering drawings, DfAM check, figures (Hunyuan3D-2 + Blender), revisions, plate layout for the H2D, assembly guide, send to Studio | [cad.md](docs/cad.md), [text-to-cad.md](docs/text-to-cad.md) |
 | Kiểm tra kỹ thuật | Mesh, assembly, fits, motion, FEA, printability, reports for a printed part | [engineering-analysis.md](docs/engineering-analysis.md) |
 | Mô phỏng | Mechanisms in Project Chrono played back in Blender; a model simulated as it is; interactive simulation | [mechanical-simulation.md](docs/mechanical-simulation.md), [model-simulation.md](docs/model-simulation.md), [interactive-physics.md](docs/interactive-physics.md) |
 | Hệ thống | Claude plan limits (two subscriptions), AI usage and cost per task | — |

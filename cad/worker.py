@@ -8,6 +8,10 @@ request.md, this worker writes model.py (through Claude), out/ (through build.py
                                in the background; status.json follows its progress. 202, or 409 when running
   POST /jobs/<id>/build        Builds the job's model.py now and answers with build.py's report
   POST /jobs/<id>/guide        Draws the assembly guide of the job's built assembly again (assembly_guide.py)
+  POST /jobs/<id>/drawing      Engineering drawing of the job's model, out/drawing.pdf (drawing.py, text-to-cad's
+                               cadgen.eng_drawing), answered with drawing.py's report
+  POST /jobs/<id>/dfam         DfAM check of the job's out/model.stl, out/dfam.json (dfam.py, text-to-cad's
+                               dfam-check), answered with it
   POST /jobs/<id>/cancel       Stops the job's Claude run
   POST /convert                {"file": "<path in JOBS_DIR>"} or {"data_base64", "filename", "job_id"?}, with
                                "tolerance_mm"? and "angular_tolerance_deg"?: each solid of a STEP/IGES file as an STL
@@ -47,6 +51,10 @@ BUILD_TIMEOUT_S = 180
 MAX_TURNS = 60
 CONVERT_TIMEOUT_S = 300
 GUIDE_TIMEOUT_S = 420
+DRAWING_TIMEOUT_S = 300
+DFAM_TIMEOUT_S = 600
+# text-to-cad's skills for Claude (cad/text-to-cad, a plugin folder)
+PLUGIN_DIR = HERE / "text-to-cad"
 MAX_CONVERT_BYTES = 100 * 1024 * 1024
 CONVERT_SUFFIXES = (".step", ".stp", ".iges", ".igs")
 JOB_ID_RE = re.compile(r"^[a-z0-9][a-z0-9-]{5,63}$")
@@ -130,6 +138,20 @@ def run_guide(directory):
     return {"ok": True, "steps": len(guide["steps"]), "video": guide.get("video"), "error": guide.get("video_error")}
 
 
+def run_script(directory, script, args, timeout, what):
+    """One of the worker's scripts that prints a JSON report: that report, or one saying why there is none"""
+    try:
+        done = subprocess.run([sys.executable, str(HERE / script), *args], cwd=directory, capture_output=True,
+                              text=True, timeout=timeout, check=False)
+    except subprocess.TimeoutExpired:
+        return {"ok": False, "error": f"{what} quá {timeout} giây."}
+    lines = [line for line in done.stdout.splitlines() if line.startswith("{")]
+    try:
+        return json.loads(lines[-1])
+    except (IndexError, ValueError):
+        return {"ok": False, "error": f"{script} không trả kết quả: {done.stderr.strip()[-500:]}"}
+
+
 def new_job_id():
     """Like the gateway's newJobId: "20261023-091502-a1b2", sorting by creation time"""
     return datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S") + "-" + secrets.token_hex(2)
@@ -199,6 +221,14 @@ def step_of(tool_name, tool_input):
     name = target.rsplit("/", 1)[-1]
     if tool_name == "Bash" and "build.py" in command:
         return "building", None
+    if tool_name == "Bash" and "cadgen snapshot" in command:
+        return "reviewing", "Vẽ thêm góc nhìn bằng cadgen snapshot"
+    if tool_name == "Bash" and "cadgen inspect" in command:
+        return "reviewing", "Đo bằng cadgen inspect"
+    if tool_name == "Bash" and ("step.parts" in command or "download_step_part" in command):
+        return "reading", "Tải linh kiện từ step.parts"
+    if tool_name == "Skill":
+        return "reading", f"Đọc skill {tool_input.get('skill') or tool_input.get('name') or ''}".strip()
     if tool_name == "Read" and target.endswith(".png"):
         return "reviewing", f"Xem {name} (4 góc nhìn)"
     if tool_name == "Read" and name in ("guide.md", "request.md", "model.py"):
@@ -284,9 +314,11 @@ def generate(job_id, model, tokens=None):
     command = [
         "claude", "-p",
         "--model", model,
-        "--tools", "Bash,Read,Write,Edit",
-        "--allowedTools", "Bash,Read,Write,Edit",
+        "--tools", "Bash,Read,Write,Edit,Skill",
+        "--allowedTools", "Bash,Read,Write,Edit,Skill",
         "--setting-sources", "",
+        # text-to-cad's skills: cad, step-parts, engineering-drawing, dxf, dfam-check, dfm, urdf, srdf, sdf, sendcutsend
+        "--plugin-dir", str(PLUGIN_DIR),
         "--no-session-persistence",
         "--max-turns", str(MAX_TURNS),
         "--append-system-prompt", (HERE / "prompt.md").read_text(encoding="utf-8"),
@@ -400,7 +432,7 @@ def generate(job_id, model, tokens=None):
         status.update(state="failed", error="Claude không viết model.py.")
     else:
         # Built once more here, so the files and report always match the model.py that was kept
-        begin_step(status, "finishing", "Dựng lại model.py cuối cùng, xuất STL, STEP và ảnh xem trước")
+        begin_step(status, "finishing", "Dựng lại model.py cuối cùng, xuất STL, STEP, GLB và ảnh xem trước")
         write_json(directory / "status.json", status)
         report = run_build(directory)
         if report.get("ok") and (directory / "out" / "assembly.json").exists():
@@ -461,7 +493,7 @@ class Handler(BaseHTTPRequestHandler):
     def do_POST(self):
         if self.path == "/convert":
             return self.convert(self.body())
-        match = re.fullmatch(r"/jobs/([^/]+)/(generate|build|guide|cancel)", self.path)
+        match = re.fullmatch(r"/jobs/([^/]+)/(generate|build|guide|drawing|dfam|cancel)", self.path)
         if not match or not JOB_ID_RE.match(match.group(1)):
             return self.reply(404, {"ok": False, "error": "NOT_FOUND"})
         job_id, action = match.groups()
@@ -494,6 +526,23 @@ class Handler(BaseHTTPRequestHandler):
                 status["guide"] = run_guide(directory)
             write_json(directory / "status.json", status)
             return self.reply(200, {"ok": True, "report": report})
+
+        if action in ("drawing", "dfam"):
+            with lock:
+                if job_id in running:
+                    return self.reply(409, {"ok": False, "error": "JOB_RUNNING", "message": "Job đang chạy."})
+            if action == "drawing":
+                if not (directory / "model.py").exists():
+                    return self.reply(400, {"ok": False, "error": "NO_MODEL", "message": "Job chưa có model.py."})
+                title = str(body.get("title") or "")[:80] or job_id
+                report = run_script(directory, "drawing.py", ["model.py", title], DRAWING_TIMEOUT_S, "Vẽ bản vẽ")
+            else:
+                if not (directory / "out" / "model.stl").exists():
+                    return self.reply(400, {"ok": False, "error": "NO_MODEL", "message": "Job chưa dựng ra model.stl."})
+                report = run_script(directory, "dfam.py", ["out"], DFAM_TIMEOUT_S, "Kiểm tra DfAM")
+            report.pop("traceback", None)
+            # A drawing or a check that failed is still an answer: its report says why
+            return self.reply(200, report)
 
         if action == "guide":
             with lock:
@@ -555,7 +604,21 @@ def generate_safely(job_id, model):
         write_json(job_dir(job_id) / "status.json", status)
 
 
+def start_display():
+    """Xvfb on $DISPLAY: cadgen draws its snapshots through OCCT's OpenGL view, which on Linux needs an X display.
+    Started here rather than by xvfb-run, which hangs as a container's first process"""
+    display = os.environ.get("DISPLAY")
+    if not display or sys.platform != "linux" or Path(f"/tmp/.X11-unix/X{display.lstrip(':')}").exists():
+        return
+    try:
+        subprocess.Popen(["Xvfb", display, "-screen", "0", "1920x1080x24", "-nolisten", "tcp"],
+                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+    except FileNotFoundError:
+        print("[cad-worker] no Xvfb: previews are drawn by matplotlib", flush=True)
+
+
 if __name__ == "__main__":
+    start_display()
     JOBS_DIR.mkdir(parents=True, exist_ok=True)
     print(f"[cad-worker] listening on :{PORT}, jobs in {JOBS_DIR}", flush=True)
     ThreadingHTTPServer(("0.0.0.0", PORT), Handler).serve_forever()

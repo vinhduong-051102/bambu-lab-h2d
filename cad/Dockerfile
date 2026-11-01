@@ -1,15 +1,19 @@
-# CAD worker for "Thiết kế mô hình bằng AI" (docs/cad.md): build123d to turn Python into STL/STEP, matplotlib for
-# the preview, and Claude Code to write the Python from a request (`claude -p`, signed in with the
-# CLAUDE_CODE_OAUTH_TOKEN from `claude setup-token`). The worker's scripts are mounted from ./cad at run time.
-FROM python:3.12-slim
+# CAD worker for "Thiết kế mô hình bằng AI" (docs/cad.md, docs/text-to-cad.md): text-to-cad's cadgen engine builds
+# the build123d models, draws their previews (OCCT, on Xvfb) and exports them; Claude Code writes the models from a
+# request (`claude -p`, signed in with the CLAUDE_CODE_OAUTH_TOKEN from `claude setup-token`) with text-to-cad's
+# skills (./text-to-cad). The worker's scripts are mounted from ./cad at run time.
+FROM python:3.13-slim
 
-# libgl1/libxrender1: OCP (build123d's OpenCascade binding) links against them even when nothing is drawn
+# Xvfb and Mesa: cadgen's snapshots draw through OCCT's OpenGL view, which on Linux needs an X display
 RUN apt-get update \
- && apt-get install -y --no-install-recommends ca-certificates curl bash git jq libgl1 libxrender1 libglib2.0-0 \
+ && apt-get install -y --no-install-recommends ca-certificates curl bash git jq \
+      libgl1 libglx-mesa0 libgl1-mesa-dri libegl1 libxrender1 libglib2.0-0 libfontconfig1 xvfb xauth \
  && rm -rf /var/lib/apt/lists/*
 
-ARG BUILD123D_VERSION=0.13.0
-RUN pip install --no-cache-dir "build123d==${BUILD123D_VERSION}" matplotlib numpy
+# cadgen brings build123d 0.13, OCP, bd_materials, ezdxf and lib3mf; the skills call `cadgen +<this version>`.
+# trimesh and its extras: text-to-cad's dfam-check and dfm scripts
+ARG CADGEN_VERSION=0.8.4
+RUN pip install --no-cache-dir "cadgen==${CADGEN_VERSION}" matplotlib numpy trimesh rtree scipy networkx lxml
 
 # Claude Code for every user (the worker runs as cad); updates come from rebuilding the image
 ARG CLAUDE_CODE_VERSION=stable
@@ -24,10 +28,18 @@ RUN apt-get update \
  && apt-get install -y --no-install-recommends ffmpeg \
  && rm -rf /var/lib/apt/lists/*
 
+# The skills write `cadgen +0.8.4 ...`, the form the installer's proxy takes; the image has one cadgen, so the
+# version argument is dropped
+RUN mv /usr/local/bin/cadgen /usr/local/bin/cadgen-real \
+ && printf '#!/bin/sh\ncase "$1" in +*) shift;; esac\nexec /usr/local/bin/cadgen-real "$@"\n' > /usr/local/bin/cadgen \
+ && chmod 755 /usr/local/bin/cadgen
+
 # Claude Code won't run its tools unattended as root; the worker and everything it starts run as cad
 RUN useradd --create-home --uid 1000 cad
 USER cad
-ENV HOME=/home/cad PYTHONUNBUFFERED=1 MPLBACKEND=Agg DISABLE_AUTOUPDATER=1
+ENV HOME=/home/cad PYTHONUNBUFFERED=1 MPLBACKEND=Agg DISABLE_AUTOUPDATER=1 DISPLAY=:99 \
+    CADGEN_TELEMETRY=0 CADGEN_UPDATE_CHECK=0
+RUN cadgen telemetry off
 WORKDIR /opt/cad
 EXPOSE 8000
 CMD ["python", "/opt/cad/worker.py"]
