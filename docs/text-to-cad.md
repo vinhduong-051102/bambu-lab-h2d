@@ -13,7 +13,7 @@ text-to-cad's own skills, as it does on this computer in `cad-projects`.
 | Dựng mô hình | `runpy` + build123d 0.13 | Engine cadgen (dựng lại phần đã đổi) | **Thay**: engine cadgen; file cũ gán `result` vẫn dựng được |
 | CAD Viewer (xoay, chọn mặt/cạnh, đo, cắt, tách rời; theo mỗi lần dựng) | Không | Trang của engine cadgen | **Thêm**: nút **🧭 CAD Viewer**, cổng riêng của gateway (xem dưới) |
 | Ảnh xem trước | matplotlib, 4 góc, tô bóng thô | `cadgen snapshot`: OCCT vẽ như CAD Viewer | **Thay**: 4 góc vẽ bằng `cadgen snapshot` (matplotlib chỉ khi không có OpenGL) |
-| Xuất file | STL, STEP (build123d) | STEP, STL, 3MF, GLB, xbf, DXF (giữ tên, màu, vật liệu, khớp) | **Thay**: `cadgen export`; thêm **GLB** |
+| Xuất file | STL, STEP (build123d) | STEP, STL, 3MF, GLB, xbf, DXF (giữ tên, màu, vật liệu, khớp) | **Thay**: `cadgen export`; thêm **GLB** (tải về; xem 3D là việc của CAD Viewer) |
 | Báo cáo dựng (kích thước, thể tích, lưới kín, vừa bàn H2D, nằm trên Z = 0) | Có | Một phần (bounds, số part) | Giữ, đo trên hình cadgen dựng |
 | Đo, tra tham chiếu mặt/cạnh (`cadgen inspect`) | Không | Có | **Thêm**: Claude dùng khi làm việc |
 | Linh kiện mua sẵn STEP (ổ bi, servo, vít) | Không | Skill `step-parts` (step.parts) | **Thêm**: Claude tải STEP thật từ step.parts |
@@ -29,7 +29,7 @@ text-to-cad's own skills, as it does on this computer in `cad-projects`.
 | Nhân vật (Hunyuan3D-2 + Blender) | Có | Không | Giữ |
 | Gửi sang Studio | Có (Studio trong Docker) | Skill `bambu-labs` (Bambu Connect / Studio trên máy) | Giữ của gateway: Studio của gateway làm đúng việc này |
 | Cắt lớp G-code | Studio | Skill `gcode` (OrcaSlicer) | Không ghép: Studio của gateway cắt lớp cho H2D |
-| Mô phỏng Chrono, FEA, kiểm tra kỹ thuật | Có | Không | Giữ |
+| Mô phỏng Chrono, FEA, kiểm tra kỹ thuật | Có: động lực học (lực, trọng lực, va chạm, mô-men động cơ), ứng suất | Không: CAD Viewer chỉ đặt tư thế theo khớp và chuyển động khai báo sẵn (kinematics), không tính lực | Giữ: không trùng |
 | MCP cho agent | `bambu-cad` (Antigravity) | `cad` (cad_show, inspect, snapshot, export) | Giữ `bambu-cad`; `cad_build` nhận cả `@model` |
 
 ## CAD Viewer

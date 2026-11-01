@@ -2,17 +2,13 @@
 
 import { CheckCircleFilled, CloseCircleFilled, DownloadOutlined, InfoCircleFilled, ReloadOutlined } from '@ant-design/icons';
 import { Alert, App, Button, Empty, Flex, Modal, Space, Spin, Typography } from 'antd';
-import { useEffect, useRef, useState } from 'react';
-import * as THREE from 'three';
-import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
-import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment.js';
-import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
+import { useEffect, useState } from 'react';
 import { fileUrl } from '../cad';
 import type { CadJob } from './CadJob';
 
 /**
- * What text-to-cad (docs/text-to-cad.md) adds to a technical model's card: the model in 3D from its GLB, an
- * engineering drawing, a DfAM check and the files Claude made with text-to-cad's other skills.
+ * What text-to-cad (docs/text-to-cad.md) adds to a technical model's card: its CAD Viewer, an engineering drawing,
+ * a DfAM check and the files Claude made with text-to-cad's other skills.
  */
 
 const POLL_MS = 3000;
@@ -155,112 +151,6 @@ export function DfamButton(props: { job: CadJob }) {
   );
 }
 
-/** The model as designed, from cadgen's GLB: turn it with the mouse; an assembly's motions play as its clips */
-function GlbView({ src }: { src: string }) {
-  const mountRef = useRef<HTMLDivElement>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [clips, setClips] = useState<string[]>([]);
-  const playRef = useRef<(name: string) => void>(() => {});
-
-  useEffect(() => {
-    const mount = mountRef.current;
-    if (!mount) return;
-    const renderer = new THREE.WebGLRenderer({ antialias: true });
-    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
-    renderer.setSize(mount.clientWidth, mount.clientHeight);
-    mount.appendChild(renderer.domElement);
-    const scene = new THREE.Scene();
-    scene.background = new THREE.Color('#f1f5f9');
-    const environment = new THREE.PMREMGenerator(renderer);
-    scene.environment = environment.fromScene(new RoomEnvironment(), 0.04).texture;
-    const camera = new THREE.PerspectiveCamera(40, mount.clientWidth / mount.clientHeight, 0.0001, 1000);
-    const controls = new OrbitControls(camera, renderer.domElement);
-    controls.enableDamping = true;
-    let mixer: THREE.AnimationMixer | null = null;
-    let disposed = false;
-
-    new GLTFLoader().load(
-      src,
-      (gltf) => {
-        if (disposed) return;
-        scene.add(gltf.scene);
-        // Framed whatever its unit: a glTF is in metres, Y up
-        const box = new THREE.Box3().setFromObject(gltf.scene);
-        const centre = box.getCenter(new THREE.Vector3());
-        const span = box.getSize(new THREE.Vector3()).length() || 1;
-        camera.near = span / 1000;
-        camera.far = span * 100;
-        camera.updateProjectionMatrix();
-        camera.position.copy(centre).add(new THREE.Vector3(span * 0.8, span * 0.6, span * 0.9));
-        controls.target.copy(centre);
-        const grid = new THREE.GridHelper(span * 2, 20, 0x94a3b8, 0xcbd5e1);
-        grid.position.set(centre.x, box.min.y, centre.z);
-        scene.add(grid);
-        if (gltf.animations.length) {
-          mixer = new THREE.AnimationMixer(gltf.scene);
-          setClips(gltf.animations.map((clip) => clip.name));
-          playRef.current = (name) => {
-            mixer?.stopAllAction();
-            const clip = gltf.animations.find((c) => c.name === name);
-            if (clip) mixer?.clipAction(clip).reset().play();
-          };
-        }
-      },
-      undefined,
-      () => setError('Không mở được file GLB.')
-    );
-
-    const clock = new THREE.Clock();
-    renderer.setAnimationLoop(() => {
-      mixer?.update(clock.getDelta());
-      controls.update();
-      renderer.render(scene, camera);
-    });
-    const resize = () => {
-      camera.aspect = mount.clientWidth / mount.clientHeight;
-      camera.updateProjectionMatrix();
-      renderer.setSize(mount.clientWidth, mount.clientHeight);
-    };
-    window.addEventListener('resize', resize);
-    return () => {
-      disposed = true;
-      window.removeEventListener('resize', resize);
-      renderer.setAnimationLoop(null);
-      controls.dispose();
-      scene.traverse((o) => {
-        if (o instanceof THREE.Mesh) {
-          o.geometry.dispose();
-          (Array.isArray(o.material) ? o.material : [o.material]).forEach((m) => m.dispose());
-        }
-      });
-      environment.dispose();
-      renderer.dispose();
-      mount.removeChild(renderer.domElement);
-    };
-  }, [src]);
-
-  return (
-    <Flex vertical gap={8}>
-      {error && <Alert type="error" showIcon title={error} />}
-      <div ref={mountRef} style={{ width: '100%', height: 'min(70vh, 640px)', borderRadius: 6, overflow: 'hidden' }} />
-      <Flex justify="space-between" align="center" gap={8} wrap>
-        <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-          Chuột trái: xoay · chuột phải: kéo · cuộn: phóng to
-        </Typography.Text>
-        {clips.length > 0 && (
-          <Space wrap size={4}>
-            {clips.map((name) => (
-              <Button key={name} size="small" onClick={() => playRef.current(name)}>
-                ▶ {name}
-              </Button>
-            ))}
-          </Space>
-        )}
-      </Flex>
-    </Flex>
-  );
-}
-
 /**
  * "🧭 CAD Viewer": text-to-cad's own viewer, on the gateway's viewer port (CAD_VIEWER_PORT) of the host the dashboard
  * was opened from: the exact model (pick faces and edges, measure, section, explode), following every rebuild. The
@@ -291,32 +181,6 @@ export function CadViewerButton({ job }: { job: CadJob }) {
     <Button size="small" loading={opening} onClick={open} title="Mở trong CAD Viewer của text-to-cad: chọn mặt/cạnh, đo, cắt, tách rời; tự cập nhật khi mô hình dựng lại">
       🧭 CAD Viewer
     </Button>
-  );
-}
-
-/** "🧊 Xem 3D": the GLB, with its download */
-export function ModelViewerButton({ job }: { job: CadJob }) {
-  const [open, setOpen] = useState(false);
-  return (
-    <>
-      <Button size="small" onClick={() => setOpen(true)} title="Xem mô hình 3D: xoay, phóng to, màu từng chi tiết (GLB từ cadgen)">
-        🧊 Xem 3D
-      </Button>
-      <Modal
-        open={open}
-        onCancel={() => setOpen(false)}
-        footer={
-          <Button size="small" icon={<DownloadOutlined />} href={fileUrl(job, 'model.glb', true)}>
-            GLB
-          </Button>
-        }
-        width="min(1100px, 96vw)"
-        destroyOnHidden
-        title={`3D · ${job.title || job.id}`}
-      >
-        {open && <GlbView src={`${fileUrl(job, 'model.glb')}&f=${encodeURIComponent(job.finished_at ?? '')}`} />}
-      </Modal>
-    </>
   );
 }
 

@@ -26,7 +26,7 @@ import { formatPrintTime } from '../prints';
 import { ModelSim } from '../sim/ModelSim';
 import { AssemblyGuideButton } from './AssemblyGuide';
 import { EngCheckButton } from './EngCheck';
-import { CadViewerButton, DfamButton, DrawingButton, ExportLinks, ModelViewerButton } from './TextToCad';
+import { CadViewerButton, DfamButton, DrawingButton, ExportLinks } from './TextToCad';
 
 /** As many pictures as the gateway takes with one revision */
 const MAX_PASTED_IMAGES = 4;
@@ -658,7 +658,7 @@ export function CadJobCard(props: {
             {done && job.files?.threemf && plates <= 1 && link('model.3mf', plates ? '3MF' : '3MF màu', { download: true, icon: <DownloadOutlined /> })}
             {done && link('model.stl', 'STL', { download: true, icon: <DownloadOutlined /> })}
             {done && job.files?.step && link('model.step', 'STEP', { download: true, icon: <DownloadOutlined /> })}
-            {done && job.files?.glb && <ModelViewerButton job={job} />}
+            {done && job.files?.glb && link('model.glb', 'GLB', { download: true, icon: <DownloadOutlined /> })}
             {done && !figure && job.files?.glb && <CadViewerButton job={job} />}
             {done && !figure && job.files?.stl && <DrawingButton job={job} />}
             {done && !figure && job.files?.stl && <DfamButton job={job} />}
