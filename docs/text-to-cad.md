@@ -11,6 +11,7 @@ text-to-cad's own skills, as it does on this computer in `cad-projects`.
 | --- | --- | --- | --- |
 | Claude viết mô hình kỹ thuật bằng build123d | `claude -p` + `cad/guide.md`, file gán `result` | Skill `cad`: hàm `@model`, engine cadgen giữ bản dựng ấm | **Thay**: skill `cad` của text-to-cad, `@model` |
 | Dựng mô hình | `runpy` + build123d 0.13 | Engine cadgen (dựng lại phần đã đổi) | **Thay**: engine cadgen; file cũ gán `result` vẫn dựng được |
+| CAD Viewer (xoay, chọn mặt/cạnh, đo, cắt, tách rời; theo mỗi lần dựng) | Không | Trang của engine cadgen | **Thêm**: nút **🧭 CAD Viewer**, cổng riêng của gateway (xem dưới) |
 | Ảnh xem trước | matplotlib, 4 góc, tô bóng thô | `cadgen snapshot`: OCCT vẽ như CAD Viewer | **Thay**: 4 góc vẽ bằng `cadgen snapshot` (matplotlib chỉ khi không có OpenGL) |
 | Xuất file | STL, STEP (build123d) | STEP, STL, 3MF, GLB, xbf, DXF (giữ tên, màu, vật liệu, khớp) | **Thay**: `cadgen export`; thêm **GLB** |
 | Báo cáo dựng (kích thước, thể tích, lưới kín, vừa bàn H2D, nằm trên Z = 0) | Có | Một phần (bounds, số part) | Giữ, đo trên hình cadgen dựng |
@@ -30,3 +31,25 @@ text-to-cad's own skills, as it does on this computer in `cad-projects`.
 | Cắt lớp G-code | Studio | Skill `gcode` (OrcaSlicer) | Không ghép: Studio của gateway cắt lớp cho H2D |
 | Mô phỏng Chrono, FEA, kiểm tra kỹ thuật | Có | Không | Giữ |
 | MCP cho agent | `bambu-cad` (Antigravity) | `cad` (cad_show, inspect, snapshot, export) | Giữ `bambu-cad`; `cad_build` nhận cả `@model` |
+
+## CAD Viewer
+
+text-to-cad's viewer is a page of cadgen's engine, which runs in the `cad` container and admits a request only when
+its Host is a loopback name (a guard against DNS rebinding) and it carries the engine's token: a link
+(`?token=...`, good for a day) that the browser trades for a session cookie (30 days). So:
+
+```
+browser ── https://<dashboard host>:3444/<document>?token=… ──▶ gateway (server.ts, src/server/cadViewerProxy.ts)
+            Host set to 127.0.0.1 ──▶ bambu-cad:8001 (worker.py forward_viewer, compose network only)
+                                   ──▶ 127.0.0.1:3245 (cadgen's engine)
+```
+
+- **🧭 CAD Viewer** on a technical model's card asks `POST /api/cad/jobs/:id/viewer`; the worker runs
+  `cadgen viewer --json <document>` (building the model again first when the engine no longer holds it, after a
+  container restart) and the card opens the page on the dashboard's host at `CAD_VIEWER_PORT`.
+- The port is HTTPS with the dashboard's certificate when `HTTPS_PORT` is set. Anyone who can reach the gateway can
+  reach the port, but no page or route opens without the token. The viewer's file explorer sees the container's
+  files (the job folders), not this computer's.
+- Settings: `CAD_VIEWER_PORT=3444` and `CAD_VIEWER_UPSTREAM=http://bambu-cad:8001` (docker-compose.gateway.yml);
+  `CADGEN_ENGINE_PORT=3245` and `VIEWER_PORT=8001` (docker-compose.cad.yml). Without the first two, the button
+  answers 501 `VIEWER_DISABLED`.

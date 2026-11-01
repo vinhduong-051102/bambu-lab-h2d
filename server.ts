@@ -6,6 +6,7 @@ import { env } from './src/config/env';
 import { logger } from './src/logger/logger';
 import { startGateway } from './src/runtime/bootstrap';
 import { checkAuthorization, requiresAuth } from './src/server/auth';
+import { createCadViewerProxy } from './src/server/cadViewerProxy';
 import { loadOrCreateCertificate } from './src/server/tls';
 import { createWebSocketHub } from './src/server/websocket';
 
@@ -99,14 +100,23 @@ async function main(): Promise<void> {
     wsHub.handleUpgrade(req, socket, head);
   };
 
+  const certificate = env.HTTPS_PORT ? loadOrCreateCertificate(env.HTTPS_CERT_FILE, env.HTTPS_KEY_FILE, env.HTTPS_HOSTNAMES) : null;
   const servers = [createServer(onRequest)];
-  if (env.HTTPS_PORT) {
-    servers.push(createHttpsServer(loadOrCreateCertificate(env.HTTPS_CERT_FILE, env.HTTPS_KEY_FILE, env.HTTPS_HOSTNAMES), onRequest));
+  const listening: [string, number | undefined, typeof onUpgrade][] = [['HTTP', env.HTTP_PORT, onUpgrade]];
+  if (certificate) {
+    servers.push(createHttpsServer(certificate, onRequest));
+    listening.push(['HTTPS', env.HTTPS_PORT, onUpgrade]);
+  }
+  // text-to-cad's CAD Viewer on its own port, HTTPS like the dashboard when it has a certificate
+  if (env.CAD_VIEWER_PORT && env.CAD_VIEWER_UPSTREAM) {
+    const viewer = createCadViewerProxy(env.CAD_VIEWER_UPSTREAM);
+    servers.push(certificate ? createHttpsServer(certificate, viewer.onRequest) : createServer(viewer.onRequest));
+    listening.push(['CAD Viewer', env.CAD_VIEWER_PORT, viewer.onUpgrade]);
   }
 
   servers.forEach((server, i) => {
-    const [kind, port] = i === 0 ? ['HTTP', env.HTTP_PORT] : ['HTTPS', env.HTTPS_PORT];
-    server.on('upgrade', onUpgrade);
+    const [kind, port, upgrade] = listening[i];
+    server.on('upgrade', upgrade);
     server.listen(port, env.HTTP_HOST, () => {
       logger.info({ host: env.HTTP_HOST, port, dev }, `${kind} server started`);
     });

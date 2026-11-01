@@ -13,6 +13,10 @@ services:
       - CLAUDE_CODE_OAUTH_TOKEN=${CLAUDE_CODE_OAUTH_TOKEN:-}
       - CLAUDE_CODE_OAUTH_TOKEN_FALLBACK=${CLAUDE_CODE_OAUTH_TOKEN_FALLBACK:-}
       - CAD_AI_MODEL=${CAD_AI_MODEL:-claude-opus-5-5}
+      # text-to-cad's CAD Viewer: the engine on this port (loopback only), forwarded from VIEWER_PORT on the compose
+      # network for the gateway's viewer port (CAD_VIEWER_PORT); not published on the host
+      - CADGEN_ENGINE_PORT=3245
+      - VIEWER_PORT=8001
       - TZ=Asia/Ho_Chi_Minh
     volumes:
       # Shared with the gateway (CAD_JOBS_DIR): one folder per job
@@ -25,7 +29,8 @@ services:
     # Model code is untrusted: keep the container small and unprivileged
     # cadgen's engine keeps warm workers (CADGEN_ENGINE_WORKER_RSS_MB in cad/Dockerfile)
     mem_limit: 6g
-    pids_limit: 512
+    # cadgen's engine workers run ~100 threads each (OCCT, numpy) while they start
+    pids_limit: 2048
     security_opt:
       - no-new-privileges:true
     cap_drop:

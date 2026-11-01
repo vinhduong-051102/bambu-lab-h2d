@@ -82,6 +82,10 @@ class FakeWorker implements CadWorkerApi {
     return { ok: true, file: 'drawing.pdf', sheets: 1, notices: [] };
   }
 
+  async viewer(id: string) {
+    return { ok: true, document: `doc-${id}`, path: `/doc-${id}?token=1.abc` };
+  }
+
   async dfam(id: string) {
     this.checked.push(id);
     const report = {
@@ -366,6 +370,23 @@ describe('AI modelling API (/api/cad)', () => {
     const checked = dfam.json().job.dfam;
     expect(checked).toMatchObject({ ok: true, process: 'FDM', findings: [{ status: 'pass', title: 'Lưới kín' }] });
     expect(checked.measure).toBeUndefined();
+  });
+
+  it('gives the CAD Viewer link of a built model when the viewer port is set up', async () => {
+    const { job } = (await create({ prompt: 'Hộp vuông cạnh 10 mm' })).json();
+    await worker.finish(job.id);
+    expect((await app.inject({ method: 'POST', url: `/api/cad/jobs/${job.id}/viewer` })).statusCode).toBe(501);
+
+    env.CAD_VIEWER_PORT = 3444;
+    env.CAD_VIEWER_UPSTREAM = 'http://bambu-cad:8001';
+    try {
+      const link = await app.inject({ method: 'POST', url: `/api/cad/jobs/${job.id}/viewer` });
+      expect(link.statusCode).toBe(200);
+      expect(link.json()).toMatchObject({ success: true, port: 3444, path: `/doc-${job.id}?token=1.abc` });
+    } finally {
+      env.CAD_VIEWER_PORT = undefined;
+      env.CAD_VIEWER_UPSTREAM = undefined;
+    }
   });
 
   it('lists and serves the files Claude made with the other skills, and nothing outside them', async () => {

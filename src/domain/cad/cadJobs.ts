@@ -642,6 +642,16 @@ export interface CadWorkerApi {
   drawing(id: string, title: string): Promise<CadDrawingOutcome>;
   /** Runs the DfAM check of a built model (out/dfam.json) */
   dfam(id: string): Promise<CadDfam>;
+  /** A link to the CAD Viewer page of a built model: its path on the viewer's origin, with the engine's token */
+  viewer(id: string): Promise<CadViewerLink>;
+}
+
+/** The CAD Viewer page of a model (cad/worker.py viewer_link): `path` is "/<document>?token=..." */
+export interface CadViewerLink {
+  ok: boolean;
+  error?: string;
+  document?: string;
+  path?: string;
 }
 
 /** JSON over HTTP to a worker container; errors as CadWorkerError with the worker's message */
@@ -707,6 +717,11 @@ export class CadWorkerClient extends WorkerHttp implements CadWorkerApi {
   dfam(id: string) {
     // The worker allows a check 600 s (ray casting the wall thickness of a large mesh)
     return this.call<CadDfam>('POST', `/jobs/${id}/dfam`, {}, 620000);
+  }
+
+  viewer(id: string) {
+    // A model the engine no longer holds is built again first (180 s at most)
+    return this.call<CadViewerLink>('POST', `/jobs/${id}/viewer`, {}, 200000);
   }
 }
 

@@ -12,7 +12,12 @@ request.md, this worker writes model.py (through Claude), out/ (through build.py
                                cadgen.eng_drawing), answered with drawing.py's report
   POST /jobs/<id>/dfam         DfAM check of the job's out/model.stl, out/dfam.json (dfam.py, text-to-cad's
                                dfam-check), answered with it
+  POST /jobs/<id>/viewer       A link to text-to-cad's CAD Viewer page of the job's model: {"path": "/<document>?token=..."},
+                               the model built again first when the engine no longer holds it (a container restart)
   POST /jobs/<id>/cancel       Stops the job's Claude run
+
+The CAD Viewer itself is cadgen's engine, which serves only loopback: VIEWER_PORT forwards to it, for the gateway's
+viewer port (server.ts), which sets the Host the engine accepts. Every page still needs the engine's token.
   POST /convert                {"file": "<path in JOBS_DIR>"} or {"data_base64", "filename", "job_id"?}, with
                                "tolerance_mm"? and "angular_tolerance_deg"?: each solid of a STEP/IGES file as an STL
                                in <job>/out/ (convert.py), answered with convert.json. The job is the folder the file
@@ -32,6 +37,7 @@ import os
 import re
 import secrets
 import signal
+import socket
 import subprocess
 import sys
 import threading
@@ -55,6 +61,11 @@ DRAWING_TIMEOUT_S = 300
 DFAM_TIMEOUT_S = 600
 # text-to-cad's skills for Claude (cad/text-to-cad, a plugin folder)
 PLUGIN_DIR = HERE / "text-to-cad"
+# The CAD Viewer: cadgen's engine on loopback (CADGEN_ENGINE_PORT), forwarded from VIEWER_PORT on the container's
+# network, which only the gateway reaches (docker-compose.cad.yml publishes nothing of it)
+ENGINE_PORT = int(os.environ.get("CADGEN_ENGINE_PORT") or "3245")
+VIEWER_PORT = int(os.environ.get("VIEWER_PORT") or "8001")
+VIEWER_TIMEOUT_S = 180
 MAX_CONVERT_BYTES = 100 * 1024 * 1024
 CONVERT_SUFFIXES = (".step", ".stp", ".iges", ".igs")
 JOB_ID_RE = re.compile(r"^[a-z0-9][a-z0-9-]{5,63}$")
@@ -150,6 +161,74 @@ def run_script(directory, script, args, timeout, what):
         return json.loads(lines[-1])
     except (IndexError, ValueError):
         return {"ok": False, "error": f"{script} không trả kết quả: {done.stderr.strip()[-500:]}"}
+
+
+def viewer_link(directory):
+    """{"ok", "path"} of the CAD Viewer page of a job's built model (the document report.json names), or {"ok": false,
+    "error"}. The engine keeps documents in memory: after a restart the model is built again (`python model.py`)"""
+    document = ((read_json(directory / "out" / "report.json") or {}).get("engine") or {}).get("document")
+    if not document:
+        return {"ok": False, "error": "Mô hình dựng trước khi có text-to-cad: dựng lại để xem trong CAD Viewer."}
+
+    def ask():
+        done = subprocess.run(["cadgen", "viewer", "--json", "--no-open", document], cwd=directory,
+                              capture_output=True, text=True, timeout=VIEWER_TIMEOUT_S, check=False)
+        try:
+            return json.loads(done.stdout.strip().splitlines()[-1]) if done.returncode == 0 else None
+        except (IndexError, ValueError):
+            return None
+
+    try:
+        answer = ask()
+        if answer is None and (directory / "model.py").exists():
+            run_build(directory)
+            answer = ask()
+    except subprocess.TimeoutExpired:
+        return {"ok": False, "error": f"CAD Viewer không mở được trong {VIEWER_TIMEOUT_S} giây."}
+    found = next((d for d in (answer or {}).get("documents") or [] if d.get("id") == document), None)
+    if not found:
+        return {"ok": False, "error": "Engine không còn giữ mô hình này và dựng lại không ra nó: dựng lại mô hình."}
+    url = found["url"]
+    return {"ok": True, "document": document, "path": url[url.index("/", url.index("//") + 2):]}
+
+
+def forward_viewer():
+    """VIEWER_PORT → the engine's loopback port, byte for byte, one thread per direction: the engine's HTTP, its
+    page and its routes, as they are. The gateway in front sets the Host header the engine checks"""
+    def pipe(src, dst):
+        try:
+            while data := src.recv(65536):
+                dst.sendall(data)
+        except OSError:
+            pass
+        finally:
+            for sock in (src, dst):
+                try:
+                    sock.shutdown(socket.SHUT_RDWR)
+                except OSError:
+                    pass
+
+    def serve(client):
+        try:
+            engine = socket.create_connection(("127.0.0.1", ENGINE_PORT), timeout=10)
+            engine.settimeout(None)
+        except OSError:
+            client.close()
+            return
+        threading.Thread(target=pipe, args=(client, engine), daemon=True).start()
+        pipe(engine, client)
+        client.close()
+        engine.close()
+
+    listener = socket.create_server(("0.0.0.0", VIEWER_PORT))
+    while True:
+        client, _ = listener.accept()
+        try:
+            threading.Thread(target=serve, args=(client,), daemon=True).start()
+        except RuntimeError:
+            # Out of threads for a moment (a cold engine starts its workers): this connection is dropped, the
+            # browser asks again, and the forward goes on
+            client.close()
 
 
 def new_job_id():
@@ -493,7 +572,7 @@ class Handler(BaseHTTPRequestHandler):
     def do_POST(self):
         if self.path == "/convert":
             return self.convert(self.body())
-        match = re.fullmatch(r"/jobs/([^/]+)/(generate|build|guide|drawing|dfam|cancel)", self.path)
+        match = re.fullmatch(r"/jobs/([^/]+)/(generate|build|guide|drawing|dfam|viewer|cancel)", self.path)
         if not match or not JOB_ID_RE.match(match.group(1)):
             return self.reply(404, {"ok": False, "error": "NOT_FOUND"})
         job_id, action = match.groups()
@@ -526,6 +605,12 @@ class Handler(BaseHTTPRequestHandler):
                 status["guide"] = run_guide(directory)
             write_json(directory / "status.json", status)
             return self.reply(200, {"ok": True, "report": report})
+
+        if action == "viewer":
+            with lock:
+                if job_id in running:
+                    return self.reply(409, {"ok": False, "error": "JOB_RUNNING", "message": "Job đang chạy."})
+            return self.reply(200, viewer_link(directory))
 
         if action in ("drawing", "dfam"):
             with lock:
@@ -619,6 +704,7 @@ def start_display():
 
 if __name__ == "__main__":
     start_display()
+    threading.Thread(target=forward_viewer, daemon=True).start()
     JOBS_DIR.mkdir(parents=True, exist_ok=True)
     print(f"[cad-worker] listening on :{PORT}, jobs in {JOBS_DIR}", flush=True)
     ThreadingHTTPServer(("0.0.0.0", PORT), Handler).serve_forever()

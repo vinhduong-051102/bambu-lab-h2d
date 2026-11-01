@@ -825,3 +825,24 @@ export const getCadExport = handler<{ id: string; name: string }>(async ({ reque
   if (new URL(request.url).searchParams.has('download')) headers['Content-Disposition'] = `attachment; filename="${params.name}"`;
   return new Response(new Uint8Array(await fs.readFile(file)), { headers });
 });
+
+// POST /api/cad/jobs/:id/viewer - A link to text-to-cad's CAD Viewer page of a built technical model: {port, secure,
+// path}; the page opens at <http|https>://<the dashboard's host>:<port><path>. 501 VIEWER_DISABLED without
+// CAD_VIEWER_PORT and CAD_VIEWER_UPSTREAM
+export const openCadViewer = handler<{ id: string }>(async ({ params }) => {
+  if (!env.CAD_VIEWER_PORT || !env.CAD_VIEWER_UPSTREAM) {
+    return json({ success: false, error: 'VIEWER_DISABLED', message: 'Chưa cấu hình CAD_VIEWER_PORT và CAD_VIEWER_UPSTREAM (docs/text-to-cad.md).' }, 501);
+  }
+  const job = await builtModel(params.id);
+  if (job instanceof Response) return job;
+  const w = worker();
+  if (!w) return disabled();
+  try {
+    const link = await w.viewer(params.id);
+    if (!link.ok || !link.path) return json({ success: false, error: 'VIEWER_FAILED', message: link.error ?? 'Không mở được CAD Viewer.' }, 409);
+    return json({ success: true, port: env.CAD_VIEWER_PORT, secure: Boolean(env.HTTPS_PORT), path: link.path });
+  } catch (err) {
+    if (err instanceof CadWorkerError) return workerFailed(err);
+    throw err;
+  }
+});

@@ -261,6 +261,39 @@ function GlbView({ src }: { src: string }) {
   );
 }
 
+/**
+ * "🧭 CAD Viewer": text-to-cad's own viewer, on the gateway's viewer port (CAD_VIEWER_PORT) of the host the dashboard
+ * was opened from: the exact model (pick faces and edges, measure, section, explode), following every rebuild. The
+ * tab is opened at the click, before the link comes back, so the browser does not take it for a pop-up
+ */
+export function CadViewerButton({ job }: { job: CadJob }) {
+  const { message } = App.useApp();
+  const [opening, setOpening] = useState(false);
+  const open = async () => {
+    const tab = window.open('', '_blank');
+    setOpening(true);
+    try {
+      const res = await fetch(`/api/cad/jobs/${encodeURIComponent(job.id)}/viewer`, { method: 'POST' });
+      const data = await res.json().catch(() => null);
+      if (!res.ok || !data?.success) {
+        tab?.close();
+        message.error(data?.message ?? `Không mở được CAD Viewer (HTTP ${res.status}).`);
+        return;
+      }
+      const url = `${data.secure ? 'https' : 'http'}://${window.location.hostname}:${data.port}${data.path}`;
+      if (tab) tab.location.href = url;
+      else window.location.href = url;
+    } finally {
+      setOpening(false);
+    }
+  };
+  return (
+    <Button size="small" loading={opening} onClick={open} title="Mở trong CAD Viewer của text-to-cad: chọn mặt/cạnh, đo, cắt, tách rời; tự cập nhật khi mô hình dựng lại">
+      🧭 CAD Viewer
+    </Button>
+  );
+}
+
 /** "🧊 Xem 3D": the GLB, with its download */
 export function ModelViewerButton({ job }: { job: CadJob }) {
   const [open, setOpen] = useState(false);

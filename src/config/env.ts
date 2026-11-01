@@ -88,6 +88,10 @@ const envSchema = z.object({
   TIMELAPSE_AI_MODEL: z.preprocess((val) => (typeof val === 'string' && val.trim() === '' ? undefined : val), z.string().default('claude-opus-5-5')),
   // CAD worker container (docker-compose.cad.yml) behind "Thiết kế mô hình bằng AI"; unset turns the feature off
   CAD_WORKER_URL: z.preprocess((val) => (typeof val === 'string' && val.trim() === '' ? undefined : val), z.string().url().optional()),
+  // text-to-cad's CAD Viewer (docs/text-to-cad.md): the port the gateway serves it on (HTTPS when HTTPS_PORT is set),
+  // and where the CAD container forwards its engine (docker-compose.cad.yml VIEWER_PORT); unset, no viewer
+  CAD_VIEWER_PORT: z.preprocess((val) => (typeof val === 'string' && val.trim() === '' ? undefined : val), z.coerce.number().optional()),
+  CAD_VIEWER_UPSTREAM: z.preprocess((val) => (typeof val === 'string' && val.trim() === '' ? undefined : val), z.string().url().optional()),
   // Host folder mounted at /jobs in the CAD container: one folder per model, with its code, files and status
   CAD_JOBS_DIR: z.preprocess((val) => (typeof val === 'string' && val.trim() === '' ? undefined : val), z.string().default('./data/cad/jobs')),
   // Mesh worker container (docker-compose.mesh3d.yml): figures shaped by Hunyuan3D-2 from a picture, or made from a

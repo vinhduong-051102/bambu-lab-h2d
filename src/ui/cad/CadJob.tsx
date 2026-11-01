@@ -26,7 +26,7 @@ import { formatPrintTime } from '../prints';
 import { ModelSim } from '../sim/ModelSim';
 import { AssemblyGuideButton } from './AssemblyGuide';
 import { EngCheckButton } from './EngCheck';
-import { DfamButton, DrawingButton, ExportLinks, ModelViewerButton } from './TextToCad';
+import { CadViewerButton, DfamButton, DrawingButton, ExportLinks, ModelViewerButton } from './TextToCad';
 
 /** As many pictures as the gateway takes with one revision */
 const MAX_PASTED_IMAGES = 4;
@@ -659,6 +659,7 @@ export function CadJobCard(props: {
             {done && link('model.stl', 'STL', { download: true, icon: <DownloadOutlined /> })}
             {done && job.files?.step && link('model.step', 'STEP', { download: true, icon: <DownloadOutlined /> })}
             {done && job.files?.glb && <ModelViewerButton job={job} />}
+            {done && !figure && job.files?.glb && <CadViewerButton job={job} />}
             {done && !figure && job.files?.stl && <DrawingButton job={job} />}
             {done && !figure && job.files?.stl && <DfamButton job={job} />}
             {done && <ExportLinks job={job} />}
