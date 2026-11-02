@@ -1,15 +1,19 @@
 'use client';
 
 import { ReloadOutlined, RobotOutlined } from '@ant-design/icons';
-import { Alert, Button, Card, Col, Flex, Progress, Row, Space, Tag, Tooltip, Typography } from 'antd';
+import { Alert, Button, Card, Col, Flex, Progress, Row, Segmented, Space, Tag, Tooltip, Typography } from 'antd';
 import { useCallback, useEffect, useState } from 'react';
-import { activePlan, barColor, formatReset, percent, planState } from '../aiLimits';
+import { useActions } from '../DashboardContext';
+import { activePlan, barColor, formatReset, percent, planOptions, planState } from '../aiLimits';
 
 /**
  * The Claude subscriptions the project runs on (CLAUDE_CODE_OAUTH_TOKEN and CLAUDE_CODE_OAUTH_TOKEN_FALLBACK): how
  * much of each one's 5-hour and 7-day allowance is used and when it starts over. The gateway checks them with a tiny
- * model call and keeps the answer 5 minutes; "Kiểm tra lại" asks again.
+ * model call and keeps the answer 5 minutes; "Kiểm tra lại" asks again. Which one tasks run on is picked here
+ * (GET/PUT /api/ai/plan): both in turn, or only one, to keep the other's allowance.
  */
+
+type PlanChoice = { plan: 'auto' | 'primary' | 'fallback'; label: string; configured: boolean };
 
 type Window = { utilization: number | null; resetsAt: string | null; status: string | null };
 type Plan = {
@@ -48,6 +52,37 @@ export function ClaudeLimitsCard() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [now, setNow] = useState(Date.now());
+  const { showToast } = useActions();
+  const [chosen, setChosen] = useState<PlanChoice['plan']>('auto');
+  const [choices, setChoices] = useState<PlanChoice[]>([]);
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    fetch('/api/ai/plan', { cache: 'no-store' })
+      .then((res) => res.json())
+      .then((body) => {
+        if (body?.success) {
+          setChosen(body.plan);
+          setChoices(body.plans);
+        }
+      })
+      .catch(() => {});
+  }, []);
+
+  const choose = async (plan: PlanChoice['plan']) => {
+    setSaving(true);
+    try {
+      const res = await fetch('/api/ai/plan', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ plan }) });
+      const body = await res.json().catch(() => null);
+      if (!res.ok || !body?.success) throw new Error(body?.message || `HTTP ${res.status}`);
+      setChosen(body.plan);
+      showToast(`Các task từ giờ chạy bằng: ${choices.find((c) => c.plan === plan)?.label ?? plan}`, 'success');
+    } catch (err) {
+      showToast(`Không đổi được gói: ${err instanceof Error ? err.message : String(err)}`, 'error');
+    } finally {
+      setSaving(false);
+    }
+  };
 
   const load = useCallback(async (refresh: boolean) => {
     setLoading(true);
@@ -73,7 +108,7 @@ export function ClaudeLimitsCard() {
     return () => clearInterval(timer);
   }, [load]);
 
-  const active = activePlan(plans);
+  const active = activePlan(plans, chosen);
 
   return (
     <Card
@@ -90,9 +125,20 @@ export function ClaudeLimitsCard() {
         </Tooltip>
       }
     >
+      {choices.length > 0 && (
+        <Flex vertical gap={6} style={{ marginBottom: 12 }}>
+          <Typography.Text strong>Chạy task bằng</Typography.Text>
+          <Segmented block value={chosen} disabled={saving} options={planOptions(choices, true)} onChange={(v) => choose(v as PlanChoice['plan'])} />
+          <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+            {chosen === 'auto'
+              ? 'Tự động: dùng gói 1, khi gói 1 hết lượt thì chuyển sang gói 2.'
+              : `Chỉ dùng ${chosen === 'primary' ? 'gói 1' : 'gói 2'}: hết lượt thì task báo lỗi, gói còn lại để dành.`}{' '}
+            Áp cho Thiết kế AI, mô hình từ ảnh, nhận xét timelapse, nhận diện chi tiết và phân tích lỗi; mẫu AI chọn riêng được khi tạo.
+          </Typography.Text>
+        </Flex>
+      )}
       <Typography.Paragraph type="secondary" style={{ fontSize: 12 }}>
-        Thiết kế AI, nhận xét timelapse và “AI tối ưu” trong Studio chạy bằng gói 1; khi gói 1 hết lượt, chúng tự chuyển
-        sang gói 2. Mỗi gói có hai giới hạn: lượng dùng trong 5 giờ và trong 7 ngày.
+        Mỗi gói có hai giới hạn: lượng dùng trong 5 giờ và trong 7 ngày.
         {cachedAt ? ` Số liệu lúc ${new Date(cachedAt).toLocaleTimeString('vi-VN')}.` : ''}
       </Typography.Paragraph>
       {error && <Alert type="error" showIcon title={`Không đọc được hạn mức: ${error}`} />}

@@ -3,6 +3,7 @@ import { promises as fs } from 'fs';
 import path from 'path';
 import { getTask, type TaskState } from '../backgroundTasks';
 import { waitFor } from './cadDoctors';
+import type { AiPlan } from '../ai/aiPlan';
 import type { Diagnosis, Failure, RetryNote, Tuning } from '../retryDoctor';
 
 /**
@@ -31,6 +32,8 @@ export interface CadJobMeta {
    */
   source: CadJobSource;
   model: string | null;
+  /** The Claude subscription it runs on (aiPlan.ts), read by the workers from job.json; none for older jobs: auto */
+  plan?: AiPlan | null;
   /** The job this one revises */
   parent_id: string | null;
   title: string | null;

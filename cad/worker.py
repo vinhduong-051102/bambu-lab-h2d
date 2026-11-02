@@ -368,9 +368,17 @@ LIMIT_COOLDOWN_S = 3600
 limited_at = {}  # token → time.monotonic() when it hit its usage limit, so the next runs start with the other one
 
 
-def claude_tokens():
-    """CLAUDE_CODE_OAUTH_TOKEN, then CLAUDE_CODE_OAUTH_TOKEN_FALLBACK (a second subscription); one that hit its
-    usage limit within the hour goes last"""
+# The subscription a job may be given on the dashboard (job.json "plan", src/domain/ai/aiPlan.ts): only that one
+PLAN_TOKENS = {"primary": "CLAUDE_CODE_OAUTH_TOKEN", "fallback": "CLAUDE_CODE_OAUTH_TOKEN_FALLBACK"}
+
+
+def claude_tokens(directory=None):
+    """The job's own subscription when it was given one (job.json "plan") and its token is set; else
+    CLAUDE_CODE_OAUTH_TOKEN, then CLAUDE_CODE_OAUTH_TOKEN_FALLBACK (a second subscription), one that hit its usage
+    limit within the hour last"""
+    plan = (read_json(directory / "job.json", {}) or {}).get("plan") if directory else None
+    if plan in PLAN_TOKENS and os.environ.get(PLAN_TOKENS[plan], "").strip():
+        return [os.environ[PLAN_TOKENS[plan]].strip()]
     names = ("CLAUDE_CODE_OAUTH_TOKEN", "CLAUDE_CODE_OAUTH_TOKEN_FALLBACK")
     tokens = list(dict.fromkeys(t for t in (os.environ.get(n, "").strip() for n in names) if t))
     return sorted(tokens, key=lambda t: t in limited_at and time.monotonic() - limited_at[t] < LIMIT_COOLDOWN_S)
@@ -408,7 +416,7 @@ def retry_note(retry):
 
 
 def generate(job_id, model, tokens=None, retry=None, timeout_s=None):
-    tokens = claude_tokens() if tokens is None else tokens
+    tokens = claude_tokens(job_dir(job_id)) if tokens is None else tokens
     claude_timeout = timeout_s or CLAUDE_TIMEOUT_S
     directory = job_dir(job_id)
     status = {"state": "running", "step": "starting", "notes": [], "builds": 0, "model": model,
@@ -506,7 +514,7 @@ def generate(job_id, model, tokens=None, retry=None, timeout_s=None):
         stderr = stderr_path.read_text(encoding="utf-8", errors="replace") if stderr_path.exists() else ""
         if limit_hit(result_line, stderr):
             limited_at[tokens[0]] = time.monotonic()
-            return generate(job_id, model, tokens[1:])
+            return generate(job_id, model, tokens[1:], retry=retry, timeout_s=timeout_s)
 
     status["finished_at"] = now()
     status["report"] = read_json(directory / "out" / "report.json")

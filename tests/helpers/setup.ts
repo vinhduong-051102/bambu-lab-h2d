@@ -7,3 +7,6 @@ process.env.RETRY_RULES_FILE = join(mkdtempSync(join(tmpdir(), 'retry-rules-')),
 
 // Nothing runs again on its own unless a test turns it on (env.AUTO_RETRY_LIMIT)
 process.env.AUTO_RETRY_LIMIT = '0';
+
+// The subscription picked for tasks (Hệ thống → Gói Claude) stays the gateway's: tests start from "auto"
+process.env.AI_PLAN_FILE = join(mkdtempSync(join(tmpdir(), 'ai-plan-')), 'plan.json');

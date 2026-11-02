@@ -13,6 +13,7 @@ import { writeStl } from '../src/domain/studio/meshRepair';
 import { setAnalyst, type RetryNote } from '../src/domain/retryDoctor';
 import { listRules, rulesFile } from '../src/domain/retryRules';
 import { followUpCadJobs } from '../src/api/routes/cad';
+import { setDefaultPlan } from '../src/domain/ai/aiPlan';
 import { createTestApp, type TestApp } from './helpers/testApp';
 
 const CUBE = writeStl(
@@ -326,6 +327,27 @@ describe('AI modelling API (/api/cad)', () => {
       expect(worker.generated).toHaveLength(1);
     } finally {
       env.AUTO_RETRY_LIMIT = 0;
+    }
+  });
+
+  it('runs a model on the subscription asked for, else the one picked for every task, and keeps it in job.json', async () => {
+    const saved = process.env.CLAUDE_CODE_OAUTH_TOKEN_FALLBACK;
+    process.env.CLAUDE_CODE_OAUTH_TOKEN_FALLBACK = 'two';
+    try {
+      const asked = (await create({ prompt: 'Một cái hộp', plan: 'fallback' })).json().job;
+      expect(JSON.parse(await fs.readFile(path.join(jobsDir, asked.id, 'job.json'), 'utf8')).plan).toBe('fallback');
+      expect(asked.plan).toBe('fallback');
+      await setDefaultPlan('primary');
+      const picked = (await create({ prompt: 'Hộp khác' })).json().job;
+      expect(picked.plan).toBe('primary');
+      delete process.env.CLAUDE_CODE_OAUTH_TOKEN_FALLBACK;
+      const refused = await create({ prompt: 'Hộp nữa', plan: 'fallback' });
+      expect(refused.statusCode).toBe(400);
+      expect(refused.json().error).toBe('PLAN_NOT_CONFIGURED');
+    } finally {
+      await setDefaultPlan('auto');
+      if (saved === undefined) delete process.env.CLAUDE_CODE_OAUTH_TOKEN_FALLBACK;
+      else process.env.CLAUDE_CODE_OAUTH_TOKEN_FALLBACK = saved;
     }
   });
 

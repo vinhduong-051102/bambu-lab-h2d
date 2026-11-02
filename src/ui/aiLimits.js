@@ -36,7 +36,19 @@ export function formatReset(iso, now = Date.now()) {
   return `sau ${span} (${pad(d.getHours())}:${pad(d.getMinutes())} ${pad(d.getDate())}/${pad(d.getMonth() + 1)})`;
 }
 
-/** Which plan the gateway's Claude jobs start on: the first that is configured and not out of usage */
-export function activePlan(plans) {
+/**
+ * Which plan the gateway's Claude jobs start on: the one picked for tasks (aiPlan.ts) when it is not "auto", else the
+ * first that is configured and not out of usage
+ */
+export function activePlan(plans, chosen = 'auto') {
+  if (chosen !== 'auto') return (plans ?? []).some((p) => p.key === chosen && p.configured) ? chosen : null;
   return (plans ?? []).find((p) => p.configured && !p.error && p.status !== 'rejected')?.key ?? null;
 }
+
+/** The plans a task can be run on, as a picker's options: "auto" always, a subscription once its token is set */
+export const planOptions = (plans, short = false) =>
+  (plans ?? []).map((p) => ({
+    value: p.plan,
+    label: short ? { auto: 'Gói: tự động', primary: 'Gói 1', fallback: 'Gói 2' }[p.plan] ?? p.label : p.label,
+    disabled: !p.configured,
+  }));

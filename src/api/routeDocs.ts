@@ -105,6 +105,8 @@ export const GATEWAY_ROUTES: RouteDoc[] = [
   { method: 'GET', path: '/api/cad/jobs/:id/exports/:name', category: 'Thiết kế AI', description: 'File Claude làm thêm bằng các skill text-to-cad (out/exports/: bản vẽ, DXF, URDF…), tên trong exports của mô hình (?download=1 để tải về)', exampleUrl: '/api/cad/jobs/<id>/exports/drawing.pdf' },
 
   // Claude subscriptions
+  { method: 'GET', path: '/api/ai/plan', category: 'Hệ thống', description: 'Gói Claude mặc định cho các task (auto: Gói 1, hết lượt thì Gói 2; primary/fallback: chỉ một gói) và các gói chọn được', exampleUrl: '/api/ai/plan' },
+  { method: 'PUT', path: '/api/ai/plan', category: 'Hệ thống', description: 'Chọn gói Claude cho mọi task từ giờ ({plan}); mẫu AI có thể chọn riêng khi tạo (plan trong body)', body: '{"plan": "auto"}' },
   { method: 'GET', path: '/api/ai/limits', category: 'Hệ thống', description: 'Hạn mức còn lại của các gói Claude (CLAUDE_CODE_OAUTH_TOKEN và _FALLBACK): % đã dùng 5 giờ và 7 ngày, lúc reset, có gọi được không. Lưu 5 phút; ?refresh=1 để kiểm tra lại', exampleUrl: '/api/ai/limits' },
   { method: 'GET', path: '/api/ai/usage', category: 'Hệ thống', description: 'Thống kê dùng AI theo task (thiết kế AI, nhân vật, đánh giá timelapse, nhận diện chi tiết, AI tối ưu Studio): token, chi phí theo giá API, % trong kỳ, % hạn mức 5 giờ / 7 ngày đã dùng; tổng theo tính năng. ?days=30 (0 = tất cả)', exampleUrl: '/api/ai/usage?days=30' },
 

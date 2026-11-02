@@ -458,9 +458,17 @@ LIMIT_COOLDOWN_S = 3600
 limited_at = {}  # token → time.monotonic() when it hit its usage limit, so the next runs start with the other one
 
 
-def claude_tokens():
-    """CLAUDE_CODE_OAUTH_TOKEN, then CLAUDE_CODE_OAUTH_TOKEN_FALLBACK (a second subscription); one that hit its
-    usage limit within the hour goes last"""
+# The subscription a job may be given on the dashboard (job.json "plan", src/domain/ai/aiPlan.ts): only that one
+PLAN_TOKENS = {"primary": "CLAUDE_CODE_OAUTH_TOKEN", "fallback": "CLAUDE_CODE_OAUTH_TOKEN_FALLBACK"}
+
+
+def claude_tokens(directory=None):
+    """The job's own subscription when it was given one (job.json "plan") and its token is set; else
+    CLAUDE_CODE_OAUTH_TOKEN, then CLAUDE_CODE_OAUTH_TOKEN_FALLBACK (a second subscription), one that hit its usage
+    limit within the hour last"""
+    plan = (read_json(directory / "job.json", {}) or {}).get("plan") if directory else None
+    if plan in PLAN_TOKENS and os.environ.get(PLAN_TOKENS[plan], "").strip():
+        return [os.environ[PLAN_TOKENS[plan]].strip()]
     names = ("CLAUDE_CODE_OAUTH_TOKEN", "CLAUDE_CODE_OAUTH_TOKEN_FALLBACK")
     tokens = list(dict.fromkeys(t for t in (os.environ.get(n, "").strip() for n in names) if t))
     return sorted(tokens, key=lambda t: t in limited_at and time.monotonic() - limited_at[t] < LIMIT_COOLDOWN_S)
@@ -500,7 +508,7 @@ def figure_parameters(params, shaped=False):
 def run(job_id, model, params=None, tokens=None, mode="fix", session=None):
     """Claude in the job's Blender on job `job_id`: fixing the figure in source/ ("fix"), making a new one from
     `params` ("create"), or finishing the one Hunyuan3D shaped there from its picture ("finish")"""
-    tokens = claude_tokens() if tokens is None else tokens
+    tokens = claude_tokens(JOBS_DIR / job_id) if tokens is None else tokens
     directory = JOBS_DIR / job_id
     creating, finishing = mode == "create", mode == "finish"
     if session is None:

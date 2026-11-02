@@ -21,6 +21,7 @@ import {
 } from 'antd';
 import { useCallback, useEffect, useRef, useState, type ClipboardEvent } from 'react';
 import { useActions } from '../DashboardContext';
+import { planOptions } from '../aiLimits';
 import { groupVersions, HINTS, isBusy, isWatched, PLACEHOLDERS } from '../cad';
 import { type CadAction, type CadJob } from './CadJob';
 import { CadFamily } from './CadFamily';
@@ -177,6 +178,9 @@ export function CadCard({ onBusyChange }: { onBusyChange?: (busy: boolean) => vo
   const [now, setNow] = useState(() => Date.now());
   const [kind, setKind] = useState<Kind>('technical');
   const [model, setModel] = useState<string>();
+  // The Claude subscription the next model runs on (src/domain/ai/aiPlan.ts); starts as the one picked for every task
+  const [plan, setPlan] = useState<string>();
+  const [plans, setPlans] = useState<{ plan: string; label: string; configured: boolean }[]>([]);
   const [prompt, setPrompt] = useState('');
   const [image, setImage] = useState<File | null>(null);
   // "Dựng nhiều góc": the figure's other sides, uploaded or else drawn by MV-Adapter
@@ -229,6 +233,13 @@ export function CadCard({ onBusyChange }: { onBusyChange?: (busy: boolean) => vo
         if (cancelled || !data.enabled) return;
         setConfig(data);
         setModel(data.default_model);
+        api<{ plan: string; plans: { plan: string; label: string; configured: boolean }[] }>('GET', '/api/ai/plan')
+          .then((p) => {
+            if (cancelled) return;
+            setPlan(p.plan);
+            setPlans(p.plans);
+          })
+          .catch(() => {});
         // Both kinds set up: the user picks; otherwise the one there is
         setKind(data.worker ? 'technical' : 'figure');
         refresh();
@@ -301,6 +312,7 @@ export function CadCard({ onBusyChange }: { onBusyChange?: (busy: boolean) => vo
     const body = new FormData();
     body.append('prompt', text);
     if (model) body.append('model', model);
+    if (plan) body.append('plan', plan);
     body.append('height_mm', String(height || 80));
     body.append('base', base ? 'true' : 'false');
     if (colour) {
@@ -329,7 +341,7 @@ export function CadCard({ onBusyChange }: { onBusyChange?: (busy: boolean) => vo
   };
 
   const create = async (text: string, parentId?: string, images: string[] = []) => {
-    const { job } = await api<{ job: CadJob }>('POST', '/api/cad/jobs', { prompt: text, model, images, ...(parentId && { parent_id: parentId }) });
+    const { job } = await api<{ job: CadJob }>('POST', '/api/cad/jobs', { prompt: text, model, plan, images, ...(parentId && { parent_id: parentId }) });
     added(job);
     addLog(`Đã gửi Claude ${parentId ? 'sửa' : 'thiết kế'} mô hình: ${text}${images.length ? ` (kèm ${images.length} ảnh)` : ''}`);
   };
@@ -378,6 +390,7 @@ export function CadCard({ onBusyChange }: { onBusyChange?: (busy: boolean) => vo
         const { job: next } = await api<{ job: CadJob }>('POST', '/api/cad/meshes', {
           parent_id: job.id,
           model,
+          plan,
           ...(params.height_mm && { height_mm: params.height_mm }),
           base: Boolean(params.base),
           ...(params.colours > 0 && { colour: true, colours: params.colours, ...(asked ?? {}) }),
@@ -413,7 +426,7 @@ export function CadCard({ onBusyChange }: { onBusyChange?: (busy: boolean) => vo
       const images = await Promise.all(pictures.map(dataUrl));
       const withImages = pictures.length ? ` (kèm ${pictures.length} ảnh)` : '';
       if (fix) {
-        const { job: next } = await api<{ job: CadJob }>('POST', `/api/cad/jobs/${encodeURIComponent(job.id)}/fix`, { prompt: comment, model, images });
+        const { job: next } = await api<{ job: CadJob }>('POST', `/api/cad/jobs/${encodeURIComponent(job.id)}/fix`, { prompt: comment, model, plan, images });
         added(next);
         addLog(`Đã gửi Claude review và sửa mô hình nhân vật${comment ? `: ${comment}` : ''}${withImages}`);
       } else {
@@ -664,6 +677,9 @@ export function CadCard({ onBusyChange }: { onBusyChange?: (busy: boolean) => vo
         )}
         <Flex gap={8} wrap>
           <Select value={model} onChange={setModel} style={{ minWidth: 200 }} aria-label="Model Claude" options={config.models.map((m) => ({ value: m.id, label: m.label }))} />
+          {plans.length > 0 && (
+            <Select value={plan} onChange={setPlan} style={{ minWidth: 130 }} aria-label="Gói Claude" title="Gói Claude chạy mẫu này" options={planOptions(plans, true)} />
+          )}
           <Button type="primary" icon={<ThunderboltOutlined />} loading={creating} disabled={!canCreate} onClick={submit}>
             Tạo mô hình
           </Button>

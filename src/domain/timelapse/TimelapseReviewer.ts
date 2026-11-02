@@ -5,6 +5,7 @@ import path from 'path';
 import { z } from 'zod';
 import type { PrintRecord } from '../prints/PrintJournal';
 import { PRINT_ISSUE_LABELS, PRINT_OUTCOME_LABELS } from '../studio/aiSessions';
+import { defaultPlan, tokensForPlan } from '../ai/aiPlan';
 import { AI_FEATURES, claudeEntry, recordAiUsage, type AiFeature } from '../ai/aiUsage';
 
 /**
@@ -244,7 +245,8 @@ export class ClaudeCodeVision implements VisionModel {
         '--json-schema', JSON.stringify(schema),
         '--output-format', 'json',
       ];
-      const tokens = claudeTokens();
+      // On the subscription the dashboard picked for tasks (aiPlan.ts), or both in turn
+      const tokens = tokensForPlan(await defaultPlan(), claudeTokens());
       for (let i = 0; ; i++) {
         const { code, stdout, stderr } = await this.run(args, dir, prompt(files), tokens[i]);
         let result: { is_error?: boolean; result?: string; structured_output?: unknown } | null = null;
