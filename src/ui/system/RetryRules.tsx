@@ -104,7 +104,7 @@ export function RetryRules({ open }: { open: boolean }) {
             <Flex vertical gap={8}>
               <Typography.Text type="secondary" style={{ fontSize: 12 }}>
                 Khi Claude phân tích một lỗi chưa có quy tắc và lần chạy lại thành công, cách sửa được lưu thành quy tắc (mẫu lỗi + núm cần chỉnh). Lần sau gặp lỗi khớp mẫu sẽ
-                sửa luôn, không cần AI; quy tắc hỏng nhiều hơn sửa được thì tự tắt.
+                tự chạy lại theo cách đó, không cần AI; quy tắc hỏng nhiều hơn sửa được thì tự tắt.
               </Typography.Text>
               {rules?.length ? rules.map((r) => <RuleItem key={r.id} rule={r} onChange={load} />) : <Empty description="Chưa học được lỗi nào" />}
             </Flex>

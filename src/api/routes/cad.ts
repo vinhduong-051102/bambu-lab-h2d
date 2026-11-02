@@ -35,7 +35,8 @@ import { suggestMix } from '../../domain/filaments/colourMixing';
 import { saveStudioImport, safeFileName } from '../../domain/studio/studioImports';
 import { serveFile } from './timelapse';
 import { startTask } from '../../domain/backgroundTasks';
-import { diagnose, failureSignature, SAME_FAILURE_LIMIT, settleRetry } from '../../domain/retryDoctor';
+import { logger } from '../../logger/logger';
+import { diagnose, diagnoseByRules, failureSignature, SAME_FAILURE_LIMIT, settleRetry } from '../../domain/retryDoctor';
 import { CLAUDE_MODEL_DOCTOR, CODE_MODEL_DOCTOR, DFAM_DOCTOR, DRAWING_DOCTOR, FIGURE_DOCTOR, GUIDE_DOCTOR } from '../../domain/cad/cadDoctors';
 import { handler, json, readJsonBody } from '../http';
 
@@ -170,26 +171,62 @@ export const listCadJobs = handler(async ({ request }) => {
   const jobs = await store().list(Number.isInteger(limit) && limit > 0 ? Math.min(limit, MAX_JOB_LIST) : 30);
   const running = await runningJobs(jobs);
   const settled = jobs.map((job) => settle(job, running));
-  void settleRetries(settled);
+  void followUpRetries(settled);
   return json({ success: true, jobs: await Promise.all(settled.map(withMixes)) });
 });
 
 const retryKind = (job: CadJob) => (job.source === 'mesh' ? 'cad-figure' : 'cad-model');
 
-/** Retries that have ended since they started: told to the learned rules once (retryDoctor.ts settleRetry) */
-async function settleRetries(jobs: CadJob[]): Promise<void> {
+// A failure this old is not run again on its own (one from before the gateway started, or long since looked at)
+const AUTO_RETRY_WITHIN_MS = 30 * 60 * 1000;
+// Both copies of this module (the custom server's tick, the route bundles) see the same jobs: one follows each up
+const globalForCad = globalThis as unknown as { __bambuCadFollowUps?: Set<string> };
+const followingUp = (globalForCad.__bambuCadFollowUps ??= new Set());
+
+/**
+ * What happens after a job ends, once: a retry's outcome is told to the learned rules (retryDoctor.ts settleRetry),
+ * and a failure a rule mends (written or learned, no Claude) is run again on its own, up to AUTO_RETRY_LIMIT in a row.
+ */
+async function followUpRetries(jobs: CadJob[]): Promise<void> {
   for (const job of jobs) {
+    if ((job.state !== 'done' && job.state !== 'failed') || !job.finished_at || followingUp.has(job.id)) continue;
+    const finished = new Date(job.finished_at).getTime();
     const pending = job.retry?.pending;
-    if (!job.retry || !pending?.since || !job.retry.diagnosis) continue;
-    if ((job.state !== 'done' && job.state !== 'failed') || !job.finished_at || !(new Date(job.finished_at).getTime() > new Date(pending.since).getTime())) continue;
-    await store()
-      .saveRetry(job.id, { ...job.retry, pending: null })
-      .then(() =>
-        settleRetry({ kind: retryKind(job), label: job.title || job.id, failure: pending.failure, before: pending.before, diagnosis: job.retry!.diagnosis!, ok: job.state === 'done' })
-      )
-      .catch(() => undefined);
+    const settle = Boolean(job.retry?.diagnosis && pending?.since && finished > new Date(pending.since).getTime());
+    const auto =
+      job.state === 'failed' &&
+      job.retryable &&
+      Date.now() - finished <= AUTO_RETRY_WITHIN_MS &&
+      job.retry?.auto_checked !== job.finished_at &&
+      (job.retry?.auto ?? 0) < env.AUTO_RETRY_LIMIT;
+    if (!settle && !auto) continue;
+    followingUp.add(job.id);
+    try {
+      const retry = { attempt: 1, tuning: {}, diagnosis: null, history: [], ...job.retry, pending: settle ? null : (pending ?? null), auto_checked: job.finished_at };
+      await store().saveRetry(job.id, retry);
+      if (settle && pending) {
+        await settleRetry({ kind: retryKind(job), label: job.title || job.id, failure: pending.failure, before: pending.before, diagnosis: job.retry!.diagnosis!, ok: job.state === 'done' });
+      }
+      if (auto) {
+        const res = await retryJob({ ...job, retry }, true);
+        if (res.status === 202) logger.info({ id: job.id }, 'CAD job run again on its own: a rule mends its failure');
+      }
+    } catch (err) {
+      logger.warn({ err, id: job.id }, 'Could not follow up a CAD job’s retry');
+    } finally {
+      followingUp.delete(job.id);
+    }
   }
 }
+
+/** Follows up the latest jobs (followUpRetries) when no one has the dashboard open */
+export async function followUpCadJobs(): Promise<void> {
+  if (!worker() && !meshWorker()) return;
+  const jobs = await store().list(CAD_FOLLOW_UP_JOBS);
+  const running = await runningJobs(jobs);
+  await followUpRetries(jobs.map((job) => settle(job, running)));
+}
+const CAD_FOLLOW_UP_JOBS = 40;
 
 /** The latest jobs as the list shows them (a job its worker no longer runs is settled as interrupted), for the task
  * panel; null when the CAD feature is off */
@@ -198,7 +235,7 @@ export async function recentCadJobs(limit: number): Promise<CadJob[] | null> {
   const jobs = await store().list(limit);
   const running = await runningJobs(jobs);
   const settled = jobs.map((job) => settle(job, running));
-  void settleRetries(settled);
+  void followUpRetries(settled);
   return settled;
 }
 
@@ -301,6 +338,14 @@ export const cancelCadJob = handler<{ id: string }>(async ({ params }) => {
 export const retryCadJob = handler<{ id: string }>(async ({ params }) => {
   const job = await store().get(params.id);
   if (!job) return jobNotFound();
+  return retryJob(job, false);
+});
+
+/**
+ * Runs a job again after its failure is analysed. `auto`: on its own, because a rule (written or learned) mends the
+ * failure — only by the rules, never Claude; answered 409 NO_RULE when none matches.
+ */
+async function retryJob(job: CadJob, auto: boolean): Promise<Response> {
   if (job.state === 'running' || job.state === 'queued') {
     return json({ success: false, error: 'JOB_RUNNING', message: 'Bản này đang chạy.' }, 409);
   }
@@ -312,9 +357,12 @@ export const retryCadJob = handler<{ id: string }>(async ({ params }) => {
   const diagnosis =
     job.state === 'cancelled'
       ? { by: 'none' as const, cause: 'Bản này đã bị hủy: chạy lại như cũ.', changes: [], tuning: before.tuning, stop: null, hint: null }
-      : await diagnose(retryKind(job), doctor, failure, before.tuning);
+      : auto
+        ? await diagnoseByRules(retryKind(job), doctor, failure, before.tuning)
+        : await diagnose(retryKind(job), doctor, failure, before.tuning);
+  if (!diagnosis) return json({ success: false, error: 'NO_RULE', message: 'Không quy tắc nào sửa được lỗi này: cần “Thử lại”.' }, 409);
   const history = job.state === 'cancelled' ? before.history : [...before.history, failureSignature(failure.error, before.tuning)];
-  const record = { attempt: before.attempt + 1, tuning: diagnosis.tuning, diagnosis, history };
+  const record = { attempt: before.attempt + 1, tuning: diagnosis.tuning, diagnosis, history, auto: auto ? (before.auto ?? 0) + 1 : 0, auto_checked: before.auto_checked ?? null };
   const repeated = history.filter((h) => h === failureSignature(failure.error, diagnosis.tuning)).length >= SAME_FAILURE_LIMIT;
   if (diagnosis.stop || repeated) {
     const why = diagnosis.stop ?? `lỗi này đã lặp lại ${SAME_FAILURE_LIMIT} lần với cùng cách chạy, cần người xem.`;
@@ -356,7 +404,7 @@ export const retryCadJob = handler<{ id: string }>(async ({ params }) => {
     throw err;
   }
   return json({ success: true, diagnosis, job: await store().get(job.id) }, 202);
-});
+}
 
 // DELETE /api/cad/jobs/:id?family=1 - Deletes a model (with family=1 also every fix, revision and remake made from
 // it); refused while one of them is being made

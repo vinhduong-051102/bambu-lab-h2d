@@ -146,6 +146,10 @@ export interface CadRetry {
   /** The retry running now, until it ends and is told to the learned rules (retryRules.ts): the failure it follows,
    * the settings that failed, and when it started (a job that finished before is still the failed run) */
   pending?: { failure: Failure; before: Tuning; since: string } | null;
+  /** Retries in a row started on their own, because a rule mends the failure (0 after a "Thử lại") */
+  auto?: number;
+  /** The failed run (its finished_at) last looked at for running again on its own: each is looked at once */
+  auto_checked?: string | null;
 }
 
 export interface CadJob extends CadJobMeta {

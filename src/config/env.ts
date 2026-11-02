@@ -88,6 +88,9 @@ const envSchema = z.object({
   TIMELAPSE_AI_MODEL: z.preprocess((val) => (typeof val === 'string' && val.trim() === '' ? undefined : val), z.string().default('claude-opus-5-5')),
   // The Claude model that analyses why a background task failed when "Thử lại" is pressed on a failure no rule knows
   RETRY_AI_MODEL: z.preprocess((val) => (typeof val === 'string' && val.trim() === '' ? undefined : val), z.string().default('claude-sonnet-5-5')),
+  // A failure a rule (written or learned) mends is run again on its own, without Claude, up to this many times in a
+  // row; 0 leaves every retry to "Thử lại"
+  AUTO_RETRY_LIMIT: z.preprocess((val) => (typeof val === 'string' && val.trim() === '' ? undefined : val), z.coerce.number().int().min(0).default(2)),
   // CAD worker container (docker-compose.cad.yml) behind "Thiết kế mô hình bằng AI"; unset turns the feature off
   CAD_WORKER_URL: z.preprocess((val) => (typeof val === 'string' && val.trim() === '' ? undefined : val), z.string().url().optional()),
   // text-to-cad's CAD Viewer (docs/text-to-cad.md): the port the gateway serves it on (HTTPS when HTTPS_PORT is set),

@@ -24,6 +24,10 @@ export interface PanelTask {
   attempt?: number;
   /** A retry's analysis of the failure before it (src/domain/retryDoctor.ts) */
   diagnosis?: Diagnosis | { pending: true } | null;
+  /** Started on its own: a rule mends the failure before it */
+  auto?: boolean;
+  /** A failed one runs again on its own at this time */
+  auto_retry_at?: string | null;
 }
 
 interface Diagnosis {
@@ -51,7 +55,7 @@ function DiagnosisNote({ task }: { task: PanelTask }) {
     <Flex vertical gap={2} className="task-diagnosis">
       <Typography.Text style={{ fontSize: 12 }}>
         <Typography.Text strong style={{ fontSize: 12 }}>
-          Lần chạy {task.attempt ?? 2} · {BY[d.by]}:
+          Lần chạy {task.attempt ?? 2}{task.auto ? ' · tự sửa' : ''} · {BY[d.by]}:
         </Typography.Text>{' '}
         {d.cause}
       </Typography.Text>
@@ -159,6 +163,11 @@ function TaskItem({ task, onRetry, onOpen, onDismiss }: { task: PanelTask; onRet
                 {task.retry_hint && (
                   <Typography.Text type="secondary" style={{ fontSize: 12 }}>
                     {task.retry_hint}
+                  </Typography.Text>
+                )}
+                {task.auto_retry_at && (
+                  <Typography.Text style={{ fontSize: 12 }}>
+                    <LoadingOutlined /> Lỗi này có quy tắc sửa: tự chạy lại, không cần AI…
                   </Typography.Text>
                 )}
                 {task.retry_url && (

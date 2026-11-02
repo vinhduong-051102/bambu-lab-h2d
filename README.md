@@ -147,6 +147,7 @@ TIMELAPSE_AI_MODEL=claude-opus-5-5
 PARTS_AI_MODEL=claude-opus-5-5
 RETRY_AI_MODEL=claude-sonnet-5-5   # analyses an unknown failure before "Thử lại" runs a task again
 # RETRY_RULES_FILE=./data/ai/retry-rules.json   # what those analyses mended, kept as rules: the same failure is mended without Claude
+# AUTO_RETRY_LIMIT=2   # a failure a rule mends runs again on its own (no Claude), this many times in a row; 0 = only by hand
 CAD_AI_MODEL=claude-opus-5-5
 
 # Workers (empty = feature off)

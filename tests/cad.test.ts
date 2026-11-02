@@ -12,6 +12,7 @@ import { setCadJobStore, setCadWorker } from '../src/api/routes/cad';
 import { writeStl } from '../src/domain/studio/meshRepair';
 import { setAnalyst, type RetryNote } from '../src/domain/retryDoctor';
 import { listRules, rulesFile } from '../src/domain/retryRules';
+import { followUpCadJobs } from '../src/api/routes/cad';
 import { createTestApp, type TestApp } from './helpers/testApp';
 
 const CUBE = writeStl(
@@ -292,6 +293,39 @@ describe('AI modelling API (/api/cad)', () => {
       expect(asked).toBe(1);
     } finally {
       setAnalyst(null);
+    }
+  });
+
+  it('runs a model again on its own when a rule mends its failure, once per failure, never one no rule knows', async () => {
+    env.AUTO_RETRY_LIMIT = 2;
+    try {
+      const fail = async (id: string, error: string, ago = 1000) => {
+        worker.running = [];
+        const status = path.join(jobsDir, id, 'status.json');
+        const before = JSON.parse(await fs.readFile(status, 'utf8'));
+        await fs.writeFile(status, JSON.stringify({ ...before, state: 'failed', error, finished_at: new Date(Date.now() - ago).toISOString() }));
+      };
+      const timedOut = (await create({ prompt: 'Một cái hộp' })).json().job;
+      const odd = (await create({ prompt: 'Hộp khác' })).json().job;
+      const old = (await create({ prompt: 'Hộp cũ' })).json().job;
+      await fail(timedOut.id, 'Claude chạy quá 40 phút nên đã bị dừng');
+      await fail(odd.id, 'Lỗi chưa ai gặp');
+      await fail(old.id, 'Claude chạy quá 40 phút nên đã bị dừng', 2 * 3600 * 1000);
+      worker.generated = [];
+
+      await followUpCadJobs();
+      expect(worker.generated.map((g) => g.id)).toEqual([timedOut.id]);
+      expect(worker.generated[0].extra).toMatchObject({ timeout_s: 4800 });
+      const job = (await app.inject({ method: 'GET', url: `/api/cad/jobs/${timedOut.id}` })).json().job;
+      expect(job.retry).toMatchObject({ auto: 1, diagnosis: { by: 'rule' } });
+      const tasks = (await app.inject({ method: 'GET', url: '/api/tasks' })).json().tasks;
+      expect(tasks).toContainEqual(expect.objectContaining({ key: `cad:${timedOut.id}`, auto: true }));
+
+      // Each failure is looked at once
+      await followUpCadJobs();
+      expect(worker.generated).toHaveLength(1);
+    } finally {
+      env.AUTO_RETRY_LIMIT = 0;
     }
   });
 

@@ -182,6 +182,37 @@ export function setAnalyst(next: Analyst | null): void {
  * rule with nothing left to turn stops; a learned one leaves it to Claude.
  */
 export async function diagnose(kind: string, doctor: Doctor, failure: Failure, tuning: Tuning): Promise<Diagnosis> {
+  const known = await diagnoseByRules(kind, doctor, failure, tuning);
+  if (known) return known;
+  try {
+    const answer = await analyst(doctor, failure, tuning, kind);
+    const tuned = { ...tuning, ...clampTuning(doctor, answer.tuning) };
+    return {
+      by: 'claude',
+      cause: answer.cause || 'Claude không tìm ra nguyên nhân rõ ràng.',
+      changes: describeChanges(doctor, tuning, tuned),
+      tuning: tuned,
+      stop: answer.stop.trim() || null,
+      hint: answer.hint.trim() || null,
+    };
+  } catch (err) {
+    // Without an analysis it still runs again, as it was, and says so
+    return {
+      by: 'none',
+      cause: `Không phân tích được lỗi (${err instanceof Error ? err.message : String(err)}): chạy lại như cũ.`,
+      changes: [],
+      tuning,
+      stop: null,
+      hint: null,
+    };
+  }
+}
+
+/**
+ * What the rules alone say about a failure (the written ones, then the learned ones), without Claude; null when none
+ * matches. A failure one of them mends needs no one to look at it, so it may be run again on its own (AUTO_RETRY_LIMIT).
+ */
+export async function diagnoseByRules(kind: string, doctor: Doctor, failure: Failure, tuning: Tuning): Promise<Diagnosis | null> {
   const text = [failure.error, ...failure.details].join('\n');
   for (const rule of [...COMMON, ...doctor.rules]) {
     if (!rule.match.test(text)) continue;
@@ -208,28 +239,7 @@ export async function diagnose(kind: string, doctor: Doctor, failure: Failure, t
     if (Object.keys(rule.actions).length && !changes.length) continue;
     return { by: 'learned', rule_id: rule.id, cause: rule.cause, changes, tuning: tuned, stop: null, hint: rule.hint };
   }
-  try {
-    const answer = await analyst(doctor, failure, tuning, kind);
-    const tuned = { ...tuning, ...clampTuning(doctor, answer.tuning) };
-    return {
-      by: 'claude',
-      cause: answer.cause || 'Claude không tìm ra nguyên nhân rõ ràng.',
-      changes: describeChanges(doctor, tuning, tuned),
-      tuning: tuned,
-      stop: answer.stop.trim() || null,
-      hint: answer.hint.trim() || null,
-    };
-  } catch (err) {
-    // Without an analysis it still runs again, as it was, and says so
-    return {
-      by: 'none',
-      cause: `Không phân tích được lỗi (${err instanceof Error ? err.message : String(err)}): chạy lại như cũ.`,
-      changes: [],
-      tuning,
-      stop: null,
-      hint: null,
-    };
-  }
+  return null;
 }
 
 /** A time knob twice as long, up to its max; null when it is already there */

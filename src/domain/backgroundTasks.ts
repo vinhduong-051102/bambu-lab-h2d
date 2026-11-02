@@ -4,12 +4,14 @@
  * page does not stop it, and whoever opens the page again reads how far it is from `getTask` and keeps watching. The
  * dashboard's task panel lists them all (`listTasks`), with why one failed and a way to run it again (`retryTask`):
  * not as it was, but as the analysis of its failure says (retryDoctor.ts: rules, then Claude), with its knobs turned;
- * how that run ends is told to the learned rules (retryRules.ts), so what Claude found is kept once it worked.
+ * how that run ends is told to the learned rules (retryRules.ts), so what Claude found is kept once it worked. A
+ * failure a rule mends (written or learned: no Claude) is run again on its own, up to AUTO_RETRY_LIMIT times in a row.
  * The result itself is stored where the work stores it (the worker's files); this keeps only whether it runs, since
  * when, how far, and how it ended. Kept in memory: a gateway restart forgets them (the workers finish anyway).
  */
 
-import { diagnose, failureSignature as signature, SAME_FAILURE_LIMIT, settleRetry, type Diagnosis, type Doctor, type Tuning } from './retryDoctor';
+import { env } from '../config/env';
+import { diagnose, diagnoseByRules, failureSignature as signature, SAME_FAILURE_LIMIT, settleRetry, type Diagnosis, type Doctor, type Tuning } from './retryDoctor';
 
 /** What the task panel shows of a task, and where on the dashboard its result is */
 export interface TaskInfo {
@@ -37,6 +39,10 @@ export interface TaskState extends TaskInfo {
   diagnosis: Diagnosis | { pending: true } | null;
   /** The settings this run used (its knobs; {} as first started) */
   tuning: Tuning;
+  /** This run was started on its own, because a rule mends the failure before it */
+  auto: boolean;
+  /** When it runs again on its own (a rule mends its failure); null when it waits for "Thử lại" */
+  auto_retry_at: string | null;
 }
 
 export interface Started<T> {
@@ -67,14 +73,23 @@ interface Run {
   after?: { error: string; details: string[] };
   /** Earlier failures with the settings they ran with, to stop one that repeats */
   history: string[];
+  /** Runs in a row started on their own, this one included */
+  auto: number;
 }
 
 /** Lets work made of steps say how far it is */
 export type Progress = (done: number, total: number, details?: string[]) => void;
 
-type Entry = { state: TaskState; retry: () => Promise<Started<unknown>> };
+type Entry = { state: TaskState; retry: (auto?: boolean) => Promise<Started<unknown>> };
 
 const NOT_RUN = 'Không chạy lại:';
+
+// A moment before running again on its own: a container that was restarting is up by then
+let autoRetryDelayMs = 5000;
+/** Tests run again at once; null restores the delay */
+export function setAutoRetryDelay(ms: number | null): void {
+  autoRetryDelayMs = ms ?? 5000;
+}
 
 // The custom server (server.ts) and the Next.js route bundles load separate copies of this module, and a task
 // started by one route is read by another (the task panel), so the tasks live on globalThis
@@ -116,7 +131,7 @@ export async function startTask<T>(
   work: (progress: Progress, tuning: Tuning) => Promise<T>,
   options: TaskOptions<T>
 ): Promise<Started<T>> {
-  return launch(key, work, options, { attempt: 1, tuning: {}, history: [] });
+  return launch(key, work, options, { attempt: 1, tuning: {}, history: [], auto: 0 });
 }
 
 async function launch<T>(
@@ -139,19 +154,23 @@ async function launch<T>(
     attempt: first.attempt,
     diagnosis: first.after ? { pending: true } : null,
     tuning: first.tuning,
+    auto: first.auto > 0,
+    auto_retry_at: null,
   };
   const history = [...first.history];
-  tasks.set(key, {
+  const entry: Entry = {
     state,
     // The next run follows this one's failure: analysed, with the settings the analysis gives
-    retry: () =>
+    retry: (auto = false) =>
       launch(key, work, options, {
         attempt: state.attempt + 1,
         tuning: state.tuning,
         after: { error: state.error ?? '', details: [...state.details] },
         history,
+        auto: auto ? first.auto + 1 : 0,
       }) as Promise<Started<unknown>>,
-  });
+  };
+  tasks.set(key, entry);
   const progress: Progress = (done, total, details) => {
     state.progress = { done, total };
     if (details) state.details = details;
@@ -193,6 +212,19 @@ async function launch<T>(
       state.finished_at = new Date().toISOString();
     }
   })();
+  // A failure a rule mends runs again on its own (no Claude), a few times in a row at most
+  void run.then(async () => {
+    if (!doctor || !state.error || state.error.startsWith(NOT_RUN) || first.auto >= env.AUTO_RETRY_LIMIT) return;
+    const failure = { error: state.error, details: [...state.details] };
+    const known = await diagnoseByRules(info.kind, doctor, failure, state.tuning).catch(() => null);
+    if (!known || known.stop) return;
+    if (history.filter((h) => h === signature(failure.error, known.tuning)).length >= SAME_FAILURE_LIMIT) return;
+    state.auto_retry_at = new Date(Date.now() + autoRetryDelayMs).toISOString();
+    setTimeout(() => {
+      // Unless it was run again (or forgotten) meanwhile
+      if (tasks.get(key) === entry && !state.running) void entry.retry(true);
+    }, autoRetryDelayMs);
+  });
   let timer: ReturnType<typeof setTimeout> | undefined;
   const outcome = await Promise.race([run, new Promise<null>((resolve) => (timer = setTimeout(() => resolve(null), waitMs)))]);
   clearTimeout(timer);

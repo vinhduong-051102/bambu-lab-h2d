@@ -30,6 +30,10 @@ export interface PanelTask {
   attempt: number;
   /** A retry's analysis of the failure before it: why, and what this run changed; {pending} while it is made */
   diagnosis: Diagnosis | { pending: true } | null;
+  /** This run was started on its own, because a rule mends the failure before it */
+  auto: boolean;
+  /** When a failed one runs again on its own; null when it waits for "Thử lại" */
+  auto_retry_at: string | null;
 }
 
 // Finished ones stay listed this long; failed ones longer, until they are run again or dismissed in the panel
@@ -62,6 +66,8 @@ async function cadTasks(now: number): Promise<PanelTask[]> {
         retry_url: failed && job.retryable ? `/api/cad/jobs/${encodeURIComponent(job.id)}/retry` : null,
         attempt: job.retry?.attempt ?? 1,
         diagnosis: job.retry?.diagnosis ?? null,
+        auto: (job.retry?.auto ?? 0) > 0,
+        auto_retry_at: null,
         ...(failed && !job.retryable && { retry_hint: 'Bản này tạo trước khi lưu thông số: dùng “Làm lại” trên thẻ mẫu để tạo bản mới.' }),
       },
     ];
@@ -85,6 +91,8 @@ function gatewayTasks(now: number): PanelTask[] {
       retry_url: !t.running && t.error ? `/api/tasks/retry?key=${encodeURIComponent(t.key)}` : null,
       attempt: t.attempt,
       diagnosis: t.diagnosis,
+      auto: t.auto,
+      auto_retry_at: t.auto_retry_at,
     }));
 }
 

@@ -15,6 +15,7 @@ import { AmsCommandTracker } from '../domain/commands/AmsCommandTracker';
 import { PrintJournal } from '../domain/prints/PrintJournal';
 import { PrintRecorder } from '../domain/prints/PrintRecorder';
 import { setRuntime, type GatewayRuntime } from './runtime';
+import { followUpCadJobs } from '../api/routes/cad';
 import path from 'path';
 
 export interface StartedGateway extends GatewayRuntime {
@@ -61,6 +62,12 @@ export async function startGateway(): Promise<StartedGateway> {
   // Print history: a record per print, with the camera's photo when it ends
   const printRecorder = new PrintRecorder(new PrintJournal(path.resolve(env.PRINT_HISTORY_DIR)), stateStore, cameraService);
   printRecorder.start();
+
+  // AI models end in their workers, not here: now and then see which ended, so a retry's outcome is learned from and a
+  // failure a rule mends runs again on its own even when no dashboard is open (the panel also does it as it polls)
+  const cadFollowUp = setInterval(() => {
+    followUpCadJobs().catch((err) => logger.warn({ err }, 'Could not follow up AI modelling jobs'));
+  }, 60_000);
 
   // Handle incoming MQTT messages
   mqttClient.onMessage((topic, message) => {
@@ -110,6 +117,7 @@ Subscribed:
     printerService,
     printerManager,
     async stop() {
+      clearInterval(cadFollowUp);
       printRecorder.stop();
       cameraService.stop();
       stateStore.destroy();
