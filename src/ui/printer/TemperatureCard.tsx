@@ -57,14 +57,17 @@ function TemperatureControl(props: {
             Đặt Nhiệt
           </Button>
         </Space.Compact>
-        {presets.map((p) => (
-          <Button key={p.label} size="small" loading={pending === p.label} onClick={() => set(p.label, p.value)}>
-            {p.label}
+        {/* The presets wrap as one row under the input on a phone, not split across it */}
+        <Flex gap={8} wrap align="center">
+          {presets.map((p) => (
+            <Button key={p.label} size="small" loading={pending === p.label} onClick={() => set(p.label, p.value)}>
+              {p.label}
+            </Button>
+          ))}
+          <Button size="small" danger loading={pending === 'off'} onClick={() => set('off', 0)}>
+            Tắt
           </Button>
-        ))}
-        <Button size="small" danger loading={pending === 'off'} onClick={() => set('off', 0)}>
-          Tắt
-        </Button>
+        </Flex>
       </Flex>
     </div>
   );

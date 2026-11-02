@@ -76,15 +76,24 @@ body {
     padding: 10px;
   }
 
-  /* A card's buttons go under its title instead of squeezing it out */
-  .ant-card-head-wrapper {
+  /* A card's buttons go under its title instead of squeezing it out (antd's own rules are as specific as one
+     class, and load after this file) */
+  .ant-card .ant-card-head .ant-card-head-wrapper {
     flex-wrap: wrap;
     gap: 6px;
     padding: 10px 0;
   }
 
-  .ant-card-head-title {
+  .ant-card .ant-card-head .ant-card-head-title {
     flex: 1 0 100%;
+  }
+
+  .ant-card .ant-card-head .ant-card-extra {
+    margin-inline-start: 0;
+  }
+
+  .dashboard .ant-layout-footer {
+    padding: 16px 4px;
   }
 }
 
@@ -214,6 +223,18 @@ body {
   overflow-wrap: anywhere;
 }
 
+/* On a phone the URL would cover half the picture; the RTSP button copies it */
+@media (max-width: 480px) {
+  .cam-rtsp-url {
+    display: none;
+  }
+}
+
+/* Numbers in a table keep to one line ("22,8 %", not "22,8" over "%") */
+.num-cell {
+  white-space: nowrap;
+}
+
 .ams-tray-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(130px, 1fr));
@@ -318,6 +339,27 @@ body {
 
 .cad-compare {
   margin: 0;
+}
+
+/* On a phone two or three 160px pictures don't fit side by side: they share the row */
+@media (max-width: 640px) {
+  .cad-preview {
+    width: 100%;
+  }
+
+  .cad-compare {
+    flex: 1 1 0;
+    min-width: 0;
+    max-width: 160px;
+  }
+
+  .cad-preview .ant-image,
+  .cad-preview .ant-image-img,
+  .cad-preview-empty {
+    width: 100% !important;
+    height: auto !important;
+    aspect-ratio: 1;
+  }
 }
 
 /* The user's description of a model, as Markdown: clamped to a few lines until expanded */

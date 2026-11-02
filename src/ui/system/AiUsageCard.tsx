@@ -102,13 +102,14 @@ export function AiUsageCard() {
             pagination={false}
             rowKey="feature"
             dataSource={data.features}
+            scroll={{ x: 'max-content' }}
             columns={[
               { title: 'Tính năng', dataIndex: 'label' },
-              { title: 'Số lần', dataIndex: 'runs', align: 'right' },
-              { title: 'Token', dataIndex: 'total_tokens', align: 'right', render: formatTokens },
-              { title: '% token', dataIndex: 'token_share', align: 'right', render: (v) => formatShare(v) },
-              { title: 'Chi phí', dataIndex: 'cost_usd', align: 'right', render: formatUsd },
-              { title: '% chi phí', dataIndex: 'cost_share', align: 'right', render: (v) => formatShare(v) },
+              { title: 'Số lần', dataIndex: 'runs', align: 'right', className: 'num-cell' },
+              { title: 'Token', dataIndex: 'total_tokens', align: 'right', className: 'num-cell', render: formatTokens },
+              { title: '% token', dataIndex: 'token_share', align: 'right', className: 'num-cell', render: (v) => formatShare(v) },
+              { title: 'Chi phí', dataIndex: 'cost_usd', align: 'right', className: 'num-cell', render: formatUsd },
+              { title: '% chi phí', dataIndex: 'cost_share', align: 'right', className: 'num-cell', render: (v) => formatShare(v) },
             ]}
           />
           <Table

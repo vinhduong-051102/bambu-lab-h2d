@@ -322,7 +322,9 @@ function TopTasks({ tasks, labels }: { tasks: ChartTask[]; labels: Record<string
             {top.map((t, i) => {
               const w = Math.max(((t.cost_usd ?? 0) / max) * plotW, 2);
               const y0 = i * row;
-              const short = t.title.length > 34 ? `${t.title.slice(0, 33)}…` : t.title;
+              // As many characters as the label column holds (about 0.55 em each), so a narrow screen doesn't cut the start off
+              const fit = Math.max(Math.min(34, Math.floor((labelW - 12) / (FONT * 0.55))), 6);
+              const short = t.title.length > fit ? `${t.title.slice(0, fit - 1)}…` : t.title;
               return (
                 <g
                   key={t.id}
