@@ -1,5 +1,6 @@
 import { listTasks, retryTask } from '../../domain/backgroundTasks';
 import type { Diagnosis } from '../../domain/retryDoctor';
+import { deleteRule, editRule, listRules, RuleError } from '../../domain/retryRules';
 import { handler, json, readJsonBody } from '../http';
 import { recentCadJobs } from './cad';
 
@@ -109,4 +110,36 @@ export const retryGatewayTask = handler(async ({ request }) => {
   const state = await retryTask(key);
   if (!state) return json({ success: false, error: 'TASK_NOT_RETRYABLE', message: 'Không có tác vụ này, hoặc nó đang chạy.' }, 409);
   return json({ success: true, task: { key, ...state } }, 202);
+});
+
+// GET /api/tasks/rules - What retries have learned: a failure Claude analysed that the run after it then mended, kept as
+// a rule (pattern, cause, knobs to turn) so the same failure is mended next time without Claude; with how often it worked
+export const getRetryRules = handler(async () => json({ success: true, rules: await listRules() }));
+
+const ruleId = (request: Request) => new URL(request.url).searchParams.get('id');
+const ruleNotFound = () => json({ success: false, error: 'RULE_NOT_FOUND', message: 'Không có quy tắc này.' }, 404);
+
+// PATCH /api/tasks/rules?id= - {enabled?, cause?, pattern?}: switches a learned rule off or on, or corrects it
+export const patchRetryRule = handler(async ({ request }) => {
+  const id = ruleId(request);
+  if (!id) return json({ success: false, error: 'INVALID_PAYLOAD', message: 'Thiếu id của quy tắc.' }, 400);
+  const body = (await readJsonBody(request).catch(() => null)) as { enabled?: unknown; cause?: unknown; pattern?: unknown } | null;
+  try {
+    const rule = await editRule(id, {
+      ...(typeof body?.enabled === 'boolean' && { enabled: body.enabled }),
+      ...(typeof body?.cause === 'string' && { cause: body.cause }),
+      ...(typeof body?.pattern === 'string' && { pattern: body.pattern }),
+    });
+    return rule ? json({ success: true, rule }) : ruleNotFound();
+  } catch (err) {
+    if (err instanceof RuleError) return json({ success: false, error: 'INVALID_PATTERN', message: err.message }, 400);
+    throw err;
+  }
+});
+
+// DELETE /api/tasks/rules?id= - Forgets a learned rule: the failure goes to Claude again
+export const deleteRetryRule = handler(async ({ request }) => {
+  const id = ruleId(request);
+  if (!id) return json({ success: false, error: 'INVALID_PAYLOAD', message: 'Thiếu id của quy tắc.' }, 400);
+  return (await deleteRule(id)) ? json({ success: true }) : ruleNotFound();
 });

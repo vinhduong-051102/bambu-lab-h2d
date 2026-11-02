@@ -5,6 +5,7 @@ import { Alert, Badge, Button, Card, Collapse, Drawer, Empty, Flex, Progress, Sp
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useActions } from '../DashboardContext';
 import { dismissKey, elapsed, endedSince, kindLabel, visibleTasks } from '../tasks';
+import { RetryRules } from './RetryRules';
 
 /** GET /api/tasks (src/api/routes/tasks.ts) */
 export interface PanelTask {
@@ -26,14 +27,14 @@ export interface PanelTask {
 }
 
 interface Diagnosis {
-  by: 'rule' | 'claude' | 'none';
+  by: 'rule' | 'learned' | 'claude' | 'none';
   cause: string;
   changes: string[];
   stop: string | null;
   hint: string | null;
 }
 
-const BY = { rule: 'theo quy tắc', claude: 'Claude phân tích', none: 'chưa phân tích được' } as const;
+const BY = { rule: 'theo quy tắc', learned: 'theo lỗi đã học', claude: 'Claude phân tích', none: 'chưa phân tích được' } as const;
 
 /** Why the run before failed and what this run does differently, under a task that was run again */
 function DiagnosisNote({ task }: { task: PanelTask }) {
@@ -283,6 +284,7 @@ export function TasksButton({ onOpen }: { onOpen?: (page: string) => void }) {
             Các việc này chạy trên máy chủ: đóng trang thì vẫn chạy tiếp, mở lại sẽ thấy đúng tiến độ. Việc lỗi có chi tiết và nút Thử lại.
           </Typography.Paragraph>
           {error && <Alert type="warning" showIcon title={`Không đọc được danh sách tác vụ: ${error}`} />}
+          <RetryRules open={open} />
           {shown.length === 0 ? (
             <Empty description="Không có tác vụ nào đang chạy hay vừa lỗi" />
           ) : (

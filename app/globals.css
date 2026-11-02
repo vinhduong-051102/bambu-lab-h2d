@@ -620,3 +620,9 @@ body {
   border-radius: 4px;
   background: rgba(59, 130, 246, 0.08);
 }
+/* A learned retry rule's pattern: a regular expression, kept as written */
+.rule-pattern {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  overflow-wrap: anywhere;
+}

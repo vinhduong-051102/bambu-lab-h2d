@@ -38,3 +38,14 @@ export function elapsed(from, to = Date.now()) {
   if (m < 60) return `${m} phút`;
   return `${Math.floor(m / 60)} giờ${m % 60 ? ` ${m % 60} phút` : ''}`;
 }
+
+/**
+ * What a learned rule does to its knobs, in words: "timeout_s ×2", "video: tắt"
+ * @param {Record<string, {set: number | boolean} | {scale: number}>} actions
+ */
+export function describeActions(actions) {
+  const out = Object.entries(actions ?? {}).map(([name, a]) =>
+    'scale' in a ? `${name} ×${String(a.scale).replace('.', ',')}` : `${name}: ${a.set === true ? 'bật' : a.set === false ? 'tắt' : a.set}`
+  );
+  return out.length ? out.join('; ') : 'chạy lại như cũ';
+}

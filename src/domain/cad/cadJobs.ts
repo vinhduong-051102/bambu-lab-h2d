@@ -3,7 +3,7 @@ import { promises as fs } from 'fs';
 import path from 'path';
 import { getTask, type TaskState } from '../backgroundTasks';
 import { waitFor } from './cadDoctors';
-import type { Diagnosis, RetryNote, Tuning } from '../retryDoctor';
+import type { Diagnosis, Failure, RetryNote, Tuning } from '../retryDoctor';
 
 /**
  * Models designed by AI (docs/cad.md). Each job is a folder in CAD_JOBS_DIR, shared with the CAD and mesh
@@ -143,6 +143,9 @@ export interface CadRetry {
   diagnosis: Diagnosis | null;
   /** Failures with the settings they ran with, to stop one that repeats */
   history: string[];
+  /** The retry running now, until it ends and is told to the learned rules (retryRules.ts): the failure it follows,
+   * the settings that failed, and when it started (a job that finished before is still the failed run) */
+  pending?: { failure: Failure; before: Tuning; since: string } | null;
 }
 
 export interface CadJob extends CadJobMeta {

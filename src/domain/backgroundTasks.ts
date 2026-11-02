@@ -3,12 +3,13 @@
  * measuring the earlier prints) runs here, detached from the request that started it: closing the
  * page does not stop it, and whoever opens the page again reads how far it is from `getTask` and keeps watching. The
  * dashboard's task panel lists them all (`listTasks`), with why one failed and a way to run it again (`retryTask`):
- * not as it was, but as the analysis of its failure says (retryDoctor.ts: rules, then Claude), with its knobs turned.
+ * not as it was, but as the analysis of its failure says (retryDoctor.ts: rules, then Claude), with its knobs turned;
+ * how that run ends is told to the learned rules (retryRules.ts), so what Claude found is kept once it worked.
  * The result itself is stored where the work stores it (the worker's files); this keeps only whether it runs, since
  * when, how far, and how it ended. Kept in memory: a gateway restart forgets them (the workers finish anyway).
  */
 
-import { diagnose, failureSignature as signature, SAME_FAILURE_LIMIT, type Diagnosis, type Doctor, type Tuning } from './retryDoctor';
+import { diagnose, failureSignature as signature, SAME_FAILURE_LIMIT, settleRetry, type Diagnosis, type Doctor, type Tuning } from './retryDoctor';
 
 /** What the task panel shows of a task, and where on the dashboard its result is */
 export interface TaskInfo {
@@ -155,6 +156,11 @@ async function launch<T>(
     state.progress = { done, total };
     if (details) state.details = details;
   };
+  // A retry that got as far as running: how it ended is told to the learned rules
+  let retried: { diagnosis: Diagnosis; failure: { error: string; details: string[] } } | null = null;
+  const settle = (ok: boolean) => {
+    if (retried) void settleRetry({ kind: info.kind, label: info.label, failure: retried.failure, before: first.tuning, diagnosis: retried.diagnosis, ok });
+  };
   const run = (async () => {
     try {
       if (first.after) {
@@ -168,16 +174,19 @@ async function launch<T>(
         if (history.filter((h) => h === signature(after.error, diagnosis.tuning)).length >= SAME_FAILURE_LIMIT) {
           throw new Error(`${NOT_RUN} lỗi này đã lặp lại ${SAME_FAILURE_LIMIT} lần với cùng cách chạy, cần người xem.`);
         }
+        retried = { diagnosis, failure: after };
       }
       const value = await work(progress, state.tuning);
       state.error = failed?.(value) ?? null;
       if (explain) state.details = explain(value);
       if (state.error) history.push(signature(state.error, state.tuning));
+      settle(!state.error);
       return { value };
     } catch (err) {
       state.error = errorText(err);
       state.details = [...state.details, ...errorDetails(err)];
       if (!state.error.startsWith(NOT_RUN)) history.push(signature(state.error, state.tuning));
+      settle(false);
       return { error: err };
     } finally {
       state.running = false;

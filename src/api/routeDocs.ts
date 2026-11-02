@@ -138,7 +138,10 @@ export const GATEWAY_ROUTES: RouteDoc[] = [
   // 10. Real-time WebSocket Stream
   { method: 'GET (WS)', path: '/ws', category: 'Real-time WebSocket', description: 'Kết nối WebSocket đẩy dữ liệu telemetry & lệnh thời gian thực', exampleUrl: 'ws://localhost:3000/ws' },
   { method: 'GET', path: '/api/tasks', category: 'Tác vụ nền', description: 'Các tác vụ chạy nền (đang chạy, lỗi, vừa xong): mẫu AI, kiểm tra kỹ thuật, hướng dẫn lắp, phân tích thành phần, AI xem timelapse; lỗi kèm chi tiết và retry_url', exampleUrl: '/api/tasks' },
-  { method: 'POST', path: '/api/tasks/retry', category: 'Tác vụ nền', description: 'Chạy lại một tác vụ nền của gateway đúng như lần đầu (?key= hoặc {key})', body: '{}' },
+  { method: 'POST', path: '/api/tasks/retry', category: 'Tác vụ nền', description: 'Chạy lại một tác vụ nền của gateway sau khi phân tích lỗi (quy tắc viết sẵn, quy tắc đã học, rồi Claude) (?key= hoặc {key})', body: '{}' },
+  { method: 'GET', path: '/api/tasks/rules', category: 'Tác vụ nền', description: 'Các quy tắc đã học khi thử lại: lỗi Claude phân tích và lần chạy lại đã thành công, lưu thành mẫu lỗi + cách chỉnh để lần sau sửa không cần AI', exampleUrl: '/api/tasks/rules' },
+  { method: 'PATCH', path: '/api/tasks/rules', category: 'Tác vụ nền', description: 'Bật/tắt hoặc sửa một quy tắc đã học (?id=, {enabled?, cause?, pattern?})', body: '{"enabled": false}' },
+  { method: 'DELETE', path: '/api/tasks/rules', category: 'Tác vụ nền', description: 'Xóa một quy tắc đã học (?id=): lỗi đó lại do Claude phân tích' },
 ];
 
 // GET /api/routes

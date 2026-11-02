@@ -2,10 +2,14 @@
  * Why a background task failed, and how to run it so it does not fail the same way: what "Thử lại" does on the
  * task panel. Known failures are matched by rules (fast, no Claude); anything else Claude analyses, through
  * `claude -p` on the gateway, and may only turn the task's own knobs (more time, a coarser mesh, no video…) within
- * their bounds, or say that running it again cannot help. Work done by Claude itself (AI models, figures) also gets
- * the failure and the analysis in its prompt, so it carries on from what it did instead of repeating it.
+ * their bounds, or say that running it again cannot help. What Claude found for a failure no rule knew, once the run
+ * after it succeeds, is kept as a learned rule (retryRules.ts), so the same failure is mended next time without Claude.
+ * Work done by Claude itself (AI models, figures) also gets the failure and the analysis in its prompt, so it carries
+ * on from what it did instead of repeating it.
  */
 import { env } from '../config/env';
+import { logger } from '../logger/logger';
+import { applyActions, learn, matchingRules, recordOutcome } from './retryRules';
 import { ClaudeCodeVision } from './timelapse/TimelapseReviewer';
 
 export type Tuning = Record<string, number | boolean>;
@@ -15,6 +19,8 @@ export interface Knob {
   type: 'number' | 'boolean';
   min?: number;
   max?: number;
+  /** The worker's own value when a run leaves it unset: where a learned rule's "twice as long" starts from */
+  default?: number;
   /** What it does, for Claude and for the task panel */
   describe: string;
 }
@@ -51,7 +57,9 @@ export interface Doctor {
 }
 
 export interface Diagnosis {
-  by: 'rule' | 'claude' | 'none';
+  /** rule: written in the code; learned: kept from an earlier analysis by Claude that mended it (rule_id) */
+  by: 'rule' | 'learned' | 'claude' | 'none';
+  rule_id?: string;
   cause: string;
   /** The settings changed, in words */
   changes: string[];
@@ -170,8 +178,8 @@ export function setAnalyst(next: Analyst | null): void {
 
 /**
  * What went wrong and how to run it next: the first rule that matches (the common ones, the container or Claude;
- * then the task's own), else
- * Claude's analysis. A rule with nothing left to turn stops.
+ * then the task's own), then a learned rule that still has something to turn, else Claude's analysis. A written
+ * rule with nothing left to turn stops; a learned one leaves it to Claude.
  */
 export async function diagnose(kind: string, doctor: Doctor, failure: Failure, tuning: Tuning): Promise<Diagnosis> {
   const text = [failure.error, ...failure.details].join('\n');
@@ -191,6 +199,14 @@ export async function diagnose(kind: string, doctor: Doctor, failure: Failure, t
     }
     const tuned = { ...tuning, ...clampTuning(doctor, next) };
     return { by: 'rule', cause: rule.cause, changes: describeChanges(doctor, tuning, tuned), tuning: tuned, stop: null, hint: rule.hint ?? null };
+  }
+  const learned = await matchingRules(kind, text).catch(() => []);
+  for (const rule of learned) {
+    const tuned = { ...tuning, ...clampTuning(doctor, applyActions(rule, tuning, (name) => doctor.knobs[name]?.default)) };
+    const changes = describeChanges(doctor, tuning, tuned);
+    // Its knobs are already as far as it turns them (or gone from the task): not the fix this time
+    if (Object.keys(rule.actions).length && !changes.length) continue;
+    return { by: 'learned', rule_id: rule.id, cause: rule.cause, changes, tuning: tuned, stop: null, hint: rule.hint };
   }
   try {
     const answer = await analyst(doctor, failure, tuning, kind);
@@ -222,4 +238,37 @@ export function longer(doctor: Doctor, tuning: Tuning, name: string, start: numb
   const now = typeof tuning[name] === 'number' ? (tuning[name] as number) : start;
   if (now >= (knob.max ?? Infinity)) return null;
   return { ...tuning, [name]: Math.min(now * 2, knob.max ?? Infinity) };
+}
+
+/**
+ * How a retry ended, for the learned rules: a learned rule's use is counted, and Claude's analysis of a failure no
+ * rule knew is kept as a rule when the run after it succeeded. Never throws: learning is not what the task is for.
+ */
+export async function settleRetry(retry: {
+  kind: string;
+  label: string;
+  failure: Failure;
+  /** The settings the failed run had */
+  before: Tuning;
+  diagnosis: Diagnosis;
+  ok: boolean;
+}): Promise<void> {
+  const { diagnosis, ok } = retry;
+  try {
+    if (diagnosis.by === 'learned' && diagnosis.rule_id) await recordOutcome(diagnosis.rule_id, ok);
+    else if (diagnosis.by === 'claude' && ok && !diagnosis.stop && retry.failure.error.trim()) {
+      const rule = await learn({
+        kind: retry.kind,
+        error: retry.failure.error,
+        cause: diagnosis.cause,
+        before: retry.before,
+        after: diagnosis.tuning,
+        hint: diagnosis.hint,
+        label: retry.label,
+      });
+      if (rule) logger.info({ kind: rule.kind, pattern: rule.pattern }, 'Learned a retry rule from Claude’s analysis');
+    }
+  } catch (err) {
+    logger.warn({ err }, 'Could not keep what a retry learned');
+  }
 }

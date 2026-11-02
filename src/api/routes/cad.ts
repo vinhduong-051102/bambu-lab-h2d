@@ -35,7 +35,7 @@ import { suggestMix } from '../../domain/filaments/colourMixing';
 import { saveStudioImport, safeFileName } from '../../domain/studio/studioImports';
 import { serveFile } from './timelapse';
 import { startTask } from '../../domain/backgroundTasks';
-import { diagnose, failureSignature, SAME_FAILURE_LIMIT } from '../../domain/retryDoctor';
+import { diagnose, failureSignature, SAME_FAILURE_LIMIT, settleRetry } from '../../domain/retryDoctor';
 import { CLAUDE_MODEL_DOCTOR, CODE_MODEL_DOCTOR, DFAM_DOCTOR, DRAWING_DOCTOR, FIGURE_DOCTOR, GUIDE_DOCTOR } from '../../domain/cad/cadDoctors';
 import { handler, json, readJsonBody } from '../http';
 
@@ -169,8 +169,27 @@ export const listCadJobs = handler(async ({ request }) => {
   const limit = Number(new URL(request.url).searchParams.get('limit') ?? 30);
   const jobs = await store().list(Number.isInteger(limit) && limit > 0 ? Math.min(limit, MAX_JOB_LIST) : 30);
   const running = await runningJobs(jobs);
-  return json({ success: true, jobs: await Promise.all(jobs.map((job) => withMixes(settle(job, running)))) });
+  const settled = jobs.map((job) => settle(job, running));
+  void settleRetries(settled);
+  return json({ success: true, jobs: await Promise.all(settled.map(withMixes)) });
 });
+
+const retryKind = (job: CadJob) => (job.source === 'mesh' ? 'cad-figure' : 'cad-model');
+
+/** Retries that have ended since they started: told to the learned rules once (retryDoctor.ts settleRetry) */
+async function settleRetries(jobs: CadJob[]): Promise<void> {
+  for (const job of jobs) {
+    const pending = job.retry?.pending;
+    if (!job.retry || !pending?.since || !job.retry.diagnosis) continue;
+    if ((job.state !== 'done' && job.state !== 'failed') || !job.finished_at || !(new Date(job.finished_at).getTime() > new Date(pending.since).getTime())) continue;
+    await store()
+      .saveRetry(job.id, { ...job.retry, pending: null })
+      .then(() =>
+        settleRetry({ kind: retryKind(job), label: job.title || job.id, failure: pending.failure, before: pending.before, diagnosis: job.retry!.diagnosis!, ok: job.state === 'done' })
+      )
+      .catch(() => undefined);
+  }
+}
 
 /** The latest jobs as the list shows them (a job its worker no longer runs is settled as interrupted), for the task
  * panel; null when the CAD feature is off */
@@ -178,7 +197,9 @@ export async function recentCadJobs(limit: number): Promise<CadJob[] | null> {
   if (!worker() && !meshWorker()) return null;
   const jobs = await store().list(limit);
   const running = await runningJobs(jobs);
-  return jobs.map((job) => settle(job, running));
+  const settled = jobs.map((job) => settle(job, running));
+  void settleRetries(settled);
+  return settled;
 }
 
 // POST /api/cad/jobs - {prompt, model?, parent_id?, images?}: Claude designs a model (or changes parent_id's) in the background
@@ -291,7 +312,7 @@ export const retryCadJob = handler<{ id: string }>(async ({ params }) => {
   const diagnosis =
     job.state === 'cancelled'
       ? { by: 'none' as const, cause: 'Bản này đã bị hủy: chạy lại như cũ.', changes: [], tuning: before.tuning, stop: null, hint: null }
-      : await diagnose(job.source === 'mesh' ? 'cad-figure' : 'cad-model', doctor, failure, before.tuning);
+      : await diagnose(retryKind(job), doctor, failure, before.tuning);
   const history = job.state === 'cancelled' ? before.history : [...before.history, failureSignature(failure.error, before.tuning)];
   const record = { attempt: before.attempt + 1, tuning: diagnosis.tuning, diagnosis, history };
   const repeated = history.filter((h) => h === failureSignature(failure.error, diagnosis.tuning)).length >= SAME_FAILURE_LIMIT;
@@ -300,7 +321,7 @@ export const retryCadJob = handler<{ id: string }>(async ({ params }) => {
     await store().saveRetry(job.id, { ...record, attempt: before.attempt, diagnosis: { ...diagnosis, stop: why } });
     return json({ success: false, error: 'RETRY_STOPPED', message: `Không chạy lại: ${why}`, diagnosis }, 409);
   }
-  await store().saveRetry(job.id, record);
+  await store().saveRetry(job.id, { ...record, pending: { failure, before: before.tuning, since: new Date().toISOString() } });
   const note = { ...failure, cause: diagnosis.cause, ...(diagnosis.hint && { hint: diagnosis.hint }) };
   const firstRun = job.state === 'cancelled' || !job.error;
   const tuning = diagnosis.tuning;

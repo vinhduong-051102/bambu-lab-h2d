@@ -10,8 +10,8 @@ const TIMEOUT = /quá \d+ giây|không trả lời kịp/;
 export const GUIDE_DOCTOR: Doctor = {
   about: 'Vẽ hướng dẫn lắp (ảnh từng bước và video) của một mô hình nhiều chi tiết, bằng Python vẽ từng tam giác.',
   knobs: {
-    timeout_s: { type: 'number', min: 60, max: 1800, describe: 'Thời gian cho phép (giây)' },
-    grid_cells: { type: 'number', min: 100, max: 1000, describe: 'Độ mịn lưới khi vẽ (ô trên bề rộng mô hình; ít hơn thì nhanh hơn)' },
+    timeout_s: { type: 'number', min: 60, max: 1800, default: 420, describe: 'Thời gian cho phép (giây)' },
+    grid_cells: { type: 'number', min: 100, max: 1000, default: 500, describe: 'Độ mịn lưới khi vẽ (ô trên bề rộng mô hình; ít hơn thì nhanh hơn)' },
     video: { type: 'boolean', describe: 'Làm video (tắt thì chỉ vẽ ảnh từng bước)' },
   },
   rules: [
@@ -32,8 +32,8 @@ export const GUIDE_DOCTOR: Doctor = {
 export const DRAWING_DOCTOR: Doctor = {
   about: 'Vẽ bản vẽ kỹ thuật A3 (hình chiếu có nét khuất, mỗi chi tiết in một tờ) bằng text-to-cad.',
   knobs: {
-    timeout_s: { type: 'number', min: 60, max: 1800, describe: 'Thời gian cho phép (giây)' },
-    max_sheets: { type: 'number', min: 1, max: 12, describe: 'Số tờ tối đa (mỗi chi tiết in một tờ)' },
+    timeout_s: { type: 'number', min: 60, max: 1800, default: 300, describe: 'Thời gian cho phép (giây)' },
+    max_sheets: { type: 'number', min: 1, max: 12, default: 12, describe: 'Số tờ tối đa (mỗi chi tiết in một tờ)' },
   },
   rules: [
     {
@@ -52,7 +52,7 @@ export const DRAWING_DOCTOR: Doctor = {
 /** The DfAM check (cad/dfam.py): wall thickness by ray casting, overhangs, orientations */
 export const DFAM_DOCTOR: Doctor = {
   about: 'Kiểm tra DfAM (bề dày thành bằng dò tia, phần nhô, hướng in) trên lưới STL của mô hình.',
-  knobs: { timeout_s: { type: 'number', min: 60, max: 2400, describe: 'Thời gian cho phép (giây)' } },
+  knobs: { timeout_s: { type: 'number', min: 60, max: 2400, default: 600, describe: 'Thời gian cho phép (giây)' } },
   rules: [{ match: TIMEOUT, cause: 'Lưới lớn: dò bề dày thành không kịp.', tune: (t) => longer(DFAM_DOCTOR, t, 'timeout_s', 600) }],
 };
 
@@ -72,7 +72,7 @@ export const ENG_DOCTOR: Doctor = {
 /** A model Claude designs (cad/worker.py generate): its run is given the failure and the analysis */
 export const CLAUDE_MODEL_DOCTOR: Doctor = {
   about: 'Claude Code thiết kế một mô hình CAD build123d theo request.md, dựng và tự kiểm tra (container cad).',
-  knobs: { timeout_s: { type: 'number', min: 600, max: 7200, describe: 'Thời gian cho Claude (giây)' } },
+  knobs: { timeout_s: { type: 'number', min: 600, max: 7200, default: 2400, describe: 'Thời gian cho Claude (giây)' } },
   rules: [
     {
       match: /Claude chạy quá \d+ phút/,
@@ -92,7 +92,7 @@ export const CLAUDE_MODEL_DOCTOR: Doctor = {
 export const CODE_MODEL_DOCTOR: Doctor = {
   about: 'Dựng một model.py viết sẵn (build123d) bằng build.py; nếu mã lỗi thì Claude có thể sửa cho dựng được.',
   knobs: {
-    timeout_s: { type: 'number', min: 60, max: 1800, describe: 'Thời gian dựng (giây)' },
+    timeout_s: { type: 'number', min: 60, max: 1800, default: 180, describe: 'Thời gian dựng (giây)' },
     claude_fix: { type: 'boolean', describe: 'Nhờ Claude sửa model.py cho dựng được' },
   },
   rules: [

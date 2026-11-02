@@ -10,7 +10,8 @@ import { env } from '../src/config/env';
 import { buildRequest, CadJobStore, CadWorkerError, newJobId, type CadBuildReport, type CadWorkerApi } from '../src/domain/cad/cadJobs';
 import { setCadJobStore, setCadWorker } from '../src/api/routes/cad';
 import { writeStl } from '../src/domain/studio/meshRepair';
-import type { RetryNote } from '../src/domain/retryDoctor';
+import { setAnalyst, type RetryNote } from '../src/domain/retryDoctor';
+import { listRules, rulesFile } from '../src/domain/retryRules';
 import { createTestApp, type TestApp } from './helpers/testApp';
 
 const CUBE = writeStl(
@@ -257,6 +258,41 @@ describe('AI modelling API (/api/cad)', () => {
     expect(retried.json().job.retry).toMatchObject({ attempt: 2, tuning: { timeout_s: 4800 } });
     expect(retried.json().job.state).toBe('running');
     expect((await app.inject({ method: 'POST', url: `/api/cad/jobs/${job.id}/retry`, payload: {} })).statusCode).toBe(409);
+  });
+
+  it('learns from a model whose unknown failure Claude analysed once the retry is done, and mends it next time without Claude', async () => {
+    await fs.rm(rulesFile(), { force: true });
+    let asked = 0;
+    setAnalyst(async () => {
+      asked++;
+      return { cause: 'Thư viện in ra lỗi lạ.', tuning: {}, stop: '', hint: 'Dùng Box thay cho Box2.' };
+    });
+    try {
+      const fail = async (id: string, error: string) => {
+        worker.running = [];
+        const status = path.join(jobsDir, id, 'status.json');
+        const before = JSON.parse(await fs.readFile(status, 'utf8'));
+        await fs.writeFile(status, JSON.stringify({ ...before, state: 'failed', error, finished_at: new Date(Date.now() - 1000).toISOString() }));
+      };
+      const { job } = (await create({ prompt: 'Một cái hộp' })).json();
+      await fail(job.id, 'OCP StdFail_NotDone ở mặt 17');
+      expect((await app.inject({ method: 'POST', url: `/api/cad/jobs/${job.id}/retry`, payload: {} })).json().diagnosis).toMatchObject({ by: 'claude' });
+      // Not yet learned while it runs; learned once the panel sees it done
+      await worker.finish(job.id);
+      const status = path.join(jobsDir, job.id, 'status.json');
+      await fs.writeFile(status, JSON.stringify({ ...JSON.parse(await fs.readFile(status, 'utf8')), finished_at: new Date(Date.now() + 1000).toISOString() }));
+      await app.inject({ method: 'GET', url: '/api/tasks' });
+      await expect.poll(async () => (await listRules()).length).toBe(1);
+      expect((await listRules())[0]).toMatchObject({ kind: 'cad-model', hint: 'Dùng Box thay cho Box2.', hits: 1 });
+
+      const other = (await create({ prompt: 'Hộp khác' })).json().job;
+      await fail(other.id, 'OCP StdFail_NotDone ở mặt 42');
+      const again = (await app.inject({ method: 'POST', url: `/api/cad/jobs/${other.id}/retry`, payload: {} })).json();
+      expect(again.diagnosis).toMatchObject({ by: 'learned', hint: 'Dùng Box thay cho Box2.' });
+      expect(asked).toBe(1);
+    } finally {
+      setAnalyst(null);
+    }
   });
 
   it('revises a model starting from its code and brief', async () => {
