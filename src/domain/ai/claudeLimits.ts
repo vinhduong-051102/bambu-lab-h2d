@@ -128,6 +128,11 @@ async function probe(token: string): Promise<Omit<PlanLimits, 'key' | 'label' | 
   return { ...limits, error: `${reason}${message ? ` (${message})` : ''}` };
 }
 
+/** One token's limits, read with the smallest model call: whether it works at all, and how much is left */
+export async function probeToken(token: string): Promise<Omit<PlanLimits, 'key' | 'label' | 'configured' | 'checkedAt'>> {
+  return probe(token);
+}
+
 /** Both plans' limits: from the cache when it is under CACHE_MS old, unless `refresh` */
 export async function claudeLimits(refresh = false): Promise<{ plans: PlanLimits[]; cachedAt: string; fresh: boolean }> {
   if (!refresh && cache && Date.now() - cache.at < CACHE_MS) {

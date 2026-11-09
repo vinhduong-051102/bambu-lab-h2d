@@ -55,6 +55,9 @@ class ClaudeTokensTest(unittest.TestCase):
         try:
             self.assertEqual(worker.claude_tokens(self.dir), ["one", "vault-two"])
             self.assertNotIn("OTHER", os.environ)
+            # Dropped for the KeyVault: the environment's goes too
+            tokens.write_text(json.dumps({"CLAUDE_CODE_OAUTH_TOKEN": "vault-one", "CLAUDE_CODE_OAUTH_TOKEN_FALLBACK": ""}), encoding="utf-8")
+            self.assertEqual(worker.claude_tokens(self.dir), ["vault-one"])
         finally:
             worker.TOKENS_FILE = saved
 

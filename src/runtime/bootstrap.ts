@@ -60,8 +60,11 @@ export async function startGateway(): Promise<StartedGateway> {
 
   setRuntime({ printerService, printerManager });
 
-  // Claude tokens fetched from the KeyVault win over the ones in .env
-  await applyVaultTokens().catch((err) => logger.warn({ err }, 'Could not read the Claude tokens fetched from the KeyVault'));
+  // Claude tokens fetched from the KeyVault win over the ones in .env; read again now and then, for the ones the CLI
+  // (scripts/keyvault.ts) fetched
+  const readVaultTokens = () => applyVaultTokens().catch((err) => logger.warn({ err }, 'Could not read the Claude tokens fetched from the KeyVault'));
+  await readVaultTokens();
+  const vaultTokens = setInterval(readVaultTokens, 30_000);
 
   // Print history: a record per print, with the camera's photo when it ends
   const printRecorder = new PrintRecorder(new PrintJournal(path.resolve(env.PRINT_HISTORY_DIR)), stateStore, cameraService);
@@ -122,6 +125,7 @@ Subscribed:
     printerManager,
     async stop() {
       clearInterval(cadFollowUp);
+      clearInterval(vaultTokens);
       printRecorder.stop();
       cameraService.stop();
       stateStore.destroy();

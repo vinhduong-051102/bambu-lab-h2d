@@ -17,6 +17,7 @@ import { AiUsageCard } from './system/AiUsageCard';
 import { ClaudeLimitsCard } from './system/ClaudeLimitsCard';
 import { ConsoleCard } from './system/ConsoleCard';
 import { DiagnosticsCard } from './system/DiagnosticsCard';
+import { KeyVaultCard } from './system/KeyVaultCard';
 import { ApiModal, CapabilitiesModal } from './system/InfoModals';
 import { TasksButton } from './system/TasksPanel';
 
@@ -208,7 +209,7 @@ export function Shell() {
     {
       key: 'system',
       label: '🛠️ Hệ thống',
-      children: grid([<ClaudeLimitsCard key="claude" />, {}], [<AiUsageCard key="ai-usage" />, {}], [<ConsoleCard key="console" />, {}], [<DiagnosticsCard key="diag" />, {}]),
+      children: grid([<ClaudeLimitsCard key="claude" />, {}], [<KeyVaultCard key="keyvault" />, {}], [<AiUsageCard key="ai-usage" />, {}], [<ConsoleCard key="console" />, {}], [<DiagnosticsCard key="diag" />, {}]),
     },
   ].filter((p) => p !== false);
 

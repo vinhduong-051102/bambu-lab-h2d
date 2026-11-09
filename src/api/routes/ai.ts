@@ -3,7 +3,6 @@ import { env } from '../../config/env';
 import { availablePlans, defaultPlan, isAiPlan, planProblem, setDefaultPlan } from '../../domain/ai/aiPlan';
 import { aiUsage } from '../../domain/ai/aiUsage';
 import { claudeLimits } from '../../domain/ai/claudeLimits';
-import { fetchFromVault, saveVaultConfig, VaultError, vaultStatusWithKeys } from '../../domain/ai/keyVault';
 import { handler, json, readJsonBody } from '../http';
 
 /**
@@ -38,40 +37,4 @@ export const putAiPlan = handler(async ({ request }) => {
   if (problem) return json({ success: false, error: 'PLAN_NOT_CONFIGURED', message: problem }, 400);
   await setDefaultPlan(plan);
   return json({ success: true, plan, plans: availablePlans() });
-});
-
-// GET /api/ai/vault - Whether the Claude tokens can be fetched from the KeyVault, its server and the key each plan takes,
-// when each was last fetched, and the keys the KeyVault grants the gateway
-export const getAiVault = handler(async () => json({ success: true, ...(await vaultStatusWithKeys()) }));
-
-// PUT /api/ai/vault/config - {server, primary, fallback}: the KeyVault and each plan's key (name or id); empty: from .env
-export const putAiVaultConfig = handler(async ({ request }) => {
-  const body = (await readJsonBody(request).catch(() => null)) as Record<string, unknown> | null;
-  const field = (name: string) => (typeof body?.[name] === 'string' ? (body[name] as string) : null);
-  const [server, primary, fallback] = [field('server'), field('primary'), field('fallback')];
-  if (server === null || primary === null || fallback === null) {
-    return json({ success: false, error: 'INVALID_PAYLOAD', message: 'Cần server, primary và fallback (chuỗi, để trống: lấy từ .env).' }, 400);
-  }
-  try {
-    await saveVaultConfig({ server, primary, fallback });
-  } catch (err) {
-    if (err instanceof VaultError) return json({ success: false, error: 'INVALID_PAYLOAD', message: err.message }, 400);
-    throw err;
-  }
-  return json({ success: true, ...(await vaultStatusWithKeys()) });
-});
-
-// POST /api/ai/vault/fetch - {plan: "primary" | "fallback", otp}: fetches that plan's token from the KeyVault with a
-// one-time code from Google Authenticator and puts it to use at once (the workers read it before each run)
-export const postAiVaultFetch = handler(async ({ request }) => {
-  const body = (await readJsonBody(request).catch(() => null)) as { plan?: unknown; otp?: unknown } | null;
-  if ((body?.plan !== 'primary' && body?.plan !== 'fallback') || typeof body?.otp !== 'string') {
-    return json({ success: false, error: 'INVALID_PAYLOAD', message: 'Cần plan (primary hoặc fallback) và otp.' }, 400);
-  }
-  try {
-    return json({ success: true, plan: body.plan, ...(await fetchFromVault(body.plan, body.otp)) });
-  } catch (err) {
-    if (err instanceof VaultError) return json({ success: false, error: 'VAULT_FETCH_FAILED', message: err.message }, err.status);
-    throw err;
-  }
 });

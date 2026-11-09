@@ -141,7 +141,7 @@ STUDIO_IMPORT_DIR=
 # Claude: subscription token(s) or API key, and the model per feature
 CLAUDE_CODE_OAUTH_TOKEN=
 CLAUDE_CODE_OAUTH_TOKEN_FALLBACK=   # used once the first subscription hits its limit, or alone when picked (Hệ thống → Gói Claude)
-# KV_SERVER=...  KV_KEY_PRIMARY=...  KV_KEY_FALLBACK=...   # or fetch both from a KeyVault with an OTP (docs/keyvault.md)
+# KV_SERVER=http://100.112.133.34:8000   # or fetch both from a KeyVault with an OTP: Hệ thống → KeyVault (docs/keyvault.md)
 ANTHROPIC_API_KEY=
 STUDIO_AI_MODEL=claude-opus-5-5
 TIMELAPSE_AI_MODEL=claude-opus-5-5

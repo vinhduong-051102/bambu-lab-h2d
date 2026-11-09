@@ -22,12 +22,13 @@ for var in STUDIO_AI_URL STUDIO_AI_TOKEN STUDIO_AI_MODEL CLAUDE_CODE_OAUTH_TOKEN
     eval "export $var"
   fi
 done
-# Tokens fetched from the KeyVault on the dashboard (mounted from data/secrets/claude) win over the container's
+# Tokens fetched from the KeyVault on the dashboard (mounted from data/secrets/claude) win over the container's;
+# an empty one drops the container's
 tokens_file="${CLAUDE_TOKENS_FILE:-/run/claude/tokens.json}"
 if [ -r "$tokens_file" ] && command -v jq >/dev/null 2>&1; then
   for var in CLAUDE_CODE_OAUTH_TOKEN CLAUDE_CODE_OAUTH_TOKEN_FALLBACK; do
-    value=$(jq -r --arg name "$var" '.[$name] // empty' "$tokens_file" 2>/dev/null)
-    if [ -n "$value" ]; then
+    if jq -e --arg name "$var" '.[$name] | type == "string"' "$tokens_file" >/dev/null 2>&1; then
+      value=$(jq -r --arg name "$var" '.[$name]' "$tokens_file")
       eval "$var=\$value"
       eval "export $var"
     fi

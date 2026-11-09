@@ -400,7 +400,8 @@ PLAN_TOKENS = {"primary": "CLAUDE_CODE_OAUTH_TOKEN", "fallback": "CLAUDE_CODE_OA
 
 
 # Tokens fetched from the KeyVault on the dashboard (src/domain/ai/keyVault.ts), mounted from data/secrets/claude:
-# they win over the container's environment and are read again before each run, so a new one is used at once
+# they win over the container's environment and are read again before each run, so a new one is used at once; an
+# empty one drops the environment's ("Bỏ các mục không từ KeyVault")
 TOKENS_FILE = Path(os.environ.get("CLAUDE_TOKENS_FILE", "/run/claude/tokens.json"))
 
 
@@ -410,7 +411,7 @@ def load_vault_tokens():
     except (OSError, ValueError):
         return
     for name in PLAN_TOKENS.values():
-        if isinstance(tokens.get(name), str) and tokens[name].strip():
+        if isinstance(tokens.get(name), str):
             os.environ[name] = tokens[name].strip()
 
 
