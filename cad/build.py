@@ -22,6 +22,13 @@ plates side by side, model.3mf the same with each part on its own plate for Bamb
 `mechanism` makes of metal (steel shafts, brass pins…), bought instead. With several plates, plates/plate-<n>.3mf
 holds each plate on its own (what is sent to Studio). `print_layout = "manual"` keeps the model's
 own `result` instead.
+
+A model with a `circuit` is shown with its printed parts see-through (see_through): model.glb, the CAD Viewer's
+document and the renders of the assembled model draw the case at SEE_THROUGH opacity, so the modules and wires inside
+it show; STL, STEP and 3MF keep the colours as the model gives them. Its two halves are written on their own too
+(split_views), in place and opaque: electronics.glb/.step/.png (every part not printed: modules, wires, bought
+boards) and case.glb/.step/.png (the printed parts), each a document of its own for the CAD Viewer
+(report.json's engine.views: {"all", "electronics", "case"} → document id).
 """
 
 import contextlib
@@ -221,6 +228,102 @@ def hand_over(shape, out, what):
     return model(shape, name=document_name(out, what))
 
 
+# With a circuit, the printed parts are drawn this opaque (alpha) in model.glb, the CAD Viewer and the renders, so the
+# modules and wires inside a closed case show through it; the printed files (STL, STEP, 3MF) keep their colours
+SEE_THROUGH = 0.35
+# cadgen's colour for a part that has none (document.DEFAULT_COLOR, linear 0.8), in sRGB
+UNCOLOURED = 0.906
+
+
+def is_printed(namespace, components):
+    """Whether a part (a leaf of the assembly, by its label) of a model with a `circuit` is printed: a component that
+    is not bought, or with no components every part that is not a module or a wire"""
+    circuit = namespace.get("circuit") or {}
+    electronics = set(circuit.get("parts") or {})
+    printed = set(components) - set(bought(namespace, components)) if components else None
+
+    def test(node):
+        label = str(getattr(node, "label", "") or "")
+        return not (printed is not None and label not in printed or label in electronics or label.startswith("wire_"))
+    return test
+
+
+def see_through(document, namespace, components, out):
+    """The document to show of a model with a `circuit`: a copy whose printed parts (is_printed) are see-through,
+    handed to the engine. The document itself when the model has no circuit"""
+    import copy
+
+    from build123d import Color
+
+    if document is None or not isinstance(namespace.get("circuit"), dict):
+        return document
+    printed = is_printed(namespace, components)
+    shape = copy.deepcopy(document.shape)
+    stack = [shape]
+    while stack:
+        node = stack.pop()
+        if node.children:
+            stack.extend(node.children)
+            continue
+        if not printed(node):
+            continue
+        r, g, b = tuple(node.color)[:3] if node.color is not None else (UNCOLOURED,) * 3
+        node.color = Color(r, g, b, SEE_THROUGH)
+    return hand_over(shape, out, "view")
+
+
+def prune(node, keep):
+    """Drops the leaves `keep` refuses from an assembly tree, and the sub-assemblies left empty; False when nothing of
+    `node` is kept. Each node keeps its place (reattaching children rebuilds a compound without its location)"""
+    if not node.children:
+        return bool(keep(node))
+    kept = [child for child in list(node.children) if prune(child, keep)]
+    location = node.location
+    node.children = kept
+    node.location = location
+    return bool(kept)
+
+
+# The two halves of a model with a circuit, each on its own: (name, which parts) - "electronics" every part not
+# printed (the modules, their wires, bought boards), "case" the printed parts, both in their places, opaque
+SPLIT_VIEWS = (("electronics", False), ("case", True))
+SPLIT_FILES = [f"{name}.{ext}" for name, _ in SPLIT_VIEWS for ext in ("glb", "step", "png")]
+
+
+def split_views(document, namespace, components, out):
+    """{view: (document, files)} of a model with a `circuit`: its electronics and its case, each a document of its
+    own (job_<id>_electronics, job_<id>_case, for the CAD Viewer) written as <view>.glb, <view>.step and drawn as
+    <view>.png like preview.png. {} without a circuit, or for a model of one part"""
+    import copy
+    import tempfile
+
+    import cadgen
+    from build123d import export_stl
+
+    if document is None or not isinstance(namespace.get("circuit"), dict) or not document.shape.children:
+        return {}
+    printed = is_printed(namespace, components)
+    views = {}
+    for name, keep in SPLIT_VIEWS:
+        shape = copy.deepcopy(document.shape)
+        if not prune(shape, lambda node: printed(node) == keep):
+            continue
+        view = hand_over(shape, out, name)
+        cadgen.export(view, out / f"{name}.glb", progress=False)
+        cadgen.export(view, out / f"{name}.step", progress=False)
+        box = shape.bounding_box()
+        size = (box.size.X, box.size.Y, box.size.Z)
+        try:
+            snapshot_preview(view, size, out / f"{name}.png")
+        except Exception:  # noqa: BLE001 - the engine can't draw here: matplotlib, as for preview.png
+            with tempfile.TemporaryDirectory() as tmp:
+                stl = Path(tmp) / f"{name}.stl"
+                export_stl(shape, str(stl), tolerance=0.01, angular_tolerance=0.1)
+                render_preview(read_stl(stl), size, out / f"{name}.png")
+        views[name] = (view, [f"{name}.glb", f"{name}.step", f"{name}.png"])
+    return views
+
+
 def load(model):
     """(namespace, document) of a model file: with `@model` functions (text-to-cad), the engine builds the one
     `MODEL` names, else the last one the file defines (an assembly comes after the parts it calls); a file with none
@@ -398,6 +501,12 @@ def bought(namespace, components):
     if unknown:
         raise ValueError(f"`not_printed` names parts that are not components: {unknown}.")
     out = {n: "not_printed" for n in named}
+    # The circuit's modules and its wires are bought and wired, not printed
+    circuit = namespace.get("circuit")
+    if isinstance(circuit, dict):
+        for name in components:
+            if name not in out and (name in (circuit.get("parts") or {}) or name.startswith("wire_")):
+                out[name] = "electronics"
     parts = (namespace.get("mechanism") or {}).get("parts") or {}
     for name, part in parts.items():
         material = str((part or {}).get("material") or "").lower() if isinstance(part, dict) else ""
@@ -440,6 +549,64 @@ def lay_out(namespace, components, out):
     return Compound(children=placed), report
 
 
+def overlap(a, b):
+    """Volume (mm³) two shapes share, 0 when their boxes don't meet"""
+    ba, bb = a.bounding_box(), b.bounding_box()
+    lo_a, hi_a, lo_b, hi_b = (tuple(v) for v in (ba.min, ba.max, bb.min, bb.max))
+    if any(hi_a[k] < lo_b[k] or hi_b[k] < lo_a[k] for k in range(3)):
+        return 0.0
+    try:
+        common = a.intersect(b)
+    except Exception:  # noqa: BLE001 - OCCT gives up on some pairs; they are not reported
+        return 0.0
+    return sum(s.volume for s in common.solids()) if common is not None else 0.0
+
+
+def check_circuit(namespace, document, components, out):
+    """The model's `circuit` (circuit.py): checked and simulated, the diagram drawn, and how its modules sit in the
+    case: a module or a wire running into a printed part, a port the case covers. (report["circuit"], warnings,
+    files)"""
+    import circuit as circuit_check
+    from electronics.geometry import port_probe
+    from electronics import catalog
+
+    circuit = namespace["circuit"]
+    world = {str(getattr(p, "label", "") or ""): p for p in world_parts(document.shape)} if document is not None else {}
+    placed = {name: world[name] for name in (circuit.get("parts") or {}) if name in world}
+    result = circuit_check.analyse(circuit, placed, out)
+    warnings = circuit_check.summary_warnings(result)
+
+    skipped = bought(namespace, components) if components else {}
+    printed = {name: world.get(name, shape) for name, shape in components.items() if name not in skipped}
+    wires = {name: shape for name, shape in world.items() if name.startswith("wire_")}
+    fits = []
+    internal = set(circuit.get("internal_ports") or [])
+    for name, shape in {**placed, **wires}.items():
+        for case_name, case in printed.items():
+            volume = overlap(shape, case)
+            if volume > 1.0:
+                what = "Dây" if name.startswith("wire_") else "Module"
+                fits.append(f"{what} {name} lấn vào {case_name} {volume:.0f} mm³.")
+        if name in placed:
+            spec = catalog.get(circuit["parts"][name])
+            for port, info in spec["ports"].items():
+                if not info.get("access") or f"{name}.{port}" in internal:
+                    continue
+                probe = port_probe(shape, port, circuit)
+                blocked = [case_name for case_name, case in printed.items() if overlap(probe, case) > 1.0]
+                if blocked:
+                    fits.append(f"Cổng {port} của {name} bị {', '.join(blocked)} che: khoét lỗ "
+                                f"(electronics.port_cutout) hoặc ghi \"{name}.{port}\" vào circuit['internal_ports'].")
+    result["fit"] = fits
+    (out / "circuit.json").write_text(json.dumps(result, indent=2, ensure_ascii=False))
+    warnings += [f"Lắp ráp: {text}" for text in fits]
+    counts = {level: sum(1 for e in result["erc"] if e["level"] == level) for level in ("error", "warning", "info")}
+    summary = {"erc": counts, "fit": len(fits), "simulated": result["simulation"]["ok"],
+               "battery_hours": {p: b["hours"] for p, b in result["simulation"]["battery"].items()},
+               "placed": sorted(placed), "files": ["circuit.json", *result["files"]]}
+    return summary, warnings, summary["files"]
+
+
 def build(model, out):
     from build123d import Compound, Shape, export_stl
 
@@ -466,8 +633,9 @@ def build(model, out):
         components = read_components(namespace, [])
         if assembled is None:
             assembled = hand_over(labelled(components), out, "assembly")
+        shown = see_through(assembled, namespace, components, out)
         assembly_files = write_components(components, namespace.get("mechanism"), out, False,
-                                          namespace.get("assembly_steps"), assembled)
+                                          namespace.get("assembly_steps"), shown)
         shape, layout = lay_out(namespace, components, out)
     elif shape is None and isinstance(namespace.get("components"), dict):
         # An assembly with no separate print layout: printed as it stands
@@ -507,14 +675,20 @@ def build(model, out):
     # The STL for the slicer finer than cadgen's display mesh; STEP and GLB by cadgen, with names, colours and materials
     export_stl(shape, str(stl), tolerance=0.01, angular_tolerance=0.1)
     cadgen.export(printed, step, progress=False)
-    # The GLB is the model as designed (an assembly assembled, with its motions as clips), for the 3D view
-    cadgen.export(assembled or printed, glb, progress=False)
+    if not layout:
+        components = read_components(namespace, solids)
+        shown = see_through(assembled or printed, namespace, components, out)
+    # The GLB is the model as designed (an assembly assembled, with its motions as clips), for the 3D view; with a
+    # circuit its printed parts see-through (see_through), the document the CAD Viewer shows too
+    cadgen.export(shown, glb, progress=False)
+    # With a circuit, its electronics and its case each on their own as well (split_views)
+    views = split_views(assembled if layout else assembled or printed, namespace, components, out)
     triangles = read_stl(stl)
     mesh = mesh_check(triangles)
     if not mesh["watertight"]:
         warnings.append(f"The STL mesh is not watertight ({mesh['open_edges']} open, "
                         f"{mesh['non_manifold_edges']} non-manifold edges).")
-    renderer = draw_preview(printed, shape, size, preview, stl)
+    renderer = draw_preview(printed if layout else shown, shape, size, preview, stl)
     if renderer != "cadgen":
         warnings.append("cadgen could not draw the preview here (no X display?): drawn by matplotlib instead.")
     files = ["model.stl", "model.step", "model.glb", "preview.png"]
@@ -524,12 +698,22 @@ def build(model, out):
             warnings.append("`result` is ignored: the print layout is made from the components "
                             '(print_layout = "manual" keeps it).')
     else:
-        components = read_components(namespace, solids)
         if components:
             files += write_components(components, namespace.get("mechanism"), out, namespace.get("components") is None,
-                                      namespace.get("assembly_steps"), assembled)
+                                      namespace.get("assembly_steps"), assembled and shown)
         elif namespace.get("mechanism") is not None:
             warnings.append("`mechanism` is ignored: a single part has nothing to move against (make an assembly).")
+
+    electronics = None
+    if namespace.get("circuit") is not None:
+        electronics, circuit_warnings, circuit_files = check_circuit(namespace, document, components or {}, out)
+        warnings += circuit_warnings
+        files += circuit_files
+    for _, view_files in views.values():
+        files += view_files
+    # The documents the CAD Viewer opens: "all" the model as shown, and with a circuit its two halves
+    document_id = (shown if isinstance(namespace.get("circuit"), dict) else document or printed).id
+    shown_views = {"all": document_id, **{name: view.id for name, (view, _) in views.items()}}
 
     return {
         "size_mm": [round(v, 2) for v in size],
@@ -541,9 +725,10 @@ def build(model, out):
         "warnings": warnings,
         "components": list(components),
         "files": files,
-        "engine": {"cadgen": cadgen.__version__, "document": (document or printed).id,
+        "engine": {"cadgen": cadgen.__version__, "document": document_id, "views": shown_views,
                    "format": "model" if document is not None else "result", "preview": renderer},
         **({"print_layout": layout} if layout else {}),
+        **({"circuit": electronics} if electronics else {}),
     }
 
 
@@ -565,7 +750,8 @@ def main():
     model = Path(sys.argv[1]).resolve()
     out = Path(sys.argv[2]).resolve() if len(sys.argv) > 2 else model.parent / "out"
     out.mkdir(parents=True, exist_ok=True)
-    for stale in ("model.stl", "model.step", "model.glb", "preview.png", "report.json", "assembly.json", "assembly.png"):
+    for stale in ("model.stl", "model.step", "model.glb", "preview.png", "report.json", "assembly.json", "assembly.png",
+                  "circuit.json", "schematic.svg", "schematic.png", "circuit-avg.cir", "circuit-peak.cir", *SPLIT_FILES):
         (out / stale).unlink(missing_ok=True)
     # A print layout's 3MF, not a coloured figure's (mesh3d writes those)
     if (out / "model.3mf").exists() and b"build.py" in zipfile.ZipFile(out / "model.3mf").read("3D/3dmodel.model")[:600]:

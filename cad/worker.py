@@ -12,8 +12,10 @@ request.md, this worker writes model.py (through Claude), out/ (through build.py
                                cadgen.eng_drawing), answered with drawing.py's report
   POST /jobs/<id>/dfam         DfAM check of the job's out/model.stl, out/dfam.json (dfam.py, text-to-cad's
                                dfam-check), answered with it
-  POST /jobs/<id>/viewer       A link to text-to-cad's CAD Viewer page of the job's model: {"path": "/<document>?token=..."},
-                               the model built again first when the engine no longer holds it (a container restart)
+  POST /jobs/<id>/viewer       {"view"?: "all" | "electronics" | "case"}: a link to text-to-cad's CAD Viewer page of the
+                               job's model, or with a circuit its electronics or its case alone: {"path":
+                               "/<document>?token=..."}, the model built again first when the engine no longer holds
+                               it (a container restart)
   POST /jobs/<id>/cancel       Stops the job's Claude run
 
 The CAD Viewer itself is cadgen's engine, which serves only loopback: VIEWER_PORT forwards to it, for the gateway's
@@ -89,6 +91,21 @@ RESULT_SCHEMA = {
         },
         "warnings": {"type": "array", "items": {"type": "string"},
                      "description": "Điều người dùng cần kiểm tra trước khi in"},
+        "electronics": {
+            "type": "object",
+            "description": "Chỉ khi mô hình có mạch điện tử (circuit): cách đấu và lưu ý",
+            "properties": {
+                "summary": {"type": "string", "description": "Mạch gồm những gì, cấp nguồn thế nào, thời gian pin"},
+                "wiring": {"type": "array", "items": {"type": "string"},
+                           "description": "Từng bước đấu dây, theo các net"},
+                "extra_parts": {"type": "array", "items": {"type": "string"},
+                                "description": "Linh kiện cần thêm mà mô phỏng không có (điện trở chia áp, tụ…), kèm giá trị"},
+                "safety": {"type": "array", "items": {"type": "string"},
+                           "description": "Lưu ý an toàn (pin Li-ion, dòng lớn, nhiệt)"},
+            },
+            "required": ["summary", "wiring", "extra_parts", "safety"],
+            "additionalProperties": False,
+        },
     },
     "required": ["title", "summary", "assumptions", "parameters", "warnings"],
     "additionalProperties": False,
@@ -175,10 +192,20 @@ def run_script(directory, script, args, timeout, what, env=None):
         return {"ok": False, "error": f"{script} không trả kết quả: {done.stderr.strip()[-500:]}"}
 
 
-def viewer_link(directory):
-    """{"ok", "path"} of the CAD Viewer page of a job's built model (the document report.json names), or {"ok": false,
-    "error"}. The engine keeps documents in memory: after a restart the model is built again (`python model.py`)"""
-    document = ((read_json(directory / "out" / "report.json") or {}).get("engine") or {}).get("document")
+# What POST /jobs/<id>/viewer may open: the whole model, or with a circuit its electronics or its case alone
+VIEWS = ("all", "electronics", "case")
+
+
+def viewer_link(directory, view="all"):
+    """{"ok", "path"} of the CAD Viewer page of a job's built model, or {"ok": false, "error"}: the document
+    report.json names for `view` (engine.views, build.py split_views; "all" falls back to engine.document for a model
+    built before them). The engine keeps documents in memory: after a restart the model is built again (build.py,
+    which hands over every view's document again, under the same ids)"""
+    engine = (read_json(directory / "out" / "report.json") or {}).get("engine") or {}
+    document = (engine.get("views") or {}).get(view) or (engine.get("document") if view == "all" else None)
+    if not document and view != "all" and engine.get("document"):
+        return {"ok": False, "error": "Mô hình này chưa có phần mạch điện và phần vỏ riêng (không có mạch điện, hoặc "
+                                      "dựng trước khi có): dựng lại mô hình để tách."}
     if not document:
         return {"ok": False, "error": "Mô hình dựng trước khi có text-to-cad: dựng lại để xem trong CAD Viewer."}
 
@@ -660,7 +687,10 @@ class Handler(BaseHTTPRequestHandler):
             with lock:
                 if job_id in running:
                     return self.reply(409, {"ok": False, "error": "JOB_RUNNING", "message": "Job đang chạy."})
-            return self.reply(200, viewer_link(directory))
+            view = str(body.get("view") or "all")
+            if view not in VIEWS:
+                return self.reply(400, {"ok": False, "error": "BAD_VIEW", "message": f"view là một trong {', '.join(VIEWS)}."})
+            return self.reply(200, viewer_link(directory, view))
 
         if action in ("drawing", "dfam"):
             with lock:

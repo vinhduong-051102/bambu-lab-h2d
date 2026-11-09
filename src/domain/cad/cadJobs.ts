@@ -210,11 +210,19 @@ export interface CadJob extends CadJobMeta {
     glb: boolean;
     /** Its engineering drawing (POST /api/cad/jobs/:id/drawing) */
     drawing: boolean;
+    /** The wiring diagram of its circuit (schematic.svg) */
+    schematic: boolean;
+    /** With a circuit, its electronics alone (electronics.glb/.step/.png: the modules, wires and bought boards) */
+    electronics: boolean;
+    /** With a circuit, its printed parts alone (case.glb/.step/.png) */
+    case: boolean;
   };
   /** Files Claude made with text-to-cad's other skills (out/exports/: a drawing, a DXF, a URDF…), by name */
   exports: string[];
   /** Its DfAM check (POST /api/cad/jobs/:id/dfam), as last run */
   dfam: CadDfam | null;
+  /** Its circuit as the last build checked and simulated it (cad/circuit.py, out/circuit.json), when it has one */
+  circuit: CadCircuit | null;
 }
 
 /** text-to-cad's dfam-check of out/model.stl against its FDM limits (cad/dfam.py), without the raw measurements */
@@ -234,6 +242,33 @@ export interface CadDrawingOutcome {
   file?: string;
   sheets?: number;
   notices?: string[];
+}
+
+/** A model's circuit (cad/circuit.py): its modules and nets, the rules it breaks, what ngspice found, how it fits */
+export interface CadCircuit {
+  /** pins (its wired pins), role (what Claude says it does here) and notes are missing in jobs built before them */
+  parts: Record<string, { key: string; name: string; kind: string; placed: boolean; pins?: string[]; role?: string; notes?: string }>;
+  nets: Record<string, { pins: string[]; kind: 'gnd' | 'supply' | 'power' | 'signal'; colour: string; length_mm: number | null }>;
+  bom: { name: string; key: string; count?: number; parts?: string[]; length_mm?: number; note?: string }[];
+  simulation: {
+    ok: boolean;
+    error: string | null;
+    battery: Record<string, { mah: number; cells: number; current_a: number; hours: number }>;
+    cases: Record<
+      'avg' | 'peak',
+      {
+        pins: Record<string, number>;
+        regulators: Record<string, { vin: number; vout: number; iout: number; loss_w: number }>;
+        batteries: Record<string, { current_a: number }>;
+      }
+    >;
+  };
+  erc: { level: 'error' | 'warning' | 'info'; text: string }[];
+  fit: string[];
+  /** Where graphviz put each part's centre, in points from the top left: the interactive diagram's start ({} before it) */
+  layout: Record<string, [number, number]>;
+  /** Each net's wires as pairs of pins, the way they are routed in the model */
+  edges: Record<string, [string, string][]>;
 }
 
 /** Files of a job the API serves, by name, with where they are in its folder */
@@ -256,6 +291,16 @@ export const CAD_FILES = {
   'assembly.png': { path: 'out/assembly.png', type: 'image/png' },
   'guide.json': { path: 'out/guide/guide.json', type: 'application/json; charset=utf-8' },
   'assembly.mp4': { path: 'out/guide/assembly.mp4', type: 'video/mp4' },
+  'circuit.json': { path: 'out/circuit.json', type: 'application/json; charset=utf-8' },
+  'schematic.svg': { path: 'out/schematic.svg', type: 'image/svg+xml' },
+  'schematic.png': { path: 'out/schematic.png', type: 'image/png' },
+  // A model with a circuit split in two (cad/build.py split_views): its electronics, its printed case
+  'electronics.glb': { path: 'out/electronics.glb', type: 'model/gltf-binary' },
+  'electronics.step': { path: 'out/electronics.step', type: 'model/step' },
+  'electronics.png': { path: 'out/electronics.png', type: 'image/png' },
+  'case.glb': { path: 'out/case.glb', type: 'model/gltf-binary' },
+  'case.step': { path: 'out/case.step', type: 'model/step' },
+  'case.png': { path: 'out/case.png', type: 'image/png' },
 } as const;
 export type CadFileName = keyof typeof CAD_FILES;
 
@@ -371,11 +416,18 @@ export class CadJobStore {
     const meta = await readJson<CadJobMeta>(path.join(dir, 'job.json'));
     if (!meta) return null;
     const status = await readJson<WorkerStatus>(path.join(dir, 'status.json'));
-    const names = ['model.py', 'model.stl', 'model.step', 'preview.png', 'concept.png', 'model.3mf', 'fix.py', 'views.png', 'sides.png', 'shaped.png', 'scene.blend', 'assembly.png', 'guide.json', 'model.glb', 'drawing.pdf'] as const;
-    const [code, stl, step, preview, concept, threemf, fix, views, sides, shaped, blend, assembly, guide, glb, drawing] = await Promise.all(
+    const names = ['model.py', 'model.stl', 'model.step', 'preview.png', 'concept.png', 'model.3mf', 'fix.py', 'views.png', 'sides.png', 'shaped.png', 'scene.blend', 'assembly.png', 'guide.json', 'model.glb', 'drawing.pdf', 'schematic.svg', 'electronics.glb', 'case.glb'] as const;
+    const [code, stl, step, preview, concept, threemf, fix, views, sides, shaped, blend, assembly, guide, glb, drawing, schematic, electronics, caseGlb] = await Promise.all(
       names.map((name) => exists(path.join(dir, CAD_FILES[name].path)))
     );
     const dfam = await readJson<CadDfam & { measure?: unknown; orientations?: unknown }>(path.join(dir, CAD_FILES['dfam.json'].path));
+    const circuit = await readJson<
+      Omit<CadCircuit, 'layout' | 'edges'> & {
+        layout?: CadCircuit['layout'];
+        wires?: Record<string, { branches?: { from: string; to: string }[] }>;
+        files?: unknown;
+      }
+    >(path.join(dir, CAD_FILES['circuit.json'].path));
     return {
       ...meta,
       title: status?.result?.title || meta.title,
@@ -395,9 +447,28 @@ export class CadJobStore {
       result: status?.result ?? null,
       report: status?.report ?? null,
       // A fix's source/ is the version before it, already shown as such: only a figure Hunyuan3D shaped has its own
-      files: { code, stl, step, preview, concept, threemf, fix, views, sides, shaped: shaped && status?.maker === 'hunyuan', blend, assembly, guide, glb, drawing },
+      files: { code, stl, step, preview, concept, threemf, fix, views, sides, shaped: shaped && status?.maker === 'hunyuan', blend, assembly, guide, glb, drawing, schematic, electronics, case: caseGlb },
       exports: await this.exports(dir),
       dfam: dfam && { ok: dfam.ok, error: dfam.error, process: dfam.process, source: dfam.source, partial: dfam.partial, findings: dfam.findings },
+      // The wires' routes stay in circuit.json: the card shows each net's length, and which pins each wire joins
+      circuit: circuit && {
+        parts: circuit.parts,
+        nets: circuit.nets,
+        bom: circuit.bom,
+        simulation: circuit.simulation,
+        erc: circuit.erc,
+        fit: circuit.fit ?? [],
+        layout: circuit.layout ?? {},
+        edges: Object.fromEntries(
+          Object.entries(circuit.nets).map(([net, n]) => {
+            const branches = circuit.wires?.[net]?.branches;
+            const pairs: [string, string][] = branches?.length
+              ? branches.map((b) => [b.from, b.to])
+              : n.pins.slice(1).map((pin, i) => [n.pins[i], pin]);
+            return [net, pairs];
+          })
+        ),
+      },
       guide: status?.guide ?? null,
       guide_task: getTask(guideTaskKey(id)),
       drawing_task: getTask(drawingTaskKey(id)),
@@ -675,9 +746,14 @@ export interface CadWorkerApi {
   drawing(id: string, title: string, tuning?: Tuning): Promise<CadDrawingOutcome>;
   /** Runs the DfAM check of a built model (out/dfam.json) */
   dfam(id: string, tuning?: Tuning): Promise<CadDfam>;
-  /** A link to the CAD Viewer page of a built model: its path on the viewer's origin, with the engine's token */
-  viewer(id: string): Promise<CadViewerLink>;
+  /** A link to the CAD Viewer page of a built model (or, with a circuit, of its electronics or its case alone): its
+   * path on the viewer's origin, with the engine's token */
+  viewer(id: string, view?: CadViewerView): Promise<CadViewerLink>;
 }
+
+/** What the CAD Viewer opens of a model: all of it, or with a circuit its electronics or its printed case alone */
+export const CAD_VIEWER_VIEWS = ['all', 'electronics', 'case'] as const;
+export type CadViewerView = (typeof CAD_VIEWER_VIEWS)[number];
 
 /** The CAD Viewer page of a model (cad/worker.py viewer_link): `path` is "/<document>?token=..." */
 export interface CadViewerLink {
@@ -752,9 +828,9 @@ export class CadWorkerClient extends WorkerHttp implements CadWorkerApi {
     return this.call<CadDfam>('POST', `/jobs/${id}/dfam`, tuning, waitFor(tuning, 600));
   }
 
-  viewer(id: string) {
+  viewer(id: string, view: CadViewerView = 'all') {
     // A model the engine no longer holds is built again first (180 s at most)
-    return this.call<CadViewerLink>('POST', `/jobs/${id}/viewer`, {}, 200000);
+    return this.call<CadViewerLink>('POST', `/jobs/${id}/viewer`, { view }, 200000);
   }
 }
 

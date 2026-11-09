@@ -86,8 +86,9 @@ class FakeWorker implements CadWorkerApi {
     return { ok: true, file: 'drawing.pdf', sheets: 1, notices: [] };
   }
 
-  async viewer(id: string) {
-    return { ok: true, document: `doc-${id}`, path: `/doc-${id}?token=1.abc` };
+  async viewer(id: string, view = 'all') {
+    const document = view === 'all' ? `doc-${id}` : `doc-${id}-${view}`;
+    return { ok: true, document, path: `/${document}?token=1.abc` };
   }
 
   async dfam(id: string) {
@@ -473,6 +474,33 @@ describe('AI modelling API (/api/cad)', () => {
     expect(checked.measure).toBeUndefined();
   });
 
+  it('gives a circuit layout and the pins each wire joins, without the routes of the wires', async () => {
+    const { job } = (await create({ prompt: 'Hộp ESP32' })).json();
+    await worker.finish(job.id);
+    const circuit = {
+      parts: { bat: { key: 'holder_18650_2s', name: 'Hộp pin', kind: 'battery', placed: true, pins: ['+', '-'] } },
+      nets: {
+        VBAT: { pins: ['bat.+', 'sw.COM', 'buck.IN+'], kind: 'supply', colour: '#d62728', length_mm: 90 },
+        GND: { pins: ['bat.-', 'buck.IN-', 'mcu.GND'], kind: 'gnd', colour: '#1a1a1a', length_mm: null },
+      },
+      bom: [],
+      simulation: { ok: true, error: null, battery: {}, cases: {} },
+      erc: [],
+      fit: [],
+      layout: { bat: [40, 60] },
+      wires: { VBAT: { branches: [{ from: 'bat.+', to: 'sw.COM', points: [[0, 0, 0]] }, { from: 'bat.+', to: 'buck.IN+', points: [] }] } },
+    };
+    await fs.writeFile(path.join(jobsDir, job.id, 'out', 'circuit.json'), JSON.stringify(circuit));
+    const got = (await app.inject({ method: 'GET', url: `/api/cad/jobs/${job.id}` })).json().job.circuit;
+    expect(got.layout).toEqual({ bat: [40, 60] });
+    expect(got.edges).toEqual({
+      // As routed in the model, else one pin to the next
+      VBAT: [['bat.+', 'sw.COM'], ['bat.+', 'buck.IN+']],
+      GND: [['bat.-', 'buck.IN-'], ['buck.IN-', 'mcu.GND']],
+    });
+    expect(got.wires).toBeUndefined();
+  });
+
   it('gives the CAD Viewer link of a built model when the viewer port is set up', async () => {
     const { job } = (await create({ prompt: 'Hộp vuông cạnh 10 mm' })).json();
     await worker.finish(job.id);
@@ -484,6 +512,14 @@ describe('AI modelling API (/api/cad)', () => {
       const link = await app.inject({ method: 'POST', url: `/api/cad/jobs/${job.id}/viewer` });
       expect(link.statusCode).toBe(200);
       expect(link.json()).toMatchObject({ success: true, port: 3444, path: `/doc-${job.id}?token=1.abc` });
+      // With a circuit, its electronics or its case alone: in the body or the query
+      const electronics = await app.inject({ method: 'POST', url: `/api/cad/jobs/${job.id}/viewer`, payload: { view: 'electronics' } });
+      expect(electronics.json()).toMatchObject({ success: true, path: `/doc-${job.id}-electronics?token=1.abc` });
+      const shell = await app.inject({ method: 'POST', url: `/api/cad/jobs/${job.id}/viewer?view=case` });
+      expect(shell.json()).toMatchObject({ success: true, path: `/doc-${job.id}-case?token=1.abc` });
+      const bad = await app.inject({ method: 'POST', url: `/api/cad/jobs/${job.id}/viewer`, payload: { view: 'lid' } });
+      expect(bad.statusCode).toBe(400);
+      expect(bad.json().error).toBe('BAD_VIEW');
     } finally {
       env.CAD_VIEWER_PORT = undefined;
       env.CAD_VIEWER_UPSTREAM = undefined;

@@ -23,7 +23,7 @@ Claude runs on your Claude subscription through `CLAUDE_CODE_OAUTH_TOKEN` (from 
    ```bash
    docker compose -f docker-compose.cad.yml up -d --build
    ```
-   The image has Python 3.13, cadgen 0.8.4 (text-to-cad's engine, with build123d 0.13 and OpenCascade), Xvfb and Mesa for its snapshots, trimesh for the DfAM check, and Claude Code, about 2 GB. The engine keeps a warm worker per model script (`CADGEN_ENGINE_WORKERS=3`, ~0.6 GB each), so the container has 6 GB. The worker's scripts are mounted from `./cad`, so changes to them only need `docker compose -f docker-compose.cad.yml restart`. The worker listens on `127.0.0.1:3102` only.
+   The image has Python 3.13, cadgen 0.8.4 (text-to-cad's engine, with build123d 0.13 and OpenCascade), Xvfb and Mesa for its snapshots, trimesh for the DfAM check, ngspice and graphviz for circuits, and Claude Code, about 2 GB. The engine keeps a warm worker per model script (`CADGEN_ENGINE_WORKERS=3`, ~0.6 GB each), so the container has 6 GB. The worker's scripts are mounted from `./cad`, so changes to them only need `docker compose -f docker-compose.cad.yml restart`. The worker listens on `127.0.0.1:3102` only.
 2. Add to `.env`, then restart the gateway:
    ```env
    CLAUDE_CODE_OAUTH_TOKEN=<token from claude setup-token>
@@ -44,6 +44,51 @@ Claude runs on your Claude subscription through `CLAUDE_CODE_OAUTH_TOKEN` (from 
 - **🧪 DfAM** runs text-to-cad's `dfam-check` on what is printed (`cad/dfam.py`): watertight, wall thickness (ray cast, against FDM's 1.2 mm), overhangs and an estimate of the support, and an orientation with less support. Hole sizes, small features and bridges are not measured, and it says so.
 - Files Claude made with the other skills (a DXF, a URDF, its own drawing…) are listed on the card as downloads.
 - **✏️ Sửa** asks Claude to change the model ("dày thêm 1 mm", "bo tròn các góc"). The revision is a new job that starts from the previous code and brief, so the original stays.
+
+## Mạch điện tử
+
+Ask for the electronics with the model ("hộp điều khiển servo cho cánh tay robot, ESP32, pin 18650 2S, công tắc, sạc
+USB-C") and Claude designs both together: it picks off-the-shelf modules, wires them, builds the case around them and
+checks the circuit at every build, as it checks the shape. Custom PCBs and firmware are not part of it.
+
+- **Modules** (`cad/electronics/catalog.py`, `python -m electronics` in the container): ESP32-DevKitC, ESP32-C3
+  SuperMini, Arduino Nano, Raspberry Pi Pico, servos SG90 and MG996R, 18650 holders 1S/2S, TP4056 USB-C charger,
+  MT3608 boost, LM2596 and Mini-360 bucks, MTS-102 toggle switch, 5 mm LED, WS2812 ring, 0.96" I2C OLED, HC-SR04. Each
+  has its size, mounting holes, ports (USB, toggle, screen…), pins and electrical data. The sizes are those of the
+  common clones: measure the real module before a snug fit.
+- **In the model** (`cad/electronics.md`, Claude's guide; `cad/examples/electronics_box.py`): `module(key, name,
+  location)` places a module as a coloured part; `standoffs` / `cradle` hold it in the case; `port_cutout` opens
+  the case in front of a port; `wires(circuit, modules)` draws one wire per net (ground black, battery + red, power
+  orange-red, signals in colours), routed up, across and down. The model's `circuit` names the parts and their nets.
+  Modules and wires are left off the print by themselves, and show in the CAD Viewer and the GLB with the case:
+  with a `circuit`, the printed parts are drawn see-through (35 % opaque, `build.py`'s `see_through`) in
+  `model.glb`, the CAD Viewer's document and `assembly.png`, so what is inside a closed case shows; the STL, STEP
+  and 3MF keep the model's colours. Each half is also written on its own, in place and opaque (`split_views`):
+  `out/electronics.glb` / `.step` / `.png` (every part not printed: modules, wires, bought boards) and
+  `out/case.glb` / `.step` / `.png` (the printed parts), each a cadgen document of its own (`job_<id>_electronics`,
+  `job_<id>_case`; report.json `engine.views`), which `POST /api/cad/jobs/:id/viewer` opens with `{"view":
+  "electronics" | "case"}` (`"all"`, the default, is the whole model).
+- **At every build** (`cad/circuit.py`, from `build.py`): the rules (unpowered modules, missing ground, two outputs on
+  a net, a 5 V signal into a 3.3 V pin, a 3.3 V signal too low for a 5 V input…), then **ngspice** twice (battery at
+  its nominal voltage with the average loads; nearly empty with every load at its worst): the voltage at every power
+  pin, the converters' input, dropout, current and heat, GPIO currents, wire currents (from each wire's length and
+  gauge), the battery's current and run time. Then the fit: a module or wire running into a printed part, a port the
+  case covers. Problems go into the build's warnings (`Mạch: …`, `Lắp ráp: …`), so Claude fixes them; the details
+  into `out/circuit.json`, the wiring diagram (graphviz) into `out/schematic.svg` / `.png`, the netlists into
+  `out/circuit-avg.cir` / `circuit-peak.cir` (open them in ngspice or KiCad to go further).
+- **On the card**: **⚡ Mạch điện** shows what the check found, the wiring diagram (drawn on the page, below), the battery's run time, the
+  converters, every net with its voltage and wire length, what to buy, and Claude's notes on wiring it, the parts to
+  add that the simulation lacks (a divider, a level shifter) and safety; and the two halves drawn side by side
+  (**Chỉ mạch điện**, **Chỉ vỏ**), each with its GLB, STEP and **🧭 Xem riêng**. The **▾** beside **🧭 CAD Viewer**
+  opens **Toàn bộ / Chỉ mạch điện / Chỉ vỏ**. A model built before the split shows neither: build it again.
+- **The wiring diagram** (`src/ui/cad/CircuitDiagram.tsx`): each module a box with its wired pins, starting where
+  graphviz put it (circuit.json `layout`). Drag a module to move it (kept in that browser; **Xếp lại** puts them back);
+  hover a module for what it does in the circuit (the model's `circuit["roles"]`, else what its kind is for), each
+  pin's net and voltage, a converter's in/out and heat; hover a wire to pick out its whole net, the others dimmed.
+  **SVG** downloads graphviz's picture.
+
+The simulation is DC (an operating point, no transients): a servo's start or a WS2812's PWM is taken as its worst
+current, not as it varies.
 
 ## Figures (Nhân vật / trang trí)
 
@@ -203,7 +248,7 @@ curl -s localhost:3000/api/cad/convert -F file=@bracket.step -F tolerance_mm=0.0
 The worker's Python tests (`cad/tests/`) run in the image, on the scripts of a checkout:
 
 ```bash
-docker run --rm -v "$PWD/cad:/opt/cad:ro" -e PYTHONDONTWRITEBYTECODE=1 -w /opt/cad bambu-lab-h2d/cad:latest   bash -c 'Xvfb :99 -nolisten tcp & sleep 1; python -m unittest discover -s tests -t .'
+docker run --rm -v "$PWD/cad:/opt/cad:ro" -e PYTHONDONTWRITEBYTECODE=1 -e PYTHONPATH=/opt/cad -w /opt/cad bambu-lab-h2d/cad:latest   bash -c 'Xvfb :99 -nolisten tcp & sleep 1; python -m unittest discover -s tests -t .'
 ```
 
 ## Hiệu chuẩn dung sai

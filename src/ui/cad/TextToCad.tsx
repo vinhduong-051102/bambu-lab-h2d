@@ -1,7 +1,7 @@
 'use client';
 
-import { CheckCircleFilled, CloseCircleFilled, DownloadOutlined, InfoCircleFilled, ReloadOutlined } from '@ant-design/icons';
-import { Alert, App, Button, Empty, Flex, Modal, Space, Spin, Typography } from 'antd';
+import { CheckCircleFilled, CloseCircleFilled, DownloadOutlined, DownOutlined, InfoCircleFilled, ReloadOutlined } from '@ant-design/icons';
+import { Alert, App, Button, Dropdown, Empty, Flex, Modal, Space, Spin, Typography } from 'antd';
 import { useEffect, useState } from 'react';
 import { fileUrl } from '../cad';
 import type { CadJob } from './CadJob';
@@ -156,14 +156,33 @@ export function DfamButton(props: { job: CadJob }) {
  * was opened from: the exact model (pick faces and edges, measure, section, explode), following every rebuild. The
  * tab is opened at the click, before the link comes back, so the browser does not take it for a pop-up
  */
-export function CadViewerButton({ job }: { job: CadJob }) {
+/** What the CAD Viewer opens of a model with a circuit (POST /api/cad/jobs/:id/viewer {view}, cad/build.py split_views) */
+export const VIEWER_VIEWS = [
+  { key: 'all', label: 'Toàn bộ', title: 'Cả mô hình: vỏ trong suốt, module và dây bên trong' },
+  { key: 'electronics', label: 'Chỉ mạch điện', title: 'Chỉ module, dây và mạch mua sẵn, đúng chỗ của chúng trong vỏ' },
+  { key: 'case', label: 'Chỉ vỏ', title: 'Chỉ các chi tiết in, không có linh kiện điện tử' },
+] as const;
+export type ViewerView = (typeof VIEWER_VIEWS)[number]['key'];
+
+/** Whether a job has its electronics and its case on their own (a model with a circuit, built since split_views) */
+export const hasSplitViews = (job: CadJob) => Boolean(job.files?.electronics || job.files?.case);
+
+/**
+ * "🧭 CAD Viewer": text-to-cad's CAD Viewer page of the model (`view`: all of it, or with a circuit its electronics or
+ * its case alone). On a model with a circuit and no `view` given, a menu beside it opens either half on its own.
+ */
+export function CadViewerButton({ job, view, label }: { job: CadJob; view?: ViewerView; label?: string }) {
   const { message } = App.useApp();
-  const [opening, setOpening] = useState(false);
-  const open = async () => {
+  const [opening, setOpening] = useState<ViewerView | null>(null);
+  const open = async (which: ViewerView) => {
     const tab = window.open('', '_blank');
-    setOpening(true);
+    setOpening(which);
     try {
-      const res = await fetch(`/api/cad/jobs/${encodeURIComponent(job.id)}/viewer`, { method: 'POST' });
+      const res = await fetch(`/api/cad/jobs/${encodeURIComponent(job.id)}/viewer`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ view: which }),
+      });
       const data = await res.json().catch(() => null);
       if (!res.ok || !data?.success) {
         tab?.close();
@@ -174,13 +193,33 @@ export function CadViewerButton({ job }: { job: CadJob }) {
       if (tab) tab.location.href = url;
       else window.location.href = url;
     } finally {
-      setOpening(false);
+      setOpening(null);
     }
   };
+  const title = 'Mở trong CAD Viewer của text-to-cad: chọn mặt/cạnh, đo, cắt, tách rời; tự cập nhật khi mô hình dựng lại';
+  if (view || !hasSplitViews(job)) {
+    const which = view ?? 'all';
+    return (
+      <Button size="small" loading={opening === which} onClick={() => open(which)} title={view ? VIEWER_VIEWS.find((v) => v.key === view)?.title : title}>
+        {label ?? '🧭 CAD Viewer'}
+      </Button>
+    );
+  }
   return (
-    <Button size="small" loading={opening} onClick={open} title="Mở trong CAD Viewer của text-to-cad: chọn mặt/cạnh, đo, cắt, tách rời; tự cập nhật khi mô hình dựng lại">
-      🧭 CAD Viewer
-    </Button>
+    <Space.Compact size="small">
+      <Button size="small" loading={opening === 'all'} onClick={() => open('all')} title={title}>
+        🧭 CAD Viewer
+      </Button>
+      <Dropdown
+        trigger={['click']}
+        menu={{
+          items: VIEWER_VIEWS.map((v) => ({ key: v.key, label: v.label, title: v.title, disabled: v.key !== 'all' && !job.files?.[v.key] })),
+          onClick: ({ key }) => open(key as ViewerView),
+        }}
+      >
+        <Button size="small" icon={<DownOutlined />} loading={opening !== null && opening !== 'all'} title="Xem toàn bộ, chỉ mạch điện hoặc chỉ vỏ" />
+      </Dropdown>
+    </Space.Compact>
   );
 }
 

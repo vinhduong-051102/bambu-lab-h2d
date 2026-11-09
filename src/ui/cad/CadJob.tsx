@@ -23,7 +23,9 @@ import { deltaLabel } from '../../domain/filaments/colourMixing';
 import { fileUrl, formatDuration, formatProgress, formatSize, isBusy, jobSteps, modelName, ORIGINS, REVISE_PLACEHOLDERS, STATE_LABELS, STEP_LABELS, versionLabel } from '../cad';
 import { checkedSettings, settingsSummary, sortedChecks, statusCounts } from '../eng';
 import { formatPrintTime } from '../prints';
+import type { CadCircuit } from '../../domain/cad/cadJobs';
 import { AssemblyGuideButton } from './AssemblyGuide';
+import { CircuitPanel, type Electronics } from './Circuit';
 import { EngCheckButton } from './EngCheck';
 import { CadViewerButton, DfamButton, DrawingButton, ExportLinks } from './TextToCad';
 
@@ -60,6 +62,8 @@ export interface CadJob {
     assumptions?: string[];
     parameters?: { name: string; value: unknown; description: string }[];
     warnings?: string[];
+    /** Claude's notes on a model with a circuit: how to wire it, what to add, safety */
+    electronics?: Electronics;
   } | null;
   report?: {
     ok?: boolean;
@@ -94,6 +98,8 @@ export interface CadJob {
   } | null;
   /** Files Claude made with text-to-cad's other skills (out/exports/) */
   exports?: string[];
+  /** Its circuit as the last build checked and simulated it (cad/circuit.py) */
+  circuit?: CadCircuit | null;
 }
 
 type TaskState = { running: boolean; started_at: string; finished_at: string | null; error: string | null };
@@ -591,6 +597,7 @@ export function CadJobCard(props: {
             </Typography.Text>
           )}
           {job.report?.print_layout && <PrintPlates layout={job.report.print_layout} />}
+          {job.circuit && <CircuitPanel job={job} circuit={job.circuit} electronics={job.result?.electronics} />}
           {warnings.length > 0 && <Alert type="warning" title={warnings.map((w, i) => <div key={i}>⚠️ {w}</div>)} />}
           {!!job.report?.palette?.length && (
             <div className="cad-palette">

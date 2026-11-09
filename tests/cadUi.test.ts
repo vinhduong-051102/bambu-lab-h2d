@@ -5,6 +5,7 @@ import { formatDuration, formatSize, groupVersions, jobSteps, versionLabel } fro
 import { pastedImage } from '../src/ui/cad/CadCard';
 import { CadJobCard } from '../src/ui/cad/CadJob';
 import { CadFamily } from '../src/ui/cad/CadFamily';
+import { CircuitPanel } from '../src/ui/cad/Circuit';
 
 const renderJob = (job: any) => renderToStaticMarkup(createElement(CadJobCard, { job, now: Date.parse('2026-10-23T09:16:00Z') }));
 const button = (label: string) => `<span>${label}</span></button>`;
@@ -319,5 +320,77 @@ describe('A model and its versions', () => {
     const html = renderToStaticMarkup(createElement(CadFamily, { versions: [other], onAction: async () => {}, onRevise: async () => true }));
     expect(html).not.toContain('phiên bản:');
     expect(html).not.toContain('Trước ·');
+  });
+});
+
+describe('the circuit panel', () => {
+  const circuit = {
+    parts: { mcu: { key: 'esp32_devkitc', name: 'ESP32-DevKitC', kind: 'mcu', placed: true } },
+    nets: {},
+    bom: [],
+    simulation: { ok: true, error: null, battery: {}, cases: { avg: { pins: {}, regulators: {}, batteries: {} }, peak: { pins: {}, regulators: {}, batteries: {} } } },
+    // An error opens the panel, so its content renders
+    erc: [{ level: 'error' as const, text: 'mcu chưa có nguồn' }],
+    fit: [],
+    layout: {},
+    edges: {},
+  };
+  const built = { ...baseJob, state: 'done', step: null, finished_at: '2026-10-23T09:16:00.000Z', circuit };
+
+  it('shows the electronics and the case apart, each to download and to open alone', () => {
+    const html = renderToStaticMarkup(
+      createElement(CircuitPanel, { job: { ...built, files: { glb: true, electronics: true, case: true } } as any, circuit })
+    );
+    for (const half of ['electronics', 'case']) {
+      expect(html).toContain(`files/${half}.png`);
+      expect(html).toContain(`files/${half}.glb?v=`);
+      expect(html).toContain(`files/${half}.step?v=`);
+    }
+    expect(html).toContain('Chỉ mạch điện');
+    expect(html).toContain('Chỉ vỏ');
+    expect(html).toContain('🧭 Xem riêng');
+  });
+
+  it('draws the wiring as boxes with their wired pins, joined net by net', () => {
+    const wired = {
+      ...circuit,
+      parts: {
+        bat: { key: 'holder_18650_2s', name: 'Hộp pin 18650 2S', kind: 'battery', placed: true, pins: ['+', '-'] },
+        mcu: { key: 'esp32_devkitc', name: 'ESP32-DevKitC', kind: 'mcu', placed: true, pins: ['5V', 'GND'], role: 'Điều khiển servo.' },
+      },
+      nets: {
+        '5V': { pins: ['bat.+', 'mcu.5V'], kind: 'power' as const, colour: '#ff6f3c', length_mm: 40 },
+        GND: { pins: ['bat.-', 'mcu.GND'], kind: 'gnd' as const, colour: '#1a1a1a', length_mm: 40 },
+      },
+      layout: { bat: [40, 60] as [number, number], mcu: [300, 60] as [number, number] },
+      edges: { '5V': [['bat.+', 'mcu.5V'] as [string, string]], GND: [['bat.-', 'mcu.GND'] as [string, string]] },
+    };
+    const html = renderToStaticMarkup(createElement(CircuitPanel, { job: { ...built, circuit: wired } as any, circuit: wired }));
+    expect(html).toContain('aria-label="Sơ đồ nối dây"');
+    // One wire per pair, drawn with a wider invisible line to hover
+    expect(html.match(/stroke="#ff6f3c"/g)).toHaveLength(1);
+    expect(html.match(/stroke-width="14"/g)).toHaveLength(2);
+    for (const label of ['bat', 'mcu', '5V', 'GND', 'Xếp lại']) expect(html).toContain(`>${label}<`);
+    expect(html).not.toContain('<img');
+  });
+
+  it('lays out a circuit built before the layout in columns, its pins from the nets', () => {
+    const old = {
+      ...circuit,
+      parts: { mcu: circuit.parts.mcu, bat: { key: 'holder_18650_2s', name: 'Hộp pin', kind: 'battery', placed: true } },
+      nets: { GND: { pins: ['bat.-', 'mcu.GND'], kind: 'gnd' as const, colour: '#1a1a1a', length_mm: null } },
+      edges: { GND: [['bat.-', 'mcu.GND'] as [string, string]] },
+    };
+    const html = renderToStaticMarkup(createElement(CircuitPanel, { job: { ...built, circuit: old } as any, circuit: old }));
+    // The battery in the first column, the controller to its right
+    expect(html).toContain('transform="translate(40,40)"');
+    expect(html).toContain('transform="translate(330,40)"');
+    expect(html).toContain('>-<');
+  });
+
+  it('leaves them out of a model built before the split', () => {
+    const html = renderToStaticMarkup(createElement(CircuitPanel, { job: { ...built, files: { glb: true } } as any, circuit }));
+    expect(html).not.toContain('electronics.png');
+    expect(html).not.toContain('Xem riêng');
   });
 });

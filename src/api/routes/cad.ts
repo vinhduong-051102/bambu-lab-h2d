@@ -7,6 +7,7 @@ import {
   buildFixRequest,
   buildRequest,
   CAD_FILES,
+  CAD_VIEWER_VIEWS,
   CadJobStore,
   CadWorkerClient,
   CadWorkerError,
@@ -955,9 +956,15 @@ export const getCadExport = handler<{ id: string; name: string }>(async ({ reque
 });
 
 // POST /api/cad/jobs/:id/viewer - A link to text-to-cad's CAD Viewer page of a built technical model: {port, secure,
-// path}; the page opens at <http|https>://<the dashboard's host>:<port><path>. 501 VIEWER_DISABLED without
-// CAD_VIEWER_PORT and CAD_VIEWER_UPSTREAM
-export const openCadViewer = handler<{ id: string }>(async ({ params }) => {
+// path}; the page opens at <http|https>://<the dashboard's host>:<port><path>. {view} (or ?view=): "all" (the
+// default), or for a model with a circuit "electronics" or "case", that half alone (409 when the model was built
+// without them). 501 VIEWER_DISABLED without CAD_VIEWER_PORT and CAD_VIEWER_UPSTREAM
+export const openCadViewer = handler<{ id: string }>(async ({ request, params }) => {
+  const asked = new URL(request.url).searchParams.get('view') ?? ((await readJsonBody(request)) as { view?: unknown } | null)?.view ?? 'all';
+  const view = CAD_VIEWER_VIEWS.find((v) => v === asked);
+  if (!view) {
+    return json({ success: false, error: 'BAD_VIEW', message: `view là một trong ${CAD_VIEWER_VIEWS.join(', ')}.` }, 400);
+  }
   if (!env.CAD_VIEWER_PORT || !env.CAD_VIEWER_UPSTREAM) {
     return json({ success: false, error: 'VIEWER_DISABLED', message: 'Chưa cấu hình CAD_VIEWER_PORT và CAD_VIEWER_UPSTREAM (docs/text-to-cad.md).' }, 501);
   }
@@ -966,7 +973,7 @@ export const openCadViewer = handler<{ id: string }>(async ({ params }) => {
   const w = worker();
   if (!w) return disabled();
   try {
-    const link = await w.viewer(params.id);
+    const link = await w.viewer(params.id, view);
     if (!link.ok || !link.path) return json({ success: false, error: 'VIEWER_FAILED', message: link.error ?? 'Không mở được CAD Viewer.' }, 409);
     return json({ success: true, port: env.CAD_VIEWER_PORT, secure: Boolean(env.HTTPS_PORT), path: link.path });
   } catch (err) {

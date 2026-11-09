@@ -10,12 +10,16 @@ it as asked instead of starting over. A `model.py` from before text-to-cad assig
    Skill tool (`text-to-cad:cad`) and follow it for the model itself; read its references (model contract,
    build123d, positioning, inspection, kinematics) as the model needs them. Load `text-to-cad:step-parts` when the
    model holds a bought part (a bearing, a motor, a screw).
+   When the request has electronics in it (a controller, a battery, motors, LEDs, sensors…), also read
+   `/opt/cad/electronics.md` and design the circuit with the model: modules from the catalogue, the `circuit`, the
+   case built around them, the wires.
 2. Write `model.py`.
 3. Build it: `python /opt/cad/build.py model.py`. It prints a JSON report (size, volume, mesh checks,
    warnings, or the error and traceback) and writes `out/preview.png`, four views drawn by `cadgen snapshot`.
 4. After every build, Read `out/preview.png` (never skip it, even when the report has no warnings) and check the
    part against the request: shape, proportions, features, dimensions
-   from the report, and that it sits flat on the plate in a printable orientation. For a detail the four views
+   from the report, and that it sits flat on the plate in a printable orientation. With a `circuit`, also read
+   `out/circuit.json` and `out/schematic.png`, and look at `out/assembly.png` for the modules in the case. For a detail the four views
    don't settle, draw one more (`cadgen snapshot <document id from report.json engine.document> tmp/x.png
    --camera ... --display ...`) or measure it (`cadgen inspect`). Fix errors and warnings and anything that does
    not match, then build again. Stop once it matches; at most 6 builds.

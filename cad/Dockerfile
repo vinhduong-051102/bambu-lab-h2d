@@ -28,6 +28,12 @@ RUN apt-get update \
  && apt-get install -y --no-install-recommends ffmpeg \
  && rm -rf /var/lib/apt/lists/*
 
+# ngspice simulates the power side of a model's circuit, graphviz draws its wiring diagram (circuit.py,
+# docs/cad.md "Mạch điện tử")
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends ngspice graphviz \
+ && rm -rf /var/lib/apt/lists/*
+
 # The skills write `cadgen +0.8.4 ...`, the form the installer's proxy takes; the image has one cadgen, so the
 # version argument is dropped
 RUN mv /usr/local/bin/cadgen /usr/local/bin/cadgen-real \
@@ -37,8 +43,10 @@ RUN mv /usr/local/bin/cadgen /usr/local/bin/cadgen-real \
 # Claude Code won't run its tools unattended as root; the worker and everything it starts run as cad
 RUN useradd --create-home --uid 1000 cad
 USER cad
+# PYTHONPATH: the models import the worker's own libraries (electronics, calibration) in cadgen's engine workers,
+# which start in the job's folder
 ENV HOME=/home/cad PYTHONUNBUFFERED=1 MPLBACKEND=Agg DISABLE_AUTOUPDATER=1 DISPLAY=:99 \
-    CADGEN_TELEMETRY=0 CADGEN_UPDATE_CHECK=0
+    CADGEN_TELEMETRY=0 CADGEN_UPDATE_CHECK=0 PYTHONPATH=/opt/cad
 RUN cadgen telemetry off
 WORKDIR /opt/cad
 EXPOSE 8000

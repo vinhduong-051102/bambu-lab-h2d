@@ -28,7 +28,9 @@ what printing on the H2D needs.
   - text embossed or engraved at least 0.6 mm deep and 5 mm tall.
 - Imports: build123d, cadgen, bd_materials, math and the standard library. Vendor parts (a bearing, a servo, a
   screw) may come from step.parts (the `step-parts` skill) into `vendor/` beside model.py, read with `read_step`
-  in the body; they are not printed (list them in `not_printed`). For a tolerance calibration print (holes, pins
+  in the body; they are not printed (list them in `not_printed`). Electronic modules (boards, servos, batteries,
+  switches) and their wires come from `electronics` (`/opt/cad/electronics.md`), with a `circuit` the build
+  checks and simulates; they are left off the print by themselves. For a tolerance calibration print (holes, pins
   and fit slots to measure the printer's real tolerances), return `calibration_plate()` from
   `from calibration import calibration_plate` rather than drawing one.
 
