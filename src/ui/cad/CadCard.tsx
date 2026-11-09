@@ -21,7 +21,7 @@ import {
 } from 'antd';
 import { useCallback, useEffect, useRef, useState, type ClipboardEvent } from 'react';
 import { useActions } from '../DashboardContext';
-import { planOptions } from '../aiLimits';
+import { PLANS_CHANGED, planOptions } from '../aiLimits';
 import { groupVersions, HINTS, isBusy, isWatched, PLACEHOLDERS } from '../cad';
 import { type CadAction, type CadJob } from './CadJob';
 import { CadFamily } from './CadFamily';
@@ -287,6 +287,19 @@ export function CadCard({ onBusyChange }: { onBusyChange?: (busy: boolean) => vo
 
   // A thumbnail of the front picture, chosen or pasted
   const [preview, setPreview] = useState<string | null>(null);
+  // Plans fetched or taken back on the KeyVault card: the picker follows, keeping the one picked while it is there
+  useEffect(() => {
+    const changed = () =>
+      api<{ plan: string; plans: { plan: string; label: string; configured: boolean }[] }>('GET', '/api/ai/plan')
+        .then((p) => {
+          setPlans(p.plans);
+          setPlan((current) => (current && p.plans.some((o) => o.plan === current && o.configured) ? current : p.plan));
+        })
+        .catch(() => {});
+    window.addEventListener(PLANS_CHANGED, changed);
+    return () => window.removeEventListener(PLANS_CHANGED, changed);
+  }, []);
+
   useEffect(() => {
     if (!image) {
       setPreview(null);

@@ -3,6 +3,7 @@
 import { CheckCircleOutlined, KeyOutlined, ReloadOutlined } from '@ant-design/icons';
 import { Alert, Button, Card, Flex, Input, Popconfirm, QRCode, Segmented, Space, Tag, Typography } from 'antd';
 import { useCallback, useEffect, useState } from 'react';
+import { notifyPlansChanged } from '../aiLimits';
 import { useActions } from '../DashboardContext';
 
 /**
@@ -97,6 +98,8 @@ export function KeyVaultCard() {
       const body = await res.json().catch(() => null);
       if (!res.ok || !body?.success) throw new Error(body?.message || `HTTP ${res.status}`);
       if (body.stage) setView(body);
+      // The plans may have changed: the plan pickers elsewhere read them again
+      if (action !== 'test' && action !== 'pubkey') notifyPlansChanged();
       return body;
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));

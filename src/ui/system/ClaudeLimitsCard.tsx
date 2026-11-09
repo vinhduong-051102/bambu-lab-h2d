@@ -1,10 +1,10 @@
 'use client';
 
 import { ReloadOutlined, RobotOutlined } from '@ant-design/icons';
-import { Alert, Button, Card, Col, Flex, Progress, Row, Segmented, Space, Tag, Tooltip, Typography } from 'antd';
+import { Alert, Button, Card, Col, Flex, Progress, Row, Segmented, Select, Space, Tag, Tooltip, Typography } from 'antd';
 import { useCallback, useEffect, useState } from 'react';
 import { useActions } from '../DashboardContext';
-import { activePlan, barColor, formatReset, percent, planOptions, planState } from '../aiLimits';
+import { activePlan, barColor, formatReset, percent, PLANS_CHANGED, planOptions, planState } from '../aiLimits';
 
 /**
  * The Claude subscriptions the project runs on (one per Claude token on the KeyVault, named after its key): how
@@ -57,7 +57,7 @@ export function ClaudeLimitsCard() {
   const [choices, setChoices] = useState<PlanChoice[]>([]);
   const [saving, setSaving] = useState(false);
 
-  useEffect(() => {
+  const loadChoices = useCallback(() => {
     fetch('/api/ai/plan', { cache: 'no-store' })
       .then((res) => res.json())
       .then((body) => {
@@ -102,11 +102,21 @@ export function ClaudeLimitsCard() {
   }, []);
 
   useEffect(() => {
+    loadChoices();
+    // Plans fetched or taken back on the KeyVault card: the choices and the limits follow
+    const changed = () => {
+      loadChoices();
+      void load(false);
+    };
+    window.addEventListener(PLANS_CHANGED, changed);
     void load(false);
     // The countdowns move on by themselves; the numbers only when asked (each check uses a sliver of the plan)
     const timer = setInterval(() => setNow(Date.now()), 60000);
-    return () => clearInterval(timer);
-  }, [load]);
+    return () => {
+      clearInterval(timer);
+      window.removeEventListener(PLANS_CHANGED, changed);
+    };
+  }, [load, loadChoices]);
 
   const active = activePlan(plans, chosen);
 
@@ -128,7 +138,11 @@ export function ClaudeLimitsCard() {
       {choices.length > 0 && (
         <Flex vertical gap={6} style={{ marginBottom: 12 }}>
           <Typography.Text strong>Chạy task bằng</Typography.Text>
-          <Segmented block value={chosen} disabled={saving} options={planOptions(choices, true)} onChange={(v) => choose(v as PlanChoice['plan'])} />
+          {choices.length <= 3 ? (
+            <Segmented block value={chosen} disabled={saving} options={planOptions(choices, true)} onChange={(v) => choose(v as PlanChoice['plan'])} />
+          ) : (
+            <Select value={chosen} disabled={saving} options={planOptions(choices)} onChange={(v) => choose(v)} />
+          )}
           <Typography.Text type="secondary" style={{ fontSize: 12 }}>
             {chosen === 'auto'
               ? 'Tự động: dùng các gói lần lượt theo thứ tự trên KeyVault, gói nào hết lượt thì chuyển sang gói kế.'

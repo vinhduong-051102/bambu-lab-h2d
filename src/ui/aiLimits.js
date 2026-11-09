@@ -45,6 +45,10 @@ export function activePlan(plans, chosen = 'auto') {
   return (plans ?? []).find((p) => p.configured && !p.error && p.status !== 'rejected')?.key ?? null;
 }
 
+/** Sent on the page when the KeyVault card changed the plans, so every plan picker reads them again */
+export const PLANS_CHANGED = 'claude-plans-changed';
+export const notifyPlansChanged = () => typeof window !== 'undefined' && window.dispatchEvent(new Event(PLANS_CHANGED));
+
 /** The plans a task can be run on, as a picker's options: "auto", and each plan from the KeyVault (by its key's name) */
 export const planOptions = (plans, short = false) =>
   (plans ?? []).map((p) => ({
