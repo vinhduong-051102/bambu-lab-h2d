@@ -17,7 +17,8 @@ import { PrintRecorder } from '../domain/prints/PrintRecorder';
 import { setRuntime, type GatewayRuntime } from './runtime';
 import { followUpCadJobs } from '../api/routes/cad';
 import path from 'path';
-import { applyVaultTokens } from '../domain/ai/keyVault';
+import { refreshPlans } from '../domain/ai/keyVault';
+import { loadState } from '../domain/keyvault/keyVaultClient';
 
 export interface StartedGateway extends GatewayRuntime {
   printerService: PrinterService;
@@ -60,11 +61,11 @@ export async function startGateway(): Promise<StartedGateway> {
 
   setRuntime({ printerService, printerManager });
 
-  // Claude tokens fetched from the KeyVault win over the ones in .env; read again now and then, for the ones the CLI
-  // (scripts/keyvault.ts) fetched
-  const readVaultTokens = () => applyVaultTokens().catch((err) => logger.warn({ err }, 'Could not read the Claude tokens fetched from the KeyVault'));
-  await readVaultTokens();
-  const vaultTokens = setInterval(readVaultTokens, 30_000);
+  // The Claude plans follow the KeyVault's key list: a key granted shows as a plan, one taken back loses its plan
+  const vaultTokens = setInterval(async () => {
+    if ((await loadState()).stage !== 'active') return;
+    await refreshPlans().catch((err) => logger.warn({ err: err instanceof Error ? err.message : err }, 'Could not read the KeyVault key list'));
+  }, 10 * 60_000);
 
   // Print history: a record per print, with the camera's photo when it ends
   const printRecorder = new PrintRecorder(new PrintJournal(path.resolve(env.PRINT_HISTORY_DIR)), stateStore, cameraService);

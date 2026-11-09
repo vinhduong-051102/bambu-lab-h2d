@@ -25,14 +25,14 @@ export const getAiUsage = handler(async ({ request }) => {
   return json({ success: true, ...(await aiUsage(path.resolve(env.CAD_JOBS_DIR), since)) });
 });
 
-// GET /api/ai/plan - The Claude subscription tasks run on unless one is given its own (auto: Gói 1, then Gói 2 once it is
-// out of usage), and the ones that can be picked
+// GET /api/ai/plan - The Claude subscription tasks run on unless one is given its own (auto: the plans in turn, the next
+// once one is out of usage), and the ones that can be picked
 export const getAiPlan = handler(async () => json({ success: true, plan: await defaultPlan(), plans: availablePlans() }));
 
-// PUT /api/ai/plan - {plan: "auto" | "primary" | "fallback"}: picks it for every task from now on; a running one keeps its own
+// PUT /api/ai/plan - {plan: "auto" | <a plan's id>}: picks it for every task from now on; a running one keeps its own
 export const putAiPlan = handler(async ({ request }) => {
   const plan = ((await readJsonBody(request).catch(() => null)) as { plan?: unknown } | null)?.plan;
-  if (!isAiPlan(plan)) return json({ success: false, error: 'INVALID_PAYLOAD', message: 'plan phải là auto, primary hoặc fallback.' }, 400);
+  if (!isAiPlan(plan)) return json({ success: false, error: 'INVALID_PAYLOAD', message: 'plan phải là auto hoặc id của một gói.' }, 400);
   const problem = planProblem(plan);
   if (problem) return json({ success: false, error: 'PLAN_NOT_CONFIGURED', message: problem }, 400);
   await setDefaultPlan(plan);

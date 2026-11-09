@@ -34,6 +34,8 @@ export interface CadJobMeta {
   model: string | null;
   /** The Claude subscription it runs on (aiPlan.ts), read by the workers from job.json; none for older jobs: auto */
   plan?: AiPlan | null;
+  /** That plan's name (its KeyVault key) when the job was made, for the page */
+  plan_name?: string | null;
   /** The job this one revises */
   parent_id: string | null;
   title: string | null;

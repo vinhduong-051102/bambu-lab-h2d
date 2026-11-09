@@ -1,28 +1,18 @@
 'use client';
 
 import { CheckCircleOutlined, KeyOutlined, ReloadOutlined } from '@ant-design/icons';
-import { Alert, Button, Card, Flex, Input, Popconfirm, QRCode, Segmented, Select, Space, Tag, Typography } from 'antd';
+import { Alert, Button, Card, Flex, Input, Popconfirm, QRCode, Segmented, Space, Tag, Typography } from 'antd';
 import { useCallback, useEffect, useState } from 'react';
 import { useActions } from '../DashboardContext';
 
 /**
- * The KeyVault the Claude tokens come from (GET/POST /api/keyvault): registering the gateway step by step (send a
+ * The KeyVault the Claude plans come from (GET/POST /api/keyvault): registering the gateway step by step (send a
  * request, see how it stands, take the authenticator's secret, activate with a code; or an admin registers the
- * gateway's public key and hands over an API key; "Kết nối lại" starts over from any stage), then each key granted put on a plan with a code: tried for real
- * first, kept only when it works. A token's value never reaches this page, only its last 4 characters.
+ * gateway's public key and hands over an API key; "Kết nối lại" starts over from any stage), then the plans: one per
+ * key granted, its token fetched with a code, tried for real first and kept only when it works. A token's value never reaches this page, only its last 4 characters.
  */
 
-type Plan = 'primary' | 'fallback';
-type Key = { id: string; name: string; description?: string; size_bytes?: number; guess: Plan | null };
-type PlanSource = {
-  key: Plan;
-  label: string;
-  env: string;
-  source: 'vault' | 'env' | 'dropped' | 'none';
-  last4: string;
-  vaultKey: { id: string; name: string } | null;
-  fetchedAt: string | null;
-};
+type Plan = { id: string; name: string; description: string; fetched: boolean; last4: string; fetchedAt: string | null; granted: boolean };
 type View = {
   stage: 'none' | 'pending' | 'approved' | 'rejected' | 'claimed' | 'active';
   server: string;
@@ -33,9 +23,8 @@ type View = {
   claimExpiresAt: string | null;
   totpSecret: string | null;
   otpauthUri: string | null;
-  keys: Key[];
   keysCheckedAt: string | null;
-  plans: PlanSource[];
+  plans: Plan[];
 };
 type KeyTest = { keyName: string; last4: string; usable: boolean; error: string | null; fiveHour: number | null; sevenDay: number | null; organization: string | null; sameAs: string | null };
 
@@ -46,16 +35,6 @@ const STAGES: Record<View['stage'], { text: string; color: string }> = {
   rejected: { text: 'bị từ chối', color: 'red' },
   claimed: { text: 'chờ kích hoạt', color: 'gold' },
   active: { text: 'đã kết nối', color: 'green' },
-};
-const PLAN_OPTIONS = [
-  { value: 'primary', label: 'Gói 1 (chính)' },
-  { value: 'fallback', label: 'Gói 2 (dự phòng)' },
-];
-const SOURCES: Record<PlanSource['source'], { text: string; color: string }> = {
-  vault: { text: 'từ KeyVault', color: 'green' },
-  env: { text: 'từ .env', color: 'default' },
-  dropped: { text: 'đã bỏ', color: 'red' },
-  none: { text: 'chưa có', color: 'default' },
 };
 const pct = (v: number | null) => (v === null ? '?' : `${Math.round(v * 100)} %`);
 
@@ -99,8 +78,6 @@ export function KeyVaultCard() {
   const [form, setForm] = useState({ name: 'bambu-lab-h2d-gateway', contact: '', organization: 'bambu-lab-h2d', reason: 'Gateway máy in lấy token gói Claude', requested_keys: '' });
   const [imported, setImported] = useState({ api_key: '', private_key_pem: '' });
   const [pubkey, setPubkey] = useState<string | null>(null);
-  const [planOf, setPlanOf] = useState<Record<string, Plan | undefined>>({});
-  const [keyOf, setKeyOf] = useState<Record<string, string | undefined>>({});
   const [tests, setTests] = useState<Record<string, KeyTest>>({});
   const { showToast } = useActions();
 
@@ -149,19 +126,17 @@ export function KeyVaultCard() {
       </Button>
     </Popconfirm>
   );
-  const fromVault = view?.plans.some((p) => p.source === 'vault') ?? false;
-  const toDrop = view?.plans.filter((p) => p.source === 'env') ?? [];
 
-  const use = async (plan: Plan, otp: string, keyId?: string) => {
-    const body = await act('use', { plan, otp, key_id: keyId });
-    if (body) showToast(`${PLAN_OPTIONS.find((o) => o.value === plan)?.label}: đã dùng token ${body.used.last4} từ KeyVault (${body.used.keyName})`, 'success');
+  const use = async (keyId: string, otp: string) => {
+    const body = await act('use', { key_id: keyId, otp });
+    if (body) showToast(`Gói ${body.used.keyName}: đã thử và dùng token ${body.used.last4}`, 'success');
   };
 
   return (
     <Card
       title={
         <Space>
-          <KeyOutlined /> KeyVault cho token gói Claude
+          <KeyOutlined /> KeyVault: các gói Claude
         </Space>
       }
       extra={stage && <Tag color={stage.color}>{stage.text}</Tag>}
@@ -298,63 +273,69 @@ export function KeyVaultCard() {
               </Flex>
             )}
 
-            {view.stage === 'active' && (
+            {(view.stage === 'active' || view.plans.length > 0) && (
               <Flex vertical gap={12}>
                 <Flex justify="space-between" align="center" wrap gap={8}>
-                  <Typography.Text strong>Key được cấp ({view.keys.length})</Typography.Text>
-                  <Space>
-                    <Button size="small" icon={<ReloadOutlined />} loading={busy === 'keys'} onClick={() => act('keys')}>
-                      Kiểm tra
-                    </Button>
-                    {reconnectButton()}
-                    <Popconfirm title="Gỡ kết nối KeyVault?" description="API key và private key chuyển vào .backup-<giờ>/; token đã lấy vẫn dùng tiếp." onConfirm={() => act('reset')}>
-                      <Button size="small" danger loading={busy === 'reset'}>
-                        Gỡ kết nối
+                  <Typography.Text strong>Gói Claude ({view.plans.length})</Typography.Text>
+                  {view.stage === 'active' && (
+                    <Space>
+                      <Button size="small" icon={<ReloadOutlined />} loading={busy === 'keys'} onClick={() => act('keys')}>
+                        Kiểm tra
                       </Button>
-                    </Popconfirm>
-                  </Space>
+                      {reconnectButton()}
+                      <Popconfirm title="Gỡ kết nối KeyVault?" description="API key và private key chuyển vào .backup-<giờ>/; các gói đã lấy vẫn dùng tiếp." onConfirm={() => act('reset')}>
+                        <Button size="small" danger loading={busy === 'reset'}>
+                          Gỡ kết nối
+                        </Button>
+                      </Popconfirm>
+                    </Space>
+                  )}
                 </Flex>
-                {view.keys.length === 0 && <Typography.Text type="secondary">Chưa có key nào được cấp cho gateway.</Typography.Text>}
-                {view.keys.map((k) => {
-                  const test = tests[k.id];
+                <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                  Mỗi key token Claude trên KeyVault là một gói, theo thứ tự trên KeyVault (thứ tự chế độ Tự động dùng). Key mới hiện ở đây khi bấm Kiểm tra (gateway cũng tự
+                  xem lại mỗi 10 phút); key bị thu hồi thì gói đó bị bỏ.
+                </Typography.Text>
+                {view.plans.length === 0 && <Typography.Text type="secondary">Chưa có key nào được cấp cho gateway.</Typography.Text>}
+                {view.plans.map((p) => {
+                  const test = tests[p.id];
                   return (
-                    <Card key={k.id} size="small">
+                    <Card key={p.id} size="small">
                       <Flex vertical gap={6}>
-                        <Flex justify="space-between" wrap gap={6}>
-                          <Typography.Text strong>{k.name}</Typography.Text>
+                        <Flex justify="space-between" align="center" wrap gap={6}>
+                          <Space wrap>
+                            <Typography.Text strong>{p.name}</Typography.Text>
+                            {p.fetched ? <Tag color="green">đang dùng {p.last4}</Tag> : <Tag>chưa lấy token</Tag>}
+                            {!p.granted && <Tag color="orange">không còn trong danh sách KeyVault</Tag>}
+                          </Space>
                           <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-                            {k.description}
+                            {p.fetchedAt ? (
+                              <>
+                                <CheckCircleOutlined /> lấy lúc {new Date(p.fetchedAt).toLocaleString('vi-VN')}
+                              </>
+                            ) : (
+                              p.description
+                            )}
                           </Typography.Text>
                         </Flex>
-                        <Flex gap={8} wrap align="center">
-                          <Select
-                            size="small"
-                            style={{ width: 160 }}
-                            placeholder="Dùng cho gói"
-                            value={planOf[k.id] ?? k.guess ?? undefined}
-                            options={PLAN_OPTIONS}
-                            onChange={(v) => setPlanOf({ ...planOf, [k.id]: v })}
-                          />
-                          <OtpAction
-                            label="Lấy & dùng"
-                            disabled={!(planOf[k.id] ?? k.guess)}
-                            onSubmit={(otp) => use((planOf[k.id] ?? k.guess)!, otp, k.id)}
-                          />
-                          <OtpAction
-                            label="Kiểm tra"
-                            onSubmit={async (otp) => {
-                              const body = await act('test', { key_id: k.id, otp });
-                              if (body) setTests({ ...tests, [k.id]: body.test });
-                            }}
-                          />
-                        </Flex>
+                        {view.stage === 'active' && p.granted && (
+                          <Flex gap={8} wrap align="center">
+                            <OtpAction label={p.fetched ? 'Lấy lại' : 'Lấy & dùng'} onSubmit={(otp) => use(p.id, otp)} />
+                            <OtpAction
+                              label="Kiểm tra"
+                              onSubmit={async (otp) => {
+                                const body = await act('test', { key_id: p.id, otp });
+                                if (body) setTests({ ...tests, [p.id]: body.test });
+                              }}
+                            />
+                          </Flex>
+                        )}
                         {test && (
                           <Alert
                             type={test.usable ? 'success' : 'error'}
                             showIcon
                             title={
                               test.usable
-                                ? `Dùng được (${test.last4}${test.organization ? `, tổ chức ${test.organization}` : ''}): đã dùng ${pct(test.fiveHour)} trong 5 giờ, ${pct(test.sevenDay)} trong 7 ngày${test.sameAs ? `. Trùng token ${test.sameAs} đang dùng.` : '. Khác các token đang dùng.'}`
+                                ? `Dùng được (${test.last4}${test.organization ? `, tổ chức ${test.organization}` : ''}): đã dùng ${pct(test.fiveHour)} trong 5 giờ, ${pct(test.sevenDay)} trong 7 ngày${test.sameAs ? `. Trùng token của gói ${test.sameAs}.` : '. Khác token các gói đang dùng.'}`
                                 : `Không dùng được: ${test.error}`
                             }
                           />
@@ -365,57 +346,6 @@ export function KeyVaultCard() {
                 })}
               </Flex>
             )}
-
-            <Flex vertical gap={8}>
-              <Typography.Text strong>Token của các gói</Typography.Text>
-              {view.plans.map((p) => (
-                <Flex key={p.key} justify="space-between" align="center" wrap gap={8}>
-                  <Space wrap>
-                    <Typography.Text>{p.label}</Typography.Text>
-                    <Tag color={SOURCES[p.source].color}>{SOURCES[p.source].text}</Tag>
-                    {p.last4 && <Typography.Text code>{p.last4}</Typography.Text>}
-                    {p.source === 'vault' && p.vaultKey && (
-                      <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-                        <CheckCircleOutlined /> {p.vaultKey.name}
-                        {p.fetchedAt ? `, ${new Date(p.fetchedAt).toLocaleString('vi-VN')}` : ''}
-                      </Typography.Text>
-                    )}
-                  </Space>
-                  {view.stage === 'active' && (
-                    <Space.Compact>
-                      <Select
-                        size="middle"
-                        style={{ width: 170 }}
-                        placeholder="Chọn key"
-                        value={keyOf[p.key] ?? p.vaultKey?.id ?? view.keys.find((k) => k.guess === p.key)?.id}
-                        options={view.keys.map((k) => ({ value: k.id, label: k.name }))}
-                        onChange={(v) => setKeyOf({ ...keyOf, [p.key]: v })}
-                      />
-                      <OtpAction
-                        label="Lấy từ KeyVault"
-                        disabled={!(keyOf[p.key] ?? p.vaultKey?.id ?? view.keys.find((k) => k.guess === p.key)?.id)}
-                        onSubmit={(otp) => use(p.key, otp, keyOf[p.key] ?? p.vaultKey?.id ?? view.keys.find((k) => k.guess === p.key)?.id)}
-                      />
-                    </Space.Compact>
-                  )}
-                </Flex>
-              ))}
-              <Flex justify="flex-end">
-                <Popconfirm
-                  title="Bỏ token .env của các gói không lấy từ KeyVault?"
-                  description={`${toDrop.map((p) => p.label).join(', ')}: giá trị cũ chuyển vào .backup-<giờ>/, không xóa hẳn.`}
-                  disabled={!fromVault || !toDrop.length}
-                  onConfirm={async () => {
-                    const body = await act('drop-others');
-                    if (body) showToast(`Đã bỏ: ${body.dropped.join(', ') || 'không có'}`, 'success');
-                  }}
-                >
-                  <Button size="small" disabled={!fromVault || !toDrop.length} loading={busy === 'drop-others'}>
-                    Bỏ các mục không từ KeyVault
-                  </Button>
-                </Popconfirm>
-              </Flex>
-            </Flex>
 
             <Typography.Paragraph type="secondary" style={{ fontSize: 12, marginBottom: 0 }}>
               Mỗi mã OTP chỉ dùng được một lần: lấy key kế tiếp phải chờ mã mới (khoảng 30 giây). Giờ của máy và điện thoại phải chuẩn (bật NTP). Token lấy về được thử gọi

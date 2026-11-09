@@ -458,36 +458,30 @@ LIMIT_COOLDOWN_S = 3600
 limited_at = {}  # token → time.monotonic() when it hit its usage limit, so the next runs start with the other one
 
 
-# The subscription a job may be given on the dashboard (job.json "plan", src/domain/ai/aiPlan.ts): only that one
-PLAN_TOKENS = {"primary": "CLAUDE_CODE_OAUTH_TOKEN", "fallback": "CLAUDE_CODE_OAUTH_TOKEN_FALLBACK"}
-
-
-# Tokens fetched from the KeyVault on the dashboard (src/domain/ai/keyVault.ts), mounted from data/secrets/claude:
-# they win over the container's environment and are read again before each run, so a new one is used at once; an
-# empty one drops the environment's ("Bỏ các mục không từ KeyVault")
+# The Claude plans fetched from the KeyVault on the dashboard (src/domain/ai/claudePlans.ts), mounted from
+# data/secrets/claude: one per KeyVault key, in its order; read again before each run, so a new one is used at once
 TOKENS_FILE = Path(os.environ.get("CLAUDE_TOKENS_FILE", "/run/claude/tokens.json"))
 
 
-def load_vault_tokens():
+def claude_plans():
+    """[(plan id, token)], in the KeyVault's order"""
     try:
-        tokens = json.loads(TOKENS_FILE.read_text(encoding="utf-8"))
+        data = json.loads(TOKENS_FILE.read_text(encoding="utf-8"))
     except (OSError, ValueError):
-        return
-    for name in PLAN_TOKENS.values():
-        if isinstance(tokens.get(name), str):
-            os.environ[name] = tokens[name].strip()
+        return []
+    return [(p.get("id"), p["token"].strip()) for p in (data.get("plans") or [])
+            if isinstance(p, dict) and isinstance(p.get("token"), str) and p["token"].strip()]
 
 
 def claude_tokens(directory=None):
-    """The job's own subscription when it was given one (job.json "plan") and its token is set; else
-    CLAUDE_CODE_OAUTH_TOKEN, then CLAUDE_CODE_OAUTH_TOKEN_FALLBACK (a second subscription), one that hit its usage
-    limit within the hour last"""
-    load_vault_tokens()
+    """The job's own plan when it was given one (job.json "plan": a KeyVault key's id) and it is still there; else
+    every plan in turn, those that hit their usage limit within the hour last"""
+    plans = claude_plans()
     plan = (read_json(directory / "job.json", {}) or {}).get("plan") if directory else None
-    if plan in PLAN_TOKENS and os.environ.get(PLAN_TOKENS[plan], "").strip():
-        return [os.environ[PLAN_TOKENS[plan]].strip()]
-    names = ("CLAUDE_CODE_OAUTH_TOKEN", "CLAUDE_CODE_OAUTH_TOKEN_FALLBACK")
-    tokens = list(dict.fromkeys(t for t in (os.environ.get(n, "").strip() for n in names) if t))
+    own = [token for plan_id, token in plans if plan_id == plan]
+    if plan and plan != "auto" and own:
+        return own[:1]
+    tokens = list(dict.fromkeys(token for _, token in plans))
     return sorted(tokens, key=lambda t: t in limited_at and time.monotonic() - limited_at[t] < LIMIT_COOLDOWN_S)
 
 
@@ -500,7 +494,7 @@ def claude_error(result, stderr):
     detail = (result or {}).get("result") or stderr.strip()[-500:] or "không có thông báo lỗi"
     lowered = detail.lower()
     if "401" in detail or "authenticat" in lowered or "oauth" in lowered or "token" in lowered:
-        return f"CLAUDE_CODE_OAUTH_TOKEN không hợp lệ hoặc đã hết hạn: chạy lại claude setup-token. ({detail})"
+        return f"Token của gói Claude không hợp lệ hoặc đã hết hạn: lấy lại từ KeyVault (Hệ thống → KeyVault). ({detail})"
     if "limit" in lowered:
         return f"Đã hết lượt dùng Claude của gói hiện tại, thử lại sau. ({detail})"
     return f"Claude không trả về kết quả hợp lệ: {detail}"

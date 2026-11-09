@@ -63,7 +63,7 @@ Optional containers, reached over HTTP by the gateway:
 - **Node.js**: `>= 20.0.0` (the Docker image uses Node 22)
 - **Package Manager**: `npm`
 - **Network**: Local area network (LAN) access to the printer.
-- **Optional**: Docker Desktop for the gateway container and the workers; an NVIDIA GPU for `mesh3d` (Hunyuan3D-2); a Claude subscription token (`claude setup-token`) or API key for the AI features.
+- **Optional**: Docker Desktop for the gateway container and the workers; an NVIDIA GPU for `mesh3d` (Hunyuan3D-2); Claude subscription tokens (`claude setup-token`) kept on a KeyVault or API key for the AI features.
 
 ```bash
 # Install dependencies
@@ -138,10 +138,8 @@ STUDIO_URL=
 STUDIO_ALT_URLS=
 STUDIO_IMPORT_DIR=
 
-# Claude: subscription token(s) or API key, and the model per feature
-CLAUDE_CODE_OAUTH_TOKEN=
-CLAUDE_CODE_OAUTH_TOKEN_FALLBACK=   # used once the first subscription hits its limit, or alone when picked (Hệ thống → Gói Claude)
-# KV_SERVER=http://100.112.133.34:8000   # or fetch both from a KeyVault with an OTP: Hệ thống → KeyVault (docs/keyvault.md)
+# Claude: the plans come from the KeyVault, one per Claude token there (Hệ thống → KeyVault, docs/keyvault.md); or an API key
+KV_SERVER=http://100.112.133.34:8000
 ANTHROPIC_API_KEY=
 STUDIO_AI_MODEL=claude-opus-5-5
 TIMELAPSE_AI_MODEL=claude-opus-5-5

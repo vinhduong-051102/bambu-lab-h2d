@@ -9,9 +9,7 @@ services:
     restart: unless-stopped
     environment:
       - JOBS_DIR=/jobs
-      # Claude writes the models on your Claude subscription (`claude setup-token`), like Studio's "AI tối ưu"
-      - CLAUDE_CODE_OAUTH_TOKEN=${CLAUDE_CODE_OAUTH_TOKEN:-}
-      - CLAUDE_CODE_OAUTH_TOKEN_FALLBACK=${CLAUDE_CODE_OAUTH_TOKEN_FALLBACK:-}
+      # Claude writes the models on the Claude plans fetched from the KeyVault (mounted below), like Studio's "AI tối ưu"
       - CAD_AI_MODEL=${CAD_AI_MODEL:-claude-opus-5-5}
       # text-to-cad's CAD Viewer: the engine on this port (loopback only), forwarded from VIEWER_PORT on the compose
       # network for the gateway's viewer port (CAD_VIEWER_PORT); not published on the host

@@ -7,13 +7,13 @@ import { useActions } from '../DashboardContext';
 import { activePlan, barColor, formatReset, percent, planOptions, planState } from '../aiLimits';
 
 /**
- * The Claude subscriptions the project runs on (CLAUDE_CODE_OAUTH_TOKEN and CLAUDE_CODE_OAUTH_TOKEN_FALLBACK): how
+ * The Claude subscriptions the project runs on (one per Claude token on the KeyVault, named after its key): how
  * much of each one's 5-hour and 7-day allowance is used and when it starts over. The gateway checks them with a tiny
  * model call and keeps the answer 5 minutes; "Kiểm tra lại" asks again. Which one tasks run on is picked here
  * (GET/PUT /api/ai/plan): both in turn, or only one, to keep the other's allowance.
  */
 
-type PlanChoice = { plan: 'auto' | 'primary' | 'fallback'; label: string; configured: boolean };
+type PlanChoice = { plan: string; label: string; configured: boolean };
 
 type Window = { utilization: number | null; resetsAt: string | null; status: string | null };
 type Plan = {
@@ -131,8 +131,8 @@ export function ClaudeLimitsCard() {
           <Segmented block value={chosen} disabled={saving} options={planOptions(choices, true)} onChange={(v) => choose(v as PlanChoice['plan'])} />
           <Typography.Text type="secondary" style={{ fontSize: 12 }}>
             {chosen === 'auto'
-              ? 'Tự động: dùng gói 1, khi gói 1 hết lượt thì chuyển sang gói 2.'
-              : `Chỉ dùng ${chosen === 'primary' ? 'gói 1' : 'gói 2'}: hết lượt thì task báo lỗi, gói còn lại để dành.`}{' '}
+              ? 'Tự động: dùng các gói lần lượt theo thứ tự trên KeyVault, gói nào hết lượt thì chuyển sang gói kế.'
+              : `Chỉ dùng ${choices.find((c) => c.plan === chosen)?.label.replace(/^Chỉ /, '') ?? 'gói đã chọn'}: hết lượt thì task báo lỗi, các gói còn lại để dành.`}{' '}
             Áp cho Thiết kế AI, mô hình từ ảnh, nhận xét timelapse, nhận diện chi tiết và phân tích lỗi; mẫu AI chọn riêng được khi tạo.
           </Typography.Text>
         </Flex>
@@ -142,6 +142,9 @@ export function ClaudeLimitsCard() {
         {cachedAt ? ` Số liệu lúc ${new Date(cachedAt).toLocaleTimeString('vi-VN')}.` : ''}
       </Typography.Paragraph>
       {error && <Alert type="error" showIcon title={`Không đọc được hạn mức: ${error}`} />}
+      {plans?.length === 0 && (
+        <Alert type="info" showIcon title="Chưa có gói Claude nào: mỗi key token Claude trên KeyVault là một gói; lấy token ở thẻ KeyVault bên dưới bằng mã OTP." />
+      )}
       <Row gutter={[16, 16]}>
         {(plans ?? []).map((plan) => {
           const state = planState(plan);
@@ -156,12 +159,7 @@ export function ClaudeLimitsCard() {
                     </Space>
                     <Tag color={state.color}>{state.text}</Tag>
                   </Flex>
-                  {!plan.configured ? (
-                    <Typography.Text type="secondary">
-                      Chưa cài: đặt {plan.key === 'primary' ? 'CLAUDE_CODE_OAUTH_TOKEN' : 'CLAUDE_CODE_OAUTH_TOKEN_FALLBACK'} trong .env (tạo bằng
-                      claude setup-token) rồi khởi động lại gateway, hoặc lấy từ KeyVault (thẻ KeyVault bên dưới).
-                    </Typography.Text>
-                  ) : plan.error ? (
+                  {plan.error ? (
                     <Alert type="error" showIcon title={plan.error} />
                   ) : (
                     <>

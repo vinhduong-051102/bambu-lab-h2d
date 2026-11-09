@@ -21,7 +21,7 @@ RUN git clone https://github.com/Tencent/Hunyuan3D-2 /opt/hy3d \
  && pip install --no-cache-dir --no-deps -e .
 
 # Claude Code fixes and paints the figures, and models those from a description (claude -p, on
-# CLAUDE_CODE_OAUTH_TOKEN)
+# the Claude plans from the KeyVault, mounted at /run/claude)
 ARG CLAUDE_CODE_VERSION=stable
 RUN export HOME=/tmp/claude-install \
  && curl -fsSL https://claude.ai/install.sh | bash -s "${CLAUDE_CODE_VERSION}" \

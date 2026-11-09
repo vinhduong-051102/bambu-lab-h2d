@@ -6,34 +6,31 @@
 # {"step": "prompt" | "thinking" | "writing" | "check" | "gateway", "changes": <changes written so far>,
 #  "notes": [the "• " analysis lines Claude writes before its answer, the last one possibly unfinished]}
 #
-# With CLAUDE_CODE_OAUTH_TOKEN (from `claude setup-token`), Claude is asked here with `claude -p`, on that
-# Claude subscription: the gateway builds the prompt (POST $STUDIO_AI_URL/prompt) and checks the answer
-# (POST $STUDIO_AI_URL/check). Without it, the gateway does all three with its ANTHROPIC_API_KEY
+# With a Claude plan fetched from the KeyVault on the dashboard (/run/claude/tokens.json, one per KeyVault key), Claude
+# is asked here with `claude -p` on the plans in turn: the gateway builds the prompt (POST $STUDIO_AI_URL/prompt) and
+# checks the answer (POST $STUDIO_AI_URL/check). Without one, the gateway does all three with its ANTHROPIC_API_KEY
 # (POST $STUDIO_AI_URL).
 
 request="$1"
 response="$2"
 
 # Container variables from docker-compose.studio.yml; s6 keeps them here when the session didn't inherit them
-for var in STUDIO_AI_URL STUDIO_AI_TOKEN STUDIO_AI_MODEL CLAUDE_CODE_OAUTH_TOKEN CLAUDE_CODE_OAUTH_TOKEN_FALLBACK DISABLE_AUTOUPDATER; do
+for var in STUDIO_AI_URL STUDIO_AI_TOKEN STUDIO_AI_MODEL DISABLE_AUTOUPDATER; do
   eval "current=\${$var:-}"
   if [ -z "$current" ] && [ -r "/run/s6/container_environment/$var" ]; then
     eval "$var=\$(cat /run/s6/container_environment/$var)"
     eval "export $var"
   fi
 done
-# Tokens fetched from the KeyVault on the dashboard (mounted from data/secrets/claude) win over the container's;
-# an empty one drops the container's
+# The Claude plans fetched from the KeyVault (mounted from data/secrets/claude), one token a line in the KeyVault's
+# order: the first is asked, the next ones when a plan is out of usage
 tokens_file="${CLAUDE_TOKENS_FILE:-/run/claude/tokens.json}"
+tokens=""
 if [ -r "$tokens_file" ] && command -v jq >/dev/null 2>&1; then
-  for var in CLAUDE_CODE_OAUTH_TOKEN CLAUDE_CODE_OAUTH_TOKEN_FALLBACK; do
-    if jq -e --arg name "$var" '.[$name] | type == "string"' "$tokens_file" >/dev/null 2>&1; then
-      value=$(jq -r --arg name "$var" '.[$name]' "$tokens_file")
-      eval "$var=\$value"
-      eval "export $var"
-    fi
-  done
+  tokens=$(jq -r '.plans[]? | .token // empty' "$tokens_file" 2>/dev/null | awk 'NF && !seen[$0]++')
 fi
+CLAUDE_CODE_OAUTH_TOKEN=$(printf '%s\n' "$tokens" | head -n 1)
+export CLAUDE_CODE_OAUTH_TOKEN
 url="${STUDIO_AI_URL:-http://host.docker.internal:3000/api/studio/ai-optimize}"
 work="$response.d"
 
@@ -143,21 +140,22 @@ ask() {
   jq -Rc 'fromjson? | select(.type == "result")' "$work/claude.jsonl" > "$work/claude.json" 2>/dev/null
 }
 ask
-# Out of usage on CLAUDE_CODE_OAUTH_TOKEN's subscription: asked again on CLAUDE_CODE_OAUTH_TOKEN_FALLBACK's
-if [ "$code" != "124" ] && [ -n "$CLAUDE_CODE_OAUTH_TOKEN_FALLBACK" ] \
-  && [ "$CLAUDE_CODE_OAUTH_TOKEN_FALLBACK" != "$CLAUDE_CODE_OAUTH_TOKEN" ] \
-  && ! jq -e '.structured_output' "$work/claude.json" >/dev/null 2>&1 \
-  && { jq -r '.result // empty' "$work/claude.json" 2>/dev/null; tail -n 3 "$work/claude.err" 2>/dev/null; } | grep -qi limit; then
+# Out of usage on that plan: asked again on the next one, while there is one
+for next in $(printf '%s\n' "$tokens" | tail -n +2); do
+  [ "$code" != "124" ] \
+    && ! jq -e '.structured_output' "$work/claude.json" >/dev/null 2>&1 \
+    && { jq -r '.result // empty' "$work/claude.json" 2>/dev/null; tail -n 3 "$work/claude.err" 2>/dev/null; } | grep -qi limit \
+    || break
   progress thinking
-  ask "$CLAUDE_CODE_OAUTH_TOKEN_FALLBACK"
-fi
+  ask "$next"
+done
 
 [ "$code" = "124" ] && fail "Claude không trả lời trong 10 phút."
 if ! jq -e '.structured_output' "$work/claude.json" >/dev/null 2>&1; then
   detail=$(jq -r '.result // empty' "$work/claude.json" 2>/dev/null)
   [ -n "$detail" ] || detail=$(tail -n 3 "$work/claude.err" 2>/dev/null)
   case "$detail" in
-    *"401"*|*[Aa]uthenticat*|*"OAuth"*|*"token"*) fail "CLAUDE_CODE_OAUTH_TOKEN không hợp lệ hoặc đã hết hạn: chạy lại claude setup-token. ($detail)" ;;
+    *"401"*|*[Aa]uthenticat*|*"OAuth"*|*"token"*) fail "Token của gói Claude không hợp lệ hoặc đã hết hạn: lấy lại từ KeyVault (Hệ thống → KeyVault). ($detail)" ;;
     *[Ll]imit*) fail "Đã hết lượt dùng Claude của gói hiện tại, thử lại sau. ($detail)" ;;
   esac
   fail "Claude không trả về kết quả hợp lệ (mã $code): ${detail:-không có thông báo lỗi}"

@@ -6,6 +6,7 @@ import { z } from 'zod';
 import type { PrintRecord } from '../prints/PrintJournal';
 import { PRINT_ISSUE_LABELS, PRINT_OUTCOME_LABELS } from '../studio/aiSessions';
 import { defaultPlan, tokensForPlan } from '../ai/aiPlan';
+import { planTokens } from '../ai/claudePlans';
 import { AI_FEATURES, claudeEntry, recordAiUsage, type AiFeature } from '../ai/aiUsage';
 
 /**
@@ -191,7 +192,7 @@ export class FfmpegFrames implements FrameSource {
 export function claudeError(detail: string): string {
   const lowered = detail.toLowerCase();
   if (detail.includes('401') || /authenticat|oauth|token|log ?in/.test(lowered)) {
-    return `Claude chưa đăng nhập được: đặt CLAUDE_CODE_OAUTH_TOKEN (claude setup-token) trong .env của gateway rồi khởi động lại. (${detail})`;
+    return `Claude chưa đăng nhập được: token của gói không hợp lệ hoặc chưa có, lấy lại từ KeyVault (Hệ thống → KeyVault). (${detail})`;
   }
   if (lowered.includes('limit')) return `Đã hết lượt dùng Claude của gói hiện tại, thử lại sau. (${detail})`;
   return `Claude không trả về nhận xét: ${detail}`;
@@ -202,20 +203,18 @@ const limitedAt = new Map<string, number>();
 const LIMIT_COOLDOWN_MS = 60 * 60 * 1000;
 
 /**
- * CLAUDE_CODE_OAUTH_TOKEN, then CLAUDE_CODE_OAUTH_TOKEN_FALLBACK (a second subscription); one that hit its
- * usage limit within the hour goes last. Empty when neither is set: `claude` then signs in however it can.
+ * The plans' tokens from the KeyVault (claudePlans.ts) in their order; one that hit its usage limit within the hour
+ * goes last. Empty when there is none: `claude` then signs in however it can.
  */
 export function claudeTokens(now = Date.now()): string[] {
-  const tokens = [...new Set([process.env.CLAUDE_CODE_OAUTH_TOKEN?.trim(), process.env.CLAUDE_CODE_OAUTH_TOKEN_FALLBACK?.trim()])].filter(
-    (token): token is string => !!token
-  );
+  const tokens = planTokens();
   const limited = (token: string) => now - (limitedAt.get(token) ?? -Infinity) < LIMIT_COOLDOWN_MS;
   return [...tokens.filter((token) => !limited(token)), ...tokens.filter(limited)];
 }
 
 /**
- * Claude, through Claude Code (`claude -p`) on the gateway's machine, on the Claude subscription in
- * CLAUDE_CODE_OAUTH_TOKEN. It may only read: the frames are files in a folder of their own.
+ * Claude, through Claude Code (`claude -p`) on the gateway's machine, on a Claude plan's token (given to it as
+ * CLAUDE_CODE_OAUTH_TOKEN). It may only read: the frames are files in a folder of their own.
  */
 export class ClaudeCodeVision implements VisionModel {
   constructor(

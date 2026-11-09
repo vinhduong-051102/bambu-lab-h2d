@@ -4,7 +4,7 @@ FROM node:22-bookworm-slim
 # openssl makes the self-signed HTTPS certificate on first start
 RUN apt-get update && apt-get install -y --no-install-recommends openssl && rm -rf /var/lib/apt/lists/*
 
-# Claude Code: `claude -p` reviews timelapses and names a model's parts (on CLAUDE_CODE_OAUTH_TOKEN)
+# Claude Code: `claude -p` reviews timelapses and names a model's parts (on the Claude plans from the KeyVault)
 RUN npm install -g @anthropic-ai/claude-code && npm cache clean --force
 
 WORKDIR /app

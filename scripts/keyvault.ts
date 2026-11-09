@@ -1,24 +1,24 @@
 /**
  * The KeyVault from the command line, on the same files as the dashboard (KV_DIR, CLAUDE_TOKENS_FILE): see
- * docs/keyvault.md. A key's value is never printed: `fetch` puts it on a plan (--target) or in a file (--out, mode 600).
+ * docs/keyvault.md. A key's value is never printed: `fetch` makes it that key's Claude plan (--use) or puts it in a file
+ * (--out, mode 600).
  *
  *   npx tsx scripts/keyvault.ts request --name <n> --contact <c> --reason <r> [--organization <o>] [--requested-keys <k>]
  *   npx tsx scripts/keyvault.ts status | claim | activate --otp <code> | pubkey | keys | reset
  *   npx tsx scripts/keyvault.ts import --api-key kv_... [--pem <private key file>]
- *   npx tsx scripts/keyvault.ts fetch --key-id <id or name> --otp <code> (--target primary|fallback | --out <file>)
+ *   npx tsx scripts/keyvault.ts fetch --key-id <id or name> --otp <code> (--use | --out <file>)
  *   npx tsx scripts/keyvault.ts test --key-id <id or name> --otp <code>
  */
 import { config } from 'dotenv';
 import { readFileSync } from 'fs';
 import path from 'path';
-import { isVaultPlan, testVaultKey, useVaultKey } from '../src/domain/ai/keyVault';
+import { planList, refreshPlans, testVaultKey, useVaultKey } from '../src/domain/ai/keyVault';
 import {
   activate,
   claim,
   fetchKey,
   importApiKey,
   KVError,
-  listKeys,
   publicKey,
   refreshStatus,
   requestAccess,
@@ -43,8 +43,9 @@ async function printStatus() {
   const v = await vaultView();
   console.log(`Máy chủ: ${v.server}`);
   console.log(`Trạng thái: ${v.stage}${v.reviewNote ? ` (ghi chú: ${v.reviewNote})` : ''}${v.claimExpiresAt ? `, nhận trước ${v.claimExpiresAt} UTC` : ''}`);
-  for (const k of v.keys) console.log(`  ${k.id}  ${k.name}  ${k.description ?? ''}`);
-  for (const [target, t] of Object.entries(v.targets)) console.log(`  ${target} ← ${t.key_name} (${t.fetched_at})`);
+  for (const p of await planList()) {
+    console.log(`  ${p.id}  ${p.name}  ${p.fetched ? `gói đang dùng ${p.last4}` : 'chưa lấy token'}${p.granted ? '' : ' (không còn trên KeyVault)'}`);
+  }
 }
 
 async function main() {
@@ -66,24 +67,24 @@ async function main() {
     }
     case 'activate':
       await activate(need('otp'));
+      await refreshPlans();
       console.log('Đã kích hoạt.');
       return printStatus();
     case 'import':
       await importApiKey(need('api-key'), args.pem ? readFileSync(args.pem, 'utf8') : undefined, args.server);
+      await refreshPlans();
       console.log('Đã lưu API key và kiểm tra được danh sách key.');
       return printStatus();
     case 'pubkey':
       console.log(await publicKey());
       return;
     case 'keys':
-      await listKeys();
+      await refreshPlans();
       return printStatus();
     case 'fetch': {
-      const target = args.target;
-      if (target) {
-        if (!isVaultPlan(target)) throw new KVError('--target phải là primary hoặc fallback.');
-        const used = await useVaultKey(target, need('otp'), need('key-id'));
-        console.log(`Đã thử và dùng token ${used.last4} (${used.keyName}) cho ${target}.`);
+      if (args.use) {
+        const used = await useVaultKey(need('key-id'), need('otp'));
+        console.log(`Đã thử và dùng token ${used.last4} làm gói ${used.keyName}.`);
         return;
       }
       const out = need('out');

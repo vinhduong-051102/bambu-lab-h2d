@@ -84,7 +84,7 @@ const envSchema = z.object({
   PRINT_HISTORY_DIR: z.preprocess((val) => (typeof val === 'string' && val.trim() === '' ? undefined : val), z.string().default('./data/prints')),
   // Timelapse videos and thumbnails copied from the printer the first time they are watched
   TIMELAPSE_CACHE_DIR: z.preprocess((val) => (typeof val === 'string' && val.trim() === '' ? undefined : val), z.string().default('./data/timelapse')),
-  // The Claude model that reviews timelapses ("AI nhận xét"), through `claude -p` on CLAUDE_CODE_OAUTH_TOKEN
+  // The Claude model that reviews timelapses ("AI nhận xét"), through `claude -p` on the Claude plans from the KeyVault
   TIMELAPSE_AI_MODEL: z.preprocess((val) => (typeof val === 'string' && val.trim() === '' ? undefined : val), z.string().default('claude-opus-5-5')),
   // The Claude model that analyses why a background task failed when "Thử lại" is pressed on a failure no rule knows
   RETRY_AI_MODEL: z.preprocess((val) => (typeof val === 'string' && val.trim() === '' ? undefined : val), z.string().default('claude-sonnet-5-5')),

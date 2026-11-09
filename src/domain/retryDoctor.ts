@@ -80,7 +80,7 @@ const COMMON: Rule[] = [
   {
     match: /chưa đăng nhập được|CLAUDE_CODE_OAUTH_TOKEN|AI_DISABLED|\b401\b/i,
     cause: 'Claude chưa đăng nhập được trong container.',
-    stop: 'Đặt CLAUDE_CODE_OAUTH_TOKEN (claude setup-token) trong .env rồi khởi động lại container.',
+    stop: 'Lấy lại token của gói Claude từ KeyVault (Hệ thống → KeyVault).',
   },
   {
     match: /không kết nối được|ECONNREFUSED|fetch failed|không trả lời \(/i,

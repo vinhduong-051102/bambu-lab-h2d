@@ -124,8 +124,8 @@ describe('Claude through claude -p', () => {
   it('explains a missing Claude Code, a bad token and a used-up plan', async () => {
     const vision = new ClaudeCodeVision('claude-opus-5-5', 'no-such-claude-command');
     await expect(vision.review('', () => '', [Buffer.from('x')], {})).rejects.toThrow('Không tìm thấy lệnh claude');
-    expect(claudeError('Invalid API key · Please run /login')).toContain('CLAUDE_CODE_OAUTH_TOKEN');
-    expect(claudeError('401 OAuth token has expired')).toContain('CLAUDE_CODE_OAUTH_TOKEN');
+    expect(claudeError('Invalid API key · Please run /login')).toContain('KeyVault');
+    expect(claudeError('401 OAuth token has expired')).toContain('KeyVault');
     expect(claudeError('Claude usage limit reached')).toContain('hết lượt dùng');
     expect(claudeError('something else')).toBe('Claude không trả về nhận xét: something else');
   });

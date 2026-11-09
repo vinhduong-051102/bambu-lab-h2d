@@ -1,38 +1,44 @@
 /**
- * Which Claude subscription a task runs on: "auto" (CLAUDE_CODE_OAUTH_TOKEN, then CLAUDE_CODE_OAUTH_TOKEN_FALLBACK
- * once the first is out of usage), or only one of them ("primary", "fallback"), to keep the other's allowance for
- * something else. The dashboard picks the default for every task (AI_PLAN_FILE); an AI model or figure can be given
- * its own when it is made, kept in its job.json for the workers (cad/worker.py, mesh3d/review.py) and its retries.
+ * Which Claude subscription a task runs on: "auto" (the plans fetched from the KeyVault in turn, the next once one is
+ * out of usage), or only one of them (its KeyVault key's id), to keep the others' allowance for something else. The
+ * dashboard picks the default for every task (AI_PLAN_FILE); an AI model or figure can be given its own when it is
+ * made, kept in its job.json for the workers (cad/worker.py, mesh3d/review.py) and its retries.
  */
 import { promises as fs } from 'fs';
 import path from 'path';
-import { LIMIT_TOKENS } from './claudeLimits';
+import { claudePlans } from './claudePlans';
 
-export type AiPlan = 'auto' | 'primary' | 'fallback';
-export const AI_PLANS: AiPlan[] = ['auto', 'primary', 'fallback'];
+/** "auto", or a plan's id (its key on the KeyVault) */
+export type AiPlan = string;
 
-export const isAiPlan = (value: unknown): value is AiPlan => typeof value === 'string' && (AI_PLANS as string[]).includes(value);
+export const isAiPlan = (value: unknown): value is AiPlan => typeof value === 'string' && value.trim().length > 0 && value.length <= 200;
 
-const tokenOf = (plan: Exclude<AiPlan, 'auto'>) => process.env[LIMIT_TOKENS.find((t) => t.key === plan)!.env]?.trim() || null;
+const tokenOf = (plan: AiPlan) => claudePlans().find((p) => p.id === plan)?.token.trim() || null;
 
-/** The plans that can be picked: auto always, one subscription when its token is set */
+/** The plans that can be picked: auto, and each plan fetched from the KeyVault */
 export function availablePlans(): { plan: AiPlan; label: string; configured: boolean }[] {
+  const plans = claudePlans();
   return [
-    { plan: 'auto', label: 'Tự động (Gói 1, hết lượt thì Gói 2)', configured: true },
-    ...LIMIT_TOKENS.map((t) => ({ plan: t.key as AiPlan, label: `Chỉ ${t.label}`, configured: !!tokenOf(t.key) })),
+    { plan: 'auto', label: plans.length > 1 ? 'Tự động (lần lượt các gói, hết lượt thì gói kế)' : 'Tự động', configured: plans.length > 0 },
+    ...plans.map((p) => ({ plan: p.id, label: `Chỉ ${p.name}`, configured: true })),
   ];
+}
+
+/** A plan's name (its KeyVault key); null for auto */
+export function planName(plan: AiPlan): string | null {
+  return plan === 'auto' ? null : (claudePlans().find((p) => p.id === plan)?.name ?? null);
 }
 
 /** Why `plan` cannot be used now; null when it can */
 export function planProblem(plan: AiPlan): string | null {
+  if (!claudePlans().length) return 'Chưa có gói Claude nào: lấy token từ KeyVault (Hệ thống → KeyVault).';
   if (plan === 'auto' || tokenOf(plan)) return null;
-  const token = LIMIT_TOKENS.find((t) => t.key === plan)!;
-  return `${token.label} chưa được cấu hình: đặt ${token.env} trong .env.`;
+  return 'Gói Claude này không còn (KeyVault đã thu hồi key, hoặc chưa lấy token): chọn gói khác.';
 }
 
 /**
- * The tokens a call may use, in order, for `plan`: only that subscription's, or both (`ordered`: the order "auto"
- * uses, the one out of usage last). A plan whose token is not set falls back to "auto".
+ * The tokens a call may use, in order, for `plan`: only that subscription's, or every plan's (`ordered`: the order
+ * "auto" uses, the ones out of usage last). A plan that is gone falls back to "auto".
  */
 export function tokensForPlan(plan: AiPlan, ordered: string[]): string[] {
   if (plan === 'auto') return ordered;
@@ -51,7 +57,7 @@ const planFile = () => path.resolve(fileOverride ?? process.env.AI_PLAN_FILE ?? 
 export async function defaultPlan(): Promise<AiPlan> {
   try {
     const plan = JSON.parse(await fs.readFile(planFile(), 'utf8'))?.plan;
-    return isAiPlan(plan) ? plan : 'auto';
+    return isAiPlan(plan) && (plan === 'auto' || tokenOf(plan)) ? plan : 'auto';
   } catch {
     return 'auto';
   }

@@ -270,7 +270,7 @@ export function CadCard({ onBusyChange }: { onBusyChange?: (busy: boolean) => vo
   const workerStatus = !worker?.online
     ? `🔴 Container ${figure ? 'mesh3d' : 'CAD'} chưa chạy`
     : !worker.claude
-      ? '🟡 Thiếu CLAUDE_CODE_OAUTH_TOKEN'
+      ? '🟡 Chưa có gói Claude (Hệ thống → KeyVault)'
       : figure && !worker.loaded
         ? '🟢 Sẵn sàng (Hunyuan3D chưa nạp vào GPU)'
         : '🟢 Sẵn sàng';

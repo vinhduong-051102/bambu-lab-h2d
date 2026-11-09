@@ -15,9 +15,7 @@ services:
       # Engineering analysis of printed parts (docs/engineering-analysis.md): models, analyses, uploads
       - ENG_DIR=/eng
       - FEA_PYTHON=/opt/fea/bin/python
-      # Claude fixes, paints and makes the figures, on your Claude subscription
-      - CLAUDE_CODE_OAUTH_TOKEN=${CLAUDE_CODE_OAUTH_TOKEN:-}
-      - CLAUDE_CODE_OAUTH_TOKEN_FALLBACK=${CLAUDE_CODE_OAUTH_TOKEN_FALLBACK:-}
+      # Claude fixes, paints and makes the figures, on the Claude plans fetched from the KeyVault (mounted below)
       # Optional Hugging Face read token: model downloads without one are rate limited and slow
       - HF_TOKEN=${HF_TOKEN:-}
       # Models leave the GPU after this many seconds without a job

@@ -15,7 +15,7 @@ Without either container set up, the card stays hidden. With one of them, the ca
 3. `cad/build.py` has cadgen's engine build the file's `@model` (the one `MODEL` names, else the last), exports `out/model.stl` (fine tessellation for the slicer), `out/model.step` and `out/model.glb` (cadgen, with names, colours and materials), draws the preview with `cadgen snapshot` (OCCT on Xvfb, as text-to-cad's CAD Viewer draws: the isometric solid, front, right and top in x-ray), and reports the size, volume, whether the mesh is watertight and anything to check: larger than the H2D's 320 × 320 × 320 mm, not sitting on Z = 0, an invalid shape. A `model.py` from before text-to-cad, which assigns `result` (and `components`), still builds: the shape is handed to the engine as it is.
 4. The worker writes Claude's progress lines and the result to `status.json`; the dashboard polls it. When Claude is done, the worker builds `model.py` once more so the files always match the code that was kept.
 
-Claude runs on your Claude subscription through `CLAUDE_CODE_OAUTH_TOKEN` (from `claude setup-token`), the same token as Studio's **AI tối ưu**, so models count against the plan's usage limits rather than API billing. A model takes a few minutes and usually 2 to 4 builds. Sonnet uses less of the limits than Opus; Opus is better at parts that have to fit something. A run is stopped after 40 minutes (`CAD_AI_TIMEOUT_S`) or 60 turns; when it is stopped for time, the model.py Claude had is built once more and kept if it builds, with a warning that Claude did not finish.
+Claude runs on the Claude plans fetched from the KeyVault (Hệ thống → KeyVault, [keyvault.md](keyvault.md)), the same plans as Studio's **AI tối ưu**, so models count against the plan's usage limits rather than API billing. A model takes a few minutes and usually 2 to 4 builds. Sonnet uses less of the limits than Opus; Opus is better at parts that have to fit something. A run is stopped after 40 minutes (`CAD_AI_TIMEOUT_S`) or 60 turns; when it is stopped for time, the model.py Claude had is built once more and kept if it builds, with a warning that Claude did not finish.
 
 ## Setup
 
@@ -26,7 +26,6 @@ Claude runs on your Claude subscription through `CLAUDE_CODE_OAUTH_TOKEN` (from 
    The image has Python 3.13, cadgen 0.8.4 (text-to-cad's engine, with build123d 0.13 and OpenCascade), Xvfb and Mesa for its snapshots, trimesh for the DfAM check, ngspice and graphviz for circuits, and Claude Code, about 2 GB. The engine keeps a warm worker per model script (`CADGEN_ENGINE_WORKERS=3`, ~0.6 GB each), so the container has 6 GB. The worker's scripts are mounted from `./cad`, so changes to them only need `docker compose -f docker-compose.cad.yml restart`. The worker listens on `127.0.0.1:3102` only.
 2. Add to `.env`, then restart the gateway:
    ```env
-   CLAUDE_CODE_OAUTH_TOKEN=<token from claude setup-token>
    CAD_WORKER_URL=http://127.0.0.1:3102
    CAD_JOBS_DIR=./data/cad/jobs
    CAD_AI_MODEL=claude-opus-5-5
@@ -209,9 +208,8 @@ The image is about 31 GB: PyTorch 2.7 with CUDA 12.8 (the first with RTX 50xx ke
 Blender 4.5 LTS with Xvfb and Mesa, MCP for Blender and Claude Code. The models (Hunyuan3D-2mini, Hunyuan3D-2mv,
 HunyuanDiT, MV-Adapter with SDXL, the background remover, ~25 GB) download on first use into `MESH_MODELS_DIR`
 (a volume, so they survive rebuilds; put it on a roomy drive); `HF_TOKEN` makes the downloads faster. Models leave
-the GPU after 10 minutes without a job (`MESH_IDLE_UNLOAD_S`). It needs `CLAUDE_CODE_OAUTH_TOKEN`
-(`claude setup-token`; `CLAUDE_CODE_OAUTH_TOKEN_FALLBACK` for a second subscription). Then add to `.env` and
-restart the gateway:
+the GPU after 10 minutes without a job (`MESH_IDLE_UNLOAD_S`). It runs Claude on
+the Claude plans fetched from the KeyVault ([keyvault.md](keyvault.md)). Then add to `.env` and restart the gateway:
 
 ```env
 MESH_WORKER_URL=http://127.0.0.1:3103

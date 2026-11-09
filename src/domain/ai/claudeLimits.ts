@@ -1,6 +1,6 @@
 /**
- * How much of each Claude subscription the project uses is left: CLAUDE_CODE_OAUTH_TOKEN and
- * CLAUDE_CODE_OAUTH_TOKEN_FALLBACK (two plans, possibly of two organisations), the tokens `claude setup-token` makes.
+ * How much of each Claude subscription the project uses is left: the plans fetched from the KeyVault (claudePlans.ts),
+ * possibly of several organisations, each a token `claude setup-token` made.
  *
  * Those tokens may only call the model: Anthropic's usage endpoint (/api/oauth/usage, what Claude Code's /usage
  * reads) wants the user:profile scope they lack. Every model call, though, answers with the plan's limits in its
@@ -9,10 +9,7 @@
  * sliver of the plan; results are kept for CACHE_MS. The tokens never leave this module.
  */
 
-export const LIMIT_TOKENS = [
-  { key: 'primary', env: 'CLAUDE_CODE_OAUTH_TOKEN', label: 'Gói 1 (chính)' },
-  { key: 'fallback', env: 'CLAUDE_CODE_OAUTH_TOKEN_FALLBACK', label: 'Gói 2 (dự phòng)' },
-] as const;
+import { claudePlans } from './claudePlans';
 
 const API_URL = 'https://api.anthropic.com/v1/messages';
 // The cheapest model: the check reads headers, not the answer
@@ -124,7 +121,7 @@ async function probe(token: string): Promise<Omit<PlanLimits, 'key' | 'label' | 
       return text.slice(0, 200);
     }
   })();
-  const reason = res.status === 401 ? 'Token không hợp lệ hoặc đã hết hạn: chạy lại claude setup-token.' : `Anthropic trả HTTP ${res.status}`;
+  const reason = res.status === 401 ? 'Token không hợp lệ hoặc đã hết hạn: lấy lại từ KeyVault (Hệ thống → KeyVault).' : `Anthropic trả HTTP ${res.status}`;
   return { ...limits, error: `${reason}${message ? ` (${message})` : ''}` };
 }
 
@@ -133,24 +130,21 @@ export async function probeToken(token: string): Promise<Omit<PlanLimits, 'key' 
   return probe(token);
 }
 
-/** Both plans' limits: from the cache when it is under CACHE_MS old, unless `refresh` */
+/** Every plan's limits: from the cache when it is under CACHE_MS old, unless `refresh` */
 export async function claudeLimits(refresh = false): Promise<{ plans: PlanLimits[]; cachedAt: string; fresh: boolean }> {
   if (!refresh && cache && Date.now() - cache.at < CACHE_MS) {
     return { plans: cache.plans, cachedAt: new Date(cache.at).toISOString(), fresh: false };
   }
-  const seen = new Set<string>();
+  const seen = new Map<string, string>();
   const plans = await Promise.all(
-    LIMIT_TOKENS.map(async ({ key, env, label }): Promise<PlanLimits> => {
-      const token = process.env[env]?.trim() ?? '';
+    claudePlans().map(async ({ id: key, name: label, token: value }): Promise<PlanLimits> => {
+      const token = value.trim();
       const checkedAt = new Date().toISOString();
       const base = { key, label, checkedAt };
-      if (!token) {
-        return { ...base, configured: false, organization: null, status: null, fiveHour: empty(), sevenDay: empty(), limitedBy: null, overage: null, error: null };
-      }
       if (seen.has(token)) {
-        return { ...base, configured: true, organization: null, status: null, fiveHour: empty(), sevenDay: empty(), limitedBy: null, overage: null, error: 'Trùng token với gói 1: hai biến đang trỏ vào cùng một gói.' };
+        return { ...base, configured: true, organization: null, status: null, fiveHour: empty(), sevenDay: empty(), limitedBy: null, overage: null, error: `Trùng token với gói ${seen.get(token)}: hai key trên KeyVault giữ cùng một token.` };
       }
-      seen.add(token);
+      seen.set(token, label);
       return { ...base, configured: true, ...(await probe(token)) };
     })
   );

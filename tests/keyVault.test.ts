@@ -5,11 +5,13 @@ import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { getKeyVault, postKeyVault } from '../src/api/routes/keyvault';
 import { setLimitsFetch } from '../src/domain/ai/claudeLimits';
-import { applyVaultTokens, dropNonVault, guessPlan, planSources, testVaultKey, useVaultKey } from '../src/domain/ai/keyVault';
+import { availablePlans } from '../src/domain/ai/aiPlan';
+import { claudePlans } from '../src/domain/ai/claudePlans';
+import { planList, refreshPlans, testVaultKey, useVaultKey } from '../src/domain/ai/keyVault';
 import { checkServer, ensureKey, fetchKey, loadState, openExport, requestAccess, saveState, setVaultFetch, vaultView } from '../src/domain/keyvault/keyVaultClient';
 import { setRuntime } from '../src/runtime/runtime';
 
-const VARS = ['KV_SERVER', 'KV_DIR', 'CLAUDE_TOKENS_FILE', 'CLAUDE_CODE_OAUTH_TOKEN', 'CLAUDE_CODE_OAUTH_TOKEN_FALLBACK'] as const;
+const VARS = ['KV_SERVER', 'KV_DIR', 'CLAUDE_TOKENS_FILE'] as const;
 const ctx = (action?: string) => ({ params: Promise.resolve(action ? { action } : {}) });
 const post = (action: string, body: unknown = {}) =>
   postKeyVault(new Request(`http://localhost/api/keyvault/${action}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }), ctx(action) as never);
@@ -100,14 +102,12 @@ describe('KeyVault', () => {
   let calls: string[];
 
   beforeEach(() => {
-    // A copy of the configuration: folders of its own, and the tokens .env would give
+    // A copy of the configuration: folders of its own, no plans yet
     dir = mkdtempSync(join(tmpdir(), 'keyvault-'));
     Object.assign(process.env, {
       KV_SERVER: 'http://100.112.133.34:8000',
       KV_DIR: join(dir, 'keyvault'),
       CLAUDE_TOKENS_FILE: join(dir, 'claude', 'tokens.json'),
-      CLAUDE_CODE_OAUTH_TOKEN: 'sk-ant-env-one-1111',
-      CLAUDE_CODE_OAUTH_TOKEN_FALLBACK: 'sk-ant-env-two-2222',
     });
     calls = [];
     setRuntime({ printerService: {} as never });
@@ -143,7 +143,7 @@ describe('KeyVault', () => {
   it('says it is not connected before anything about the private key', async () => {
     await expect(fetchKey('k', '123456')).rejects.toThrow(/Chưa kết nối KeyVault/);
     expect(existsSync(join(dir, 'keyvault', 'keyvault-recipient.key'))).toBe(false);
-    expect((await (await post('use', { plan: 'primary', otp: '123456', key_id: 'k' })).json()).message).toMatch(/Chưa kết nối/);
+    expect((await (await post('use', { otp: '123456', key_id: 'k' })).json()).message).toMatch(/Chưa kết nối/);
   });
 
   it('registers step by step: request, approval, claim with the secret shown, activation that forgets it', async () => {
@@ -159,17 +159,17 @@ describe('KeyVault', () => {
     expect(await (await post('claim')).json()).toMatchObject({ stage: 'claimed', totpSecret: 'JBSWY3DPEHPK3PXP' });
     expect((await (await post('activate', { otp: '000000' })).json()).message).toMatch(/OTP không hợp lệ.*NTP/);
     const active = await (await post('activate', { otp: '123456' })).json();
-    expect(active).toMatchObject({ stage: 'active', totpSecret: null, keys: [{ name: 'claude-primary', guess: 'primary' }] });
+    expect(active).toMatchObject({ stage: 'active', totpSecret: null, plans: [{ name: 'claude-primary', fetched: false, granted: true }] });
     expect((await loadState()).totp_secret).toBeUndefined();
     // The page's view reads the files: no network
     const before = calls.length;
     await getView();
     expect(calls.length).toBe(before);
-    // Starting over: the old registration backed up, the server and each plan's key kept, a new request with a new pair
-    await saveState({ ...(await loadState()), server: 'http://10.0.0.9:8000', targets: { primary: { key_id: 'id-claude-primary', key_name: 'claude-primary', fetched_at: 'x' } } });
+    // Starting over: the old registration backed up, the server kept, a new request with a new pair
+    await saveState({ ...(await loadState()), server: 'http://10.0.0.9:8000' });
     const oldPub = (await (await post('pubkey')).json()).publicKey;
     const again = await (await post('reconnect')).json();
-    expect(again).toMatchObject({ success: true, stage: 'none', requestId: null, hasPrivateKey: false, targets: { primary: { key_id: 'id-claude-primary' } } });
+    expect(again).toMatchObject({ success: true, stage: 'none', requestId: null, hasPrivateKey: false });
     expect(readdirSync(again.backup).sort()).toEqual(['keyvault-recipient.key', 'keyvault.json']);
     expect((await loadState()).server).toBe('http://10.0.0.9:8000');
     expect(await (await post('request', { name: 'gw', contact: 'me', reason: 'again' })).json()).toMatchObject({ stage: 'pending', requestId: 'req1' });
@@ -182,60 +182,58 @@ describe('KeyVault', () => {
     expect(Buffer.from(pub.publicKey, 'base64')).toHaveLength(32);
     expect((await (await post('import', { api_key: 'kv_wrong' })).json()).message).toMatch(/API key không hợp lệ/);
     expect((await vaultView()).stage).toBe('none');
-    expect(await (await post('import', { api_key: 'kv_test' })).json()).toMatchObject({ stage: 'active', keys: [{ name: 'k' }] });
+    expect(await (await post('import', { api_key: 'kv_test' })).json()).toMatchObject({ stage: 'active', keys: [{ name: 'k' }], plans: [{ name: 'k', fetched: false }] });
   });
 
-  it('guesses the plan from a key’s name', () => {
-    expect(guessPlan({ name: 'CLAUDE_CODE_OAUTH_TOKEN_FALLBACK' })).toBe('fallback');
-    expect(guessPlan({ name: 'claude_code_oauth_token' })).toBe('primary');
-    expect(guessPlan({ name: 'Gói dự phòng' })).toBe('fallback');
-    expect(guessPlan({ name: 'goi-1', description: '' })).toBe('primary');
-    expect(guessPlan({ name: 'token', description: 'gói chính' })).toBe('primary');
-    expect(guessPlan({ name: 'payment-hmac' })).toBe(null);
-  });
-
-  it('moves to the KeyVault: a good token is tried then kept, a bad one leaves the old, .env goes only after', async () => {
-    setVaultFetch(fakeVault({ 'claude-primary': 'sk-ant-good-aaaa\n', 'claude-fallback': 'sk-ant-bad-bbbb', 'payment-hmac': 'xyz' }, calls).fetch);
-    await saveState({ stage: 'active', api_key: 'kv_test', keys: [] });
+  it('makes each Claude key a plan: tried before it is kept, in the KeyVault’s order, gone once taken back', async () => {
+    const keys: Record<string, string> = { cla_a: 'sk-ant-good-aaaa\n', cla_bad: 'sk-ant-bad-bbbb', 'payment-hmac': 'xyz', cla_c: 'sk-ant-good-cccc' };
+    setVaultFetch(fakeVault(keys, calls).fetch);
+    await saveState({ stage: 'active', api_key: 'kv_test' });
     await ensureKey();
     fakeAnthropic(calls);
-    await expect(dropNonVault()).rejects.toThrow(/Chưa có gói nào/);
+    await refreshPlans();
+    expect((await planList()).map((p) => [p.name, p.fetched])).toEqual([
+      ['cla_a', false],
+      ['cla_bad', false],
+      ['payment-hmac', false],
+      ['cla_c', false],
+    ]);
+    expect(claudePlans()).toEqual([]);
+    expect(availablePlans()).toEqual([{ plan: 'auto', label: 'Tự động', configured: false }]);
 
-    // A bad token: refused, the old one stays
-    await expect(useVaultKey('fallback', '123456', 'id-claude-fallback')).rejects.toThrow(/không dùng được, giữ nguyên token cũ/);
-    await expect(useVaultKey('fallback', '123456', 'id-payment-hmac')).rejects.toThrow(/không phải token Claude/);
-    expect(process.env.CLAUDE_CODE_OAUTH_TOKEN_FALLBACK).toBe('sk-ant-env-two-2222');
-    expect(existsSync(process.env.CLAUDE_TOKENS_FILE!)).toBe(false);
+    // A bad token: refused, nothing kept; a key that is no Claude token: hidden from the plans
+    await expect(useVaultKey('id-cla_bad', '123456')).rejects.toThrow(/không dùng được, giữ nguyên như cũ/);
+    await expect(useVaultKey('id-payment-hmac', '123456')).rejects.toThrow(/không phải token Claude.*Đã ẩn/);
+    expect(claudePlans()).toEqual([]);
+    expect((await planList()).map((p) => p.name)).toEqual(['cla_a', 'cla_bad', 'cla_c']);
 
-    // A good one: kept, used, remembered, so the next time only takes a code
-    const used = await (await post('use', { plan: 'primary', otp: '123456', key_id: 'id-claude-primary' })).json();
-    expect(used).toMatchObject({ success: true, used: { keyName: 'claude-primary', last4: '••••aaaa' } });
+    // Good ones: kept, used at once, in the KeyVault's order whatever order they come in
+    const used = await (await post('use', { key_id: 'id-cla_c', otp: '123456' })).json();
+    expect(used).toMatchObject({ success: true, used: { keyName: 'cla_c', last4: '••••cccc' } });
     expect(JSON.stringify(used)).not.toContain('sk-ant-good');
-    expect(process.env.CLAUDE_CODE_OAUTH_TOKEN).toBe('sk-ant-good-aaaa');
-    expect(calls).toContain('probe aaaa');
-    expect((await loadState()).targets?.primary).toMatchObject({ key_id: 'id-claude-primary' });
-    expect(await useVaultKey('primary', '123456')).toMatchObject({ keyName: 'claude-primary' });
+    expect(calls).toContain('probe cccc');
+    await useVaultKey('id-cla_a', '123456');
+    expect(claudePlans().map((p) => [p.name, p.token])).toEqual([
+      ['cla_a', 'sk-ant-good-aaaa'],
+      ['cla_c', 'sk-ant-good-cccc'],
+    ]);
+    expect(availablePlans().map((p) => p.plan)).toEqual(['auto', 'id-cla_a', 'id-cla_c']);
 
     // Trying a key keeps nothing, and tells when a plan has it already
-    expect(await testVaultKey('id-claude-primary', '123456')).toMatchObject({ usable: true, fiveHour: 0.25, sevenDay: 0.5, sameAs: 'Gói 1 (chính)', last4: '••••aaaa' });
-    expect(await testVaultKey('id-claude-fallback', '123456')).toMatchObject({ usable: false, sameAs: null });
+    expect(await testVaultKey('id-cla_a', '123456')).toMatchObject({ usable: true, fiveHour: 0.25, sevenDay: 0.5, sameAs: 'cla_a', last4: '••••aaaa' });
+    expect(await testVaultKey('id-cla_bad', '123456')).toMatchObject({ usable: false, sameAs: null });
 
-    // Now .env's fallback can go: backed up, then dropped for the gateway and the workers
-    const dropped = await (await post('drop-others')).json();
-    expect(dropped).toMatchObject({ dropped: ['Gói 2 (dự phòng)'] });
-    expect(readFileSync(join(dropped.backup, 'CLAUDE_CODE_OAUTH_TOKEN_FALLBACK'), 'utf8')).toBe('sk-ant-env-two-2222');
-    expect(readdirSync(join(dir, 'claude')).some((f) => f.startsWith('.backup-'))).toBe(true);
-    expect(process.env.CLAUDE_CODE_OAUTH_TOKEN_FALLBACK).toBe('');
-    expect((await planSources()).map((p) => [p.key, p.source])).toEqual([
-      ['primary', 'vault'],
-      ['fallback', 'dropped'],
+    // Taken back on the KeyVault: its plan goes the next time the list is read; a new key shows as a plan
+    delete keys.cla_a;
+    keys.cla_new = 'sk-ant-good-nnnn';
+    const after = await (await post('keys')).json();
+    expect(after.plans.map((p: { name: string; fetched: boolean }) => [p.name, p.fetched])).toEqual([
+      ['cla_bad', false],
+      ['cla_c', true],
+      ['cla_new', false],
     ]);
-
-    // At the next start the file wins over .env again, the dropped one included
-    Object.assign(process.env, { CLAUDE_CODE_OAUTH_TOKEN: 'sk-ant-env-one-1111', CLAUDE_CODE_OAUTH_TOKEN_FALLBACK: 'sk-ant-env-two-2222' });
-    await applyVaultTokens();
-    expect([process.env.CLAUDE_CODE_OAUTH_TOKEN, process.env.CLAUDE_CODE_OAUTH_TOKEN_FALLBACK]).toEqual(['sk-ant-good-aaaa', '']);
-    expect(JSON.stringify(await getView())).not.toMatch(/sk-ant-(good|env)/);
+    expect(claudePlans().map((p) => p.name)).toEqual(['cla_c']);
+    expect(JSON.stringify(await getView())).not.toContain('sk-ant-good');
   });
 
   it('turns the server’s errors into plain words', async () => {

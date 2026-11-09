@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { claudeLimits, parseLimitHeaders, setLimitsFetch } from '../src/domain/ai/claudeLimits';
 import { activePlan, barColor, formatReset, percent, planState } from '../src/ui/aiLimits.js';
+import { DEFAULT_PLANS, setPlans } from './helpers/plans';
 
 // What Anthropic answered for a real plan (2026-10-29), organisation id shortened
 const HEADERS = {
@@ -16,21 +17,14 @@ const HEADERS = {
   'anthropic-ratelimit-unified-status': 'allowed',
 };
 
-const TOKENS = ['CLAUDE_CODE_OAUTH_TOKEN', 'CLAUDE_CODE_OAUTH_TOKEN_FALLBACK'] as const;
-
 describe('Claude plan limits', () => {
-  const saved: Record<string, string | undefined> = {};
   let calls: { auth: string | null; body: any }[];
 
   beforeEach(() => {
-    for (const k of TOKENS) saved[k] = process.env[k];
     calls = [];
   });
   afterEach(() => {
-    for (const k of TOKENS) {
-      if (saved[k] === undefined) delete process.env[k];
-      else process.env[k] = saved[k];
-    }
+    setPlans(DEFAULT_PLANS);
     setLimitsFetch(null);
   });
 
@@ -55,9 +49,11 @@ describe('Claude plan limits', () => {
     });
   });
 
-  it('checks both plans with the smallest call, never returns a token, and keeps the answer', async () => {
-    process.env.CLAUDE_CODE_OAUTH_TOKEN = 'tok-one';
-    process.env.CLAUDE_CODE_OAUTH_TOKEN_FALLBACK = 'tok-two';
+  it('checks every plan with the smallest call, never returns a token, and keeps the answer', async () => {
+    setPlans([
+      ['k1', 'cla_one', 'tok-one'],
+      ['k2', 'cla_two', 'tok-two'],
+    ]);
     answer({
       'tok-one': { status: 200, headers: HEADERS },
       'tok-two': { status: 429, headers: { ...HEADERS, 'anthropic-ratelimit-unified-status': 'rejected', 'anthropic-ratelimit-unified-5h-utilization': '1.0' } },
@@ -66,9 +62,9 @@ describe('Claude plan limits', () => {
     expect(calls.map((c) => c.auth)).toEqual(['Bearer tok-one', 'Bearer tok-two']);
     expect(calls[0].body.max_tokens).toBe(1);
     expect(first.plans.map((p) => [p.key, p.status, p.fiveHour.utilization, p.error])).toEqual([
-      ['primary', 'allowed', 0.52, null],
+      ['k1', 'allowed', 0.52, null],
       // Out of usage is an answer, not an error
-      ['fallback', 'rejected', 1, null],
+      ['k2', 'rejected', 1, null],
     ]);
     expect(JSON.stringify(first)).not.toContain('tok-');
     // Within 5 minutes: no new call
@@ -77,20 +73,25 @@ describe('Claude plan limits', () => {
     expect(calls).toHaveLength(2);
   });
 
-  it('says which plan is missing, repeated or refused', async () => {
-    process.env.CLAUDE_CODE_OAUTH_TOKEN = 'tok-bad';
-    delete process.env.CLAUDE_CODE_OAUTH_TOKEN_FALLBACK;
+  it('says which plan is repeated or refused, and lists none when there is none', async () => {
+    setPlans([['k1', 'cla_bad', 'tok-bad']]);
     answer({ 'tok-bad': { status: 401, body: { error: { message: 'Invalid bearer token' } } } });
     const { plans } = await claudeLimits(true);
-    expect(plans[0].error).toContain('claude setup-token');
+    expect(plans).toHaveLength(1);
+    expect(plans[0]).toMatchObject({ key: 'k1', label: 'cla_bad', configured: true });
+    expect(plans[0].error).toContain('KeyVault');
     expect(plans[0].error).toContain('Invalid bearer token');
-    expect(plans[1]).toMatchObject({ configured: false, error: null });
 
-    process.env.CLAUDE_CODE_OAUTH_TOKEN = 'tok-one';
-    process.env.CLAUDE_CODE_OAUTH_TOKEN_FALLBACK = 'tok-one';
+    setPlans([]);
+    expect((await claudeLimits(true)).plans).toEqual([]);
+
+    setPlans([
+      ['k1', 'cla_one', 'tok-one'],
+      ['k2', 'cla_same', 'tok-one'],
+    ]);
     answer({ 'tok-one': { status: 200, headers: HEADERS } });
     const twin = await claudeLimits(true);
-    expect(twin.plans[1].error).toContain('Trùng token');
+    expect(twin.plans[1].error).toContain('Trùng token với gói cla_one');
     expect(calls.filter((c) => c.auth === 'Bearer tok-one')).toHaveLength(1);
   });
 });

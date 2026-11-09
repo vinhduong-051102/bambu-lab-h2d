@@ -19,10 +19,12 @@ A click (when this folder, mounted read-only at `/opt/studio-ai`, has an executa
    stops `on-click` and Claude.
 3. `on-click` gets the setting changes from the gateway (`STUDIO_AI_URL`, default
    `http://host.docker.internal:3000/api/studio/ai-optimize`) and writes the JSON answer to `response.json`:
-   - with `CLAUDE_CODE_OAUTH_TOKEN` (from `claude setup-token`): it posts the request to `$STUDIO_AI_URL/prompt`,
-     runs `claude -p` with that prompt and output schema (no tools, no settings files, 10-minute limit: a proposal that changes every setting is long), and posts
-     `{request, proposal}` to `$STUDIO_AI_URL/check`. Claude is billed to that Claude subscription.
-   - without it: it posts the request to `$STUDIO_AI_URL`, and the gateway asks Claude with its `ANTHROPIC_API_KEY`.
+   - with a Claude plan fetched from the KeyVault (`/run/claude/tokens.json`, mounted from `data/secrets/claude`): it
+     posts the request to `$STUDIO_AI_URL/prompt`, runs `claude -p` with that prompt and output schema (no tools, no
+     settings files, 10-minute limit: a proposal that changes every setting is long) on the first plan, the next one
+     whenever a plan is out of usage, and posts `{request, proposal}` to `$STUDIO_AI_URL/check`. Claude is billed to
+     that plan.
+   - without one: it posts the request to `$STUDIO_AI_URL`, and the gateway asks Claude with its `ANTHROPIC_API_KEY`.
 4. Studio lists the proposed changes with their reasons, with a box for the user's opinion:
    - **Áp dụng** loads them as if they had been typed in: process changes into the edited process preset, filament
      changes into their filament preset, which Studio first opens in the Filament tab (asking about unsaved edits

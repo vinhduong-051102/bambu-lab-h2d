@@ -3,8 +3,8 @@
  * fetching a key with the API key, this machine's X25519 private key and a one-time code from Google Authenticator.
  *
  * Kept in KV_DIR (data/secrets/keyvault, outside git), each file mode 600 and written whole (tmp + rename):
- * - keyvault.json: server, request_id, claim_token, api_key, recipient_id, stage, the keys granted, and per target the
- *   key it takes; totp_secret only until the code it makes has activated the recipient
+ * - keyvault.json: server, request_id, claim_token, api_key, recipient_id, stage, the keys granted; totp_secret only
+ *   until the code it makes has activated the recipient
  * - keyvault-recipient.key: the private key, PEM PKCS8 without a passphrase (the gateway reads it unattended). Made
  *   here (ensureKey), so it never crosses the network.
  *
@@ -32,12 +32,6 @@ export interface VaultKey {
   description?: string;
 }
 
-export interface VaultTarget {
-  key_id: string;
-  key_name: string;
-  fetched_at: string;
-}
-
 export interface VaultState {
   server?: string;
   request_id?: string;
@@ -52,8 +46,6 @@ export interface VaultState {
   /** Until activation: the authenticator's secret and its otpauth:// URI, for the page to show */
   totp_secret?: string;
   otpauth_uri?: string;
-  /** Where each key was put (a target's name: a Claude plan), so the next fetch only needs a code */
-  targets?: Record<string, VaultTarget>;
 }
 
 export class KVError extends Error {
@@ -241,7 +233,7 @@ export async function requestAccess(req: AccessRequest, server?: string): Promis
   const state = await loadState();
   if (state.request_id && state.stage !== 'rejected') throw new KVError('Đã gửi yêu cầu rồi: kiểm tra trạng thái, hoặc gỡ kết nối để gửi lại.', 409);
   if (!req.name?.trim() || !req.contact?.trim() || !req.reason?.trim()) throw new KVError('Cần tên, liên hệ và lý do.');
-  const next: VaultState = { stage: 'none', server: server?.trim() ? checkServer(server) : state.server, targets: state.targets };
+  const next: VaultState = { stage: 'none', server: server?.trim() ? checkServer(server) : state.server };
   const body = { name: req.name.trim(), contact: req.contact.trim(), organization: req.organization?.trim() ?? '', reason: req.reason.trim(), requested_keys: req.requested_keys?.trim() ?? '', public_key: await publicKey() };
   const res = await call<{ request_id: string; claim_token: string }>(next, 'POST', '/api/v1/access-requests', { body });
   const saved: VaultState = { ...next, server: serverOf(next), request_id: res.request_id, claim_token: res.claim_token, stage: 'pending' };
@@ -295,7 +287,7 @@ export async function importApiKey(apiKey: string, privateKeyPem?: string, serve
   if (!/^kv_\S+$/.test(apiKey.trim())) throw new KVError('API key phải có dạng kv_...');
   const priv = privateKeyPem?.trim() ? parsePrivateKey(privateKeyPem.trim()) : await ensureKey();
   const state = await loadState();
-  const next: VaultState = { stage: 'active', server: server?.trim() ? checkServer(server) : state.server, api_key: apiKey.trim(), targets: state.targets };
+  const next: VaultState = { stage: 'active', server: server?.trim() ? checkServer(server) : state.server, api_key: apiKey.trim() };
   const keys = await call<VaultKey[]>(next, 'GET', '/api/v1/keys', { apiKey: true });
   if (privateKeyPem?.trim()) await writeSecret(keyFile(), priv.export({ type: 'pkcs8', format: 'pem' }) as string);
   const saved = { ...next, server: serverOf(next), keys, keys_checked_at: new Date().toISOString() };
@@ -314,13 +306,12 @@ export async function listKeys(): Promise<VaultState> {
 
 /**
  * Starts registering again (a lost authenticator secret, a claim gone stale, a new admin): the state and the private
- * key go to .backup-<time>/ as on reset, keeping the server and which key each plan takes; a new request makes a new
- * key pair
+ * key go to .backup-<time>/ as on reset, keeping the server; a new request makes a new key pair
  */
 export async function reconnect(): Promise<string | null> {
   const state = await loadState();
   const backup = await reset();
-  await saveState({ stage: 'none', server: state.server, targets: state.targets });
+  await saveState({ stage: 'none', server: state.server });
   return backup;
 }
 
@@ -367,12 +358,6 @@ export async function fetchKey(keyId: string, otp: string): Promise<{ key: Vault
   }
 }
 
-/** Remembers which key a target took */
-export async function rememberTarget(target: string, key: VaultKey): Promise<void> {
-  const state = await loadState();
-  await saveState({ ...state, targets: { ...state.targets, [target]: { key_id: key.id, key_name: key.name, fetched_at: new Date().toISOString() } } });
-}
-
 // ---------- for the page ----------
 
 export interface VaultView {
@@ -388,7 +373,6 @@ export interface VaultView {
   otpauthUri: string | null;
   keys: VaultKey[];
   keysCheckedAt: string | null;
-  targets: Record<string, VaultTarget>;
 }
 
 /** What the page shows, from the files here: no network */
@@ -412,6 +396,5 @@ export async function vaultView(): Promise<VaultView> {
     otpauthUri: state.stage === 'claimed' ? (state.otpauth_uri ?? null) : null,
     keys: state.keys ?? [],
     keysCheckedAt: state.keys_checked_at ?? null,
-    targets: state.targets ?? {},
   };
 }

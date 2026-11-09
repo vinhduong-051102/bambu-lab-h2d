@@ -64,8 +64,7 @@ ENG_POST = {"inspect": eng.inspect_model, "validate": eng.validate_mesh, "assemb
 
 
 def claude_ready():
-    review.load_vault_tokens()
-    return bool(os.environ.get("CLAUDE_CODE_OAUTH_TOKEN"))
+    return bool(review.claude_plans())
 
 
 # ---------- HTTP ----------
@@ -191,7 +190,7 @@ class Handler(BaseHTTPRequestHandler):
 
         if action in ("generate", "fix") and not claude_ready():
             return self.reply(501, {"ok": False, "error": "AI_DISABLED",
-                                    "message": "Container mesh3d chưa có CLAUDE_CODE_OAUTH_TOKEN (claude setup-token)."})
+                                    "message": "Chưa có gói Claude nào: lấy token từ KeyVault (Hệ thống → KeyVault)."})
         if action in ("generate", "fix"):
             # A retry carries why the run before failed: Claude reads it (review.retry_note); a new run has none
             if isinstance(body.get("retry"), dict):

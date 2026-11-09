@@ -36,7 +36,7 @@ import { suggestMix } from '../../domain/filaments/colourMixing';
 import { saveStudioImport, safeFileName } from '../../domain/studio/studioImports';
 import { serveFile } from './timelapse';
 import { startTask } from '../../domain/backgroundTasks';
-import { defaultPlan, planProblem, type AiPlan } from '../../domain/ai/aiPlan';
+import { defaultPlan, planName, planProblem, type AiPlan } from '../../domain/ai/aiPlan';
 import { logger } from '../../logger/logger';
 import { diagnose, diagnoseByRules, failureSignature, SAME_FAILURE_LIMIT, settleRetry } from '../../domain/retryDoctor';
 import { CLAUDE_MODEL_DOCTOR, CODE_MODEL_DOCTOR, DFAM_DOCTOR, DRAWING_DOCTOR, FIGURE_DOCTOR, GUIDE_DOCTOR } from '../../domain/cad/cadDoctors';
@@ -129,7 +129,7 @@ async function pickPlan(asked: AiPlan | undefined): Promise<AiPlan | Response> {
 
 const jobSchema = z.object({
   // The Claude subscription it runs on (src/domain/ai/aiPlan.ts); default: the one picked for every task
-  plan: z.enum(['auto', 'primary', 'fallback']).optional(),
+  plan: z.string().trim().min(1).max(200).optional(),
   prompt: z.string().trim().min(3, 'Mô tả quá ngắn.'),
   model: z.string().optional(),
   // A revision: the prompt says what to change in that job's model
@@ -140,7 +140,7 @@ const jobSchema = z.object({
 
 const buildSchema = z.object({
   // The Claude subscription it runs on (src/domain/ai/aiPlan.ts); default: the one picked for every task
-  plan: z.enum(['auto', 'primary', 'fallback']).optional(),
+  plan: z.string().trim().min(1).max(200).optional(),
   code: z.string().min(1, 'Thiếu code.').refine((code) => Buffer.byteLength(code) <= MAX_CODE_BYTES, 'Code dài quá 200 KB.'),
   title: z.string().trim().max(120).optional(),
   prompt: z.string().trim().optional(),
@@ -284,7 +284,7 @@ export const createCadJob = handler(async ({ request }) => {
   }
 
   const meta = await store().create(
-    { prompt: body.data.prompt, source: 'claude', model, plan, parent_id: body.data.parent_id ?? null, title: null },
+    { prompt: body.data.prompt, source: 'claude', model, plan, plan_name: planName(plan), parent_id: body.data.parent_id ?? null, title: null },
     files
   );
   try {
@@ -312,6 +312,7 @@ export const buildCadCode = handler(async ({ request }) => {
       source: 'code',
       model: null,
       plan,
+      plan_name: planName(plan),
       parent_id: body.data.parent_id ?? null,
       title: body.data.title || null,
     },
@@ -442,7 +443,7 @@ export const deleteCadJob = handler<{ id: string }>(async ({ request, params }) 
 
 const meshSchema = z.object({
   // The Claude subscription it runs on (src/domain/ai/aiPlan.ts); default: the one picked for every task
-  plan: z.enum(['auto', 'primary', 'fallback']).optional(),
+  plan: z.string().trim().min(1).max(200).optional(),
   prompt: z.string().trim().default(''),
   height_mm: z.coerce.number().min(10, 'Chiều cao tối thiểu 10 mm.').max(300, 'Chiều cao tối đa 300 mm.').default(80),
   base: z.preprocess((v) => v === true || v === 'true' || v === '1' || v === 'on', z.boolean()).default(false),
@@ -688,7 +689,7 @@ export const createMeshJob = handler(async ({ request, printerService }) => {
     multiview: Boolean(image) && body.data.multiview,
   };
   const meta = await store().create(
-    { prompt: prompt || 'Mô hình từ ảnh', source: 'mesh', model, plan, parent_id: body.data.parent_id ?? null, title: null },
+    { prompt: prompt || 'Mô hình từ ảnh', source: 'mesh', model, plan, plan_name: planName(plan), parent_id: body.data.parent_id ?? null, title: null },
     image ? { image, views, mesh: params } : { mesh: params }
   );
   try {
@@ -702,7 +703,7 @@ export const createMeshJob = handler(async ({ request, printerService }) => {
 
 const fixSchema = z.object({
   // The Claude subscription it runs on (src/domain/ai/aiPlan.ts); default: the one picked for every task
-  plan: z.enum(['auto', 'primary', 'fallback']).optional(),
+  plan: z.string().trim().min(1).max(200).optional(),
   // What to fix; empty: Claude looks for problems itself
   prompt: z.string().trim().default(''),
   model: z.string().optional(),
@@ -741,6 +742,7 @@ export const fixMeshJob = handler<{ id: string }>(async ({ request, params }) =>
       source: 'mesh',
       model,
       plan,
+      plan_name: planName(plan),
       parent_id: parent.id,
       title: parent.title,
     },

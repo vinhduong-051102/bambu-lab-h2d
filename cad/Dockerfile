@@ -1,6 +1,6 @@
 # CAD worker for "Thiết kế mô hình bằng AI" (docs/cad.md, docs/text-to-cad.md): text-to-cad's cadgen engine builds
 # the build123d models, draws their previews (OCCT, on Xvfb) and exports them; Claude Code writes the models from a
-# request (`claude -p`, signed in with the CLAUDE_CODE_OAUTH_TOKEN from `claude setup-token`) with text-to-cad's
+# request (`claude -p`, on a Claude plan's token from the KeyVault, mounted at /run/claude) with text-to-cad's
 # skills (./text-to-cad). The worker's scripts are mounted from ./cad at run time.
 FROM python:3.13-slim
 

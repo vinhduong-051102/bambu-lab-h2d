@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { DEFAULT_PLANS, setPlans } from './helpers/plans';
 import { promises as fs } from 'fs';
 import os from 'os';
 import path from 'path';
@@ -331,24 +332,25 @@ describe('AI modelling API (/api/cad)', () => {
     }
   });
 
-  it('runs a model on the subscription asked for, else the one picked for every task, and keeps it in job.json', async () => {
-    const saved = process.env.CLAUDE_CODE_OAUTH_TOKEN_FALLBACK;
-    process.env.CLAUDE_CODE_OAUTH_TOKEN_FALLBACK = 'two';
+  it('runs a model on the plan asked for, else the one picked for every task, and keeps it in job.json', async () => {
     try {
-      const asked = (await create({ prompt: 'Một cái hộp', plan: 'fallback' })).json().job;
-      expect(JSON.parse(await fs.readFile(path.join(jobsDir, asked.id, 'job.json'), 'utf8')).plan).toBe('fallback');
-      expect(asked.plan).toBe('fallback');
-      await setDefaultPlan('primary');
+      const asked = (await create({ prompt: 'Một cái hộp', plan: 'k2' })).json().job;
+      expect(JSON.parse(await fs.readFile(path.join(jobsDir, asked.id, 'job.json'), 'utf8')).plan).toBe('k2');
+      expect(asked).toMatchObject({ plan: 'k2', plan_name: 'cla_two' });
+      await setDefaultPlan('k1');
       const picked = (await create({ prompt: 'Hộp khác' })).json().job;
-      expect(picked.plan).toBe('primary');
-      delete process.env.CLAUDE_CODE_OAUTH_TOKEN_FALLBACK;
-      const refused = await create({ prompt: 'Hộp nữa', plan: 'fallback' });
+      expect(picked.plan).toBe('k1');
+      // A plan the KeyVault took back
+      setPlans([DEFAULT_PLANS[0]]);
+      const refused = await create({ prompt: 'Hộp nữa', plan: 'k2' });
       expect(refused.statusCode).toBe(400);
       expect(refused.json().error).toBe('PLAN_NOT_CONFIGURED');
+      // None at all
+      setPlans([]);
+      expect((await create({ prompt: 'Hộp cuối' })).json().message).toMatch(/Chưa có gói Claude/);
     } finally {
       await setDefaultPlan('auto');
-      if (saved === undefined) delete process.env.CLAUDE_CODE_OAUTH_TOKEN_FALLBACK;
-      else process.env.CLAUDE_CODE_OAUTH_TOKEN_FALLBACK = saved;
+      setPlans(DEFAULT_PLANS);
     }
   });
 

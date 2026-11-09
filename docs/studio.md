@@ -94,28 +94,19 @@ The review is kept in `TIMELAPSE_CACHE_DIR/reviews/<video>.json` and is only sho
 
 The printer's clock drifts (it seems to stop while the printer is off), so a video often isn't paired with its print by time. When it isn't, the video window offers the recent prints to pick from before asking for the review.
 
-Setup: Claude Code (`claude`) installed on the gateway's machine and `CLAUDE_CODE_OAUTH_TOKEN` (from `claude setup-token`) in the gateway's `.env`, as for the other Claude features. `TIMELAPSE_AI_MODEL` (default `claude-opus-5-5`) picks the model. Claude may only read the frames, in a temporary folder of their own, and runs without the user's settings, hooks or sessions. A review takes about 40 seconds; reviews run one at a time.
+Setup: Claude Code (`claude`) installed on the gateway's machine and a Claude plan fetched from the KeyVault ([keyvault.md](keyvault.md)), as for the other Claude features. `TIMELAPSE_AI_MODEL` (default `claude-opus-5-5`) picks the model. Claude may only read the frames, in a temporary folder of their own, and runs without the user's settings, hooks or sessions. A review takes about 40 seconds; reviews run one at a time.
 
-To turn it on, either sign in with a Claude subscription (Pro/Max) or give the gateway an API key.
+To turn it on, either use the Claude plans (Pro/Max subscriptions) fetched from the KeyVault or give the gateway an API key.
 
-**With a Claude subscription, no API key.** Studio's container asks Claude itself with `claude -p` (Claude Code, installed in the image), billed to your subscription's usage limits. The gateway still builds the prompt and checks the answer. Create a long-lived token on any machine with Claude Code, put it in `.env`, then recreate the Studio container:
-
-```bash
-claude setup-token
-```
-
-```env
-CLAUDE_CODE_OAUTH_TOKEN=<token printed by claude setup-token>
-STUDIO_AI_MODEL=claude-opus-5-5   # optional
-```
+**With Claude plans, no API key.** Studio's container asks Claude itself with `claude -p` (Claude Code, installed in the image), billed to the plans' usage limits: the first plan, the next one whenever a plan is out of usage. The gateway still builds the prompt and checks the answer. Each Claude token on the KeyVault is a plan, fetched on Hệ thống → KeyVault with a code from Google Authenticator ([keyvault.md](keyvault.md)); the container reads them from `data/secrets/claude`, mounted at `/run/claude`, before each run, so it needs recreating once for the mount:
 
 ```bash
 docker compose -f docker-compose.studio.yml up -d
 ```
 
-The token is for your own use: keep the stream behind `STUDIO_USER`/`STUDIO_PASSWORD` and don't let other people use the button on your subscription. Updating Claude Code means rebuilding the image (only the last layer changes).
+The plans are for your own use: keep the stream behind `STUDIO_USER`/`STUDIO_PASSWORD` and don't let other people use the button on your subscription. Updating Claude Code means rebuilding the image (only the last layer changes).
 
-**With an API key.** Leave `CLAUDE_CODE_OAUTH_TOKEN` empty, add the key to the gateway's `.env` and restart the gateway:
+**With an API key.** With no Claude plan fetched, add the key to the gateway's `.env` and restart the gateway:
 
 ```env
 ANTHROPIC_API_KEY=<key>

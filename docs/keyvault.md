@@ -1,9 +1,17 @@
-# Claude tokens from a KeyVault
+# Claude plans from a KeyVault
 
-The two Claude subscription tokens (`CLAUDE_CODE_OAUTH_TOKEN`, `CLAUDE_CODE_OAUTH_TOKEN_FALLBACK`) can come from a
-[KeyVault](https://github.com/vinhduong-051102/key_store/blob/main/HUONG_DAN_LAY_KEY.md) instead of `.env`:
-**Hệ thống → KeyVault cho token gói Claude** on the dashboard, or `npx tsx scripts/keyvault.ts` on this machine. Both
-work on the same files.
+Every Claude feature (Thiết kế AI, mô hình từ ảnh, nhận xét timelapse, nhận diện chi tiết, Studio's **AI tối ưu**,
+phân tích lỗi) runs on the **Claude plans** fetched from a
+[KeyVault](https://github.com/vinhduong-051102/key_store/blob/main/HUONG_DAN_LAY_KEY.md). There are no fixed plans
+and no tokens in `.env`: **each Claude token the KeyVault grants the gateway is a plan**, named after its key, as many
+as there are. They are managed on **Hệ thống → KeyVault: các gói Claude**, or with `npx tsx scripts/keyvault.ts`;
+both work on the same files.
+
+- **Tự động** (the default on Hệ thống → Gói Claude) goes through the plans in the KeyVault's order, moving to the
+  next whenever one is out of usage; or one plan can be picked, for every task or for one AI model when it is made.
+- A key granted shows as a plan at once (**Kiểm tra**, and the gateway reads the list again every 10 minutes); it is
+  used once its token is fetched. A key the KeyVault takes back loses its plan the next time the list is read.
+- A key fetched that is no Claude token (`sk-ant-…`) is hidden from the plans.
 
 Fetching a key takes three things: the gateway's API key (`kv_…`), its X25519 private key, and a code from Google
 Authenticator on the phone of whoever looks after it. Each fetch is an export (the key under a one-off data key) and an
@@ -22,14 +30,15 @@ gateway, so a token never crosses the network in the clear.
 
 In `KV_DIR` (`data/secrets/keyvault`, outside git), mode 600, written whole (tmp + rename):
 
-- `keyvault.json`: server, request id and claim token, API key, recipient id, stage, the keys granted, and the key each
-  plan took last (so the next fetch only takes a code). The authenticator's secret stays only until activation.
+- `keyvault.json`: server, request id and claim token, API key, recipient id, stage and the keys granted. The
+  authenticator's secret stays only until activation.
 - `keyvault-recipient.key`: the private key, PEM PKCS8 without a passphrase so the gateway reads it unattended. Made
   here, never sent anywhere.
 
-The tokens go to `CLAUDE_TOKENS_FILE` (`data/secrets/claude/tokens.json`, mode 600). The gateway lays it over its
-environment at start and every 30 s; the CAD, mesh3d and Studio containers mount `data/secrets/claude` at
-`/run/claude` and read it before every Claude run. A token there wins over `.env`; an empty one drops `.env`'s.
+The plans go to `CLAUDE_TOKENS_FILE` (`data/secrets/claude/tokens.json`, mode 600):
+`{plans: [{id, name, token, fetched_at}], not_claude: [key ids]}`. The gateway reads it on each use; the CAD, mesh3d
+and Studio containers mount `data/secrets/claude` at `/run/claude` and read it before every Claude run, so a new
+token is in use at once, with no restart. A job given one plan keeps its id (the KeyVault key's) in its `job.json`.
 
 The server: `KV_SERVER` in `.env`, else the one the gateway registered with, else `http://100.112.133.34:8000`. Plain
 http is only accepted to loopback, private (10/8, 172.16/12, 192.168/16) and Tailscale (100.64.0.0/10) addresses;
@@ -48,35 +57,30 @@ The card walks through the stages: **none → pending → approved → claimed �
 Or **Quản trị viên đăng ký giúp**: **Hiện public key**, send it to the admin; paste the API key they send back (and,
 optionally, a PEM private key of theirs), checked at once with the key list. Scan their QR the same way.
 
-**Gỡ kết nối** moves `keyvault.json` and the private key to `.backup-<time>/`; fetched tokens stay in use.
+**Kết nối lại** (any stage) starts over with a new request and a new key pair; **Gỡ kết nối** disconnects. Both move
+`keyvault.json` and the private key to `.backup-<time>/`; the plans fetched stay in use.
 
-## Using a key
+## The plans
 
-Once connected, the card lists the keys granted. Each one is guessed to a plan from its name (accents and separators
-ignored: `claude-fallback`, `Gói dự phòng`, `CLAUDE_CODE_OAUTH_TOKEN` …):
+Once connected, each plan on the card has, with a code:
 
-- **Lấy & dùng** with a code: fetched, tried, kept for that plan when it works.
-- **Kiểm tra** with a code: fetched and tried, not kept: whether it works, how much of its 5-hour and 7-day allowance is
-  used, and whether a plan runs on that very token already.
-- Under **Token của các gói**, each plan shows where its token comes from (KeyVault, `.env`, dropped) and its last 4;
-  **Lấy từ KeyVault** fetches its key again with just a code.
-- **Bỏ các mục không từ KeyVault** (once at least one plan comes from the KeyVault) stops using the `.env` tokens of
-  the others: their values are copied to `data/secrets/claude/.backup-<time>/` first. The lines stay in `.env`, which
-  the gateway's container cannot edit; remove them by hand if you like.
+- **Lấy & dùng** (**Lấy lại** once fetched): fetched, tried, kept as that plan when it works.
+- **Kiểm tra**: fetched and tried, not kept: whether it works, how much of its 5-hour and 7-day allowance is used, and
+  whether a plan runs on that very token already.
 
 ## CLI
 
 ```sh
 npx tsx scripts/keyvault.ts request --name bambu-lab-h2d-gateway --contact ... --reason ...
-npx tsx scripts/keyvault.ts status                 # asks the KeyVault while the request is open
+npx tsx scripts/keyvault.ts status                 # asks the KeyVault while the request is open; lists the plans
 npx tsx scripts/keyvault.ts claim                  # prints the authenticator's secret once
 npx tsx scripts/keyvault.ts activate --otp 123456
 npx tsx scripts/keyvault.ts import --api-key kv_... [--pem their.key]
 npx tsx scripts/keyvault.ts pubkey | keys | reset
-npx tsx scripts/keyvault.ts fetch --key-id <id or name> --otp 123456 --target primary   # tried, then used
+npx tsx scripts/keyvault.ts fetch --key-id <id or name> --otp 123456 --use              # tried, then used as a plan
 npx tsx scripts/keyvault.ts fetch --key-id <id or name> --otp 123456 --out some.key     # to a file, mode 600
 npx tsx scripts/keyvault.ts test --key-id <id or name> --otp 123456
 ```
 
-The containers need the token folder mounted once (already in the compose files):
+The containers need the plans folder mounted once (already in the compose files):
 `docker compose -f docker-compose.<cad|mesh3d|studio>.yml up -d --no-build`.

@@ -8,7 +8,7 @@ services:
     image: bambu-lab-h2d/gateway:latest
     container_name: bambu-gateway
     restart: unless-stopped
-    # Printer credentials, API key, CLAUDE_CODE_OAUTH_TOKEN and the rest, as for `npm start`
+    # Printer credentials, API key, KV_SERVER and the rest, as for `npm start` (the Claude plans come from the KeyVault)
     env_file: .env
     environment:
       - NODE_ENV=production

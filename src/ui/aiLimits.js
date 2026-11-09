@@ -45,10 +45,10 @@ export function activePlan(plans, chosen = 'auto') {
   return (plans ?? []).find((p) => p.configured && !p.error && p.status !== 'rejected')?.key ?? null;
 }
 
-/** The plans a task can be run on, as a picker's options: "auto" always, a subscription once its token is set */
+/** The plans a task can be run on, as a picker's options: "auto", and each plan from the KeyVault (by its key's name) */
 export const planOptions = (plans, short = false) =>
   (plans ?? []).map((p) => ({
     value: p.plan,
-    label: short ? { auto: 'Gói: tự động', primary: 'Gói 1', fallback: 'Gói 2' }[p.plan] ?? p.label : p.label,
+    label: short ? (p.plan === 'auto' ? 'Gói: tự động' : p.label.replace(/^Chỉ /, '')) : p.label,
     disabled: !p.configured,
   }));

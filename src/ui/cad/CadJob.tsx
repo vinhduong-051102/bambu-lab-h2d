@@ -39,7 +39,8 @@ export interface CadJob {
   source: string;
   model?: string | null;
   /** The Claude subscription it runs on: only Gói 1 / Gói 2, or both in turn (auto, or none for older jobs) */
-  plan?: 'auto' | 'primary' | 'fallback' | null;
+  plan?: string | null;
+  plan_name?: string | null;
   input?: string;
   maker?: string | null;
   colour?: boolean;
@@ -533,7 +534,7 @@ export function CadJobCard(props: {
           </Flex>
           <Typography.Text type="secondary" style={{ fontSize: 12 }}>
             {formatPrintTime(job.created_at)} · {source}
-            {job.plan === 'primary' ? ' · Gói 1' : job.plan === 'fallback' ? ' · Gói 2' : ''}
+            {job.plan && job.plan !== 'auto' ? ` · ${job.plan_name ?? 'gói riêng'}` : ''}
             {job.parent_id && !fix ? ` · ${versionLabel(job)}` : ''}
           </Typography.Text>
           {job.prompt.trim() !== heading && (
