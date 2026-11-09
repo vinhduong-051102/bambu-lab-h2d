@@ -79,7 +79,7 @@ index d38b5d2..49a39d8 100644
      sizer->Add(slice_panel);
      sizer->Add(FromDIP(8), 0, 0, 0, 0);
      sizer->Add(print_panel);
-@@ -2651,6 +2686,1350 @@ void MainFrame::update_side_button_style()
+@@ -2651,6 +2686,1388 @@ void MainFrame::update_side_button_style()
      m_print_option_btn->SetExtraSize(wxSize(FromDIP(10), FromDIP(10)));
      m_print_option_btn->SetIconOffset(FromDIP(2));
      m_print_option_btn->SetMinSize(wxSize(FromDIP(24), FromDIP(24)));
@@ -198,6 +198,27 @@ index d38b5d2..49a39d8 100644
 +    return rings;
 +}
 +
++// A setting set as text, as Studio saves it in the project
++nlohmann::json ai_config_json(const ModelConfig &config)
++{
++    nlohmann::json settings = nlohmann::json::object();
++    for (const std::string &key : config.keys())
++        settings[key] = config.opt_serialize(key);
++    return settings;
++}
++
++const char *ai_volume_type(ModelVolumeType type)
++{
++    switch (type) {
++    case ModelVolumeType::MODEL_PART: return "part";
++    case ModelVolumeType::NEGATIVE_VOLUME: return "negative";
++    case ModelVolumeType::PARAMETER_MODIFIER: return "modifier";
++    case ModelVolumeType::SUPPORT_BLOCKER: return "support_blocker";
++    case ModelVolumeType::SUPPORT_ENFORCER: return "support_enforcer";
++    default: return "other";
++    }
++}
++
 +// Geometry of one placed instance: what the AI needs to judge supports, brim and strength, and the plate it
 +// is on (1-based), so the AI knows which objects print together
 +nlohmann::json ai_describe_object(const ModelObject &object, int obj_idx)
@@ -241,6 +262,23 @@ index d38b5d2..49a39d8 100644
 +        {"overhang_area_mm2", std::round(overhang)},
 +        {"triangles", its.indices.size()},
 +    };
++    // What the object already has set apart from the process preset: it wins over the preset when slicing, and its
++    // parts' (modifiers') and height ranges' settings win over the object's
++    if (!object.config.empty())
++        described["settings"] = ai_config_json(object.config);
++    nlohmann::json parts = nlohmann::json::array();
++    for (const ModelVolume *volume : object.volumes)
++        if (!volume->config.empty())
++            parts.push_back({{"name", volume->name}, {"type", ai_volume_type(volume->type())}, {"settings", ai_config_json(volume->config)}});
++    if (!parts.empty())
++        described["parts"] = parts;
++    nlohmann::json ranges = nlohmann::json::array();
++    for (const auto &[range, config] : object.layer_config_ranges)
++        if (!config.empty())
++            ranges.push_back({{"from_mm", std::round(range.first * 100.) / 100.}, {"to_mm", std::round(range.second * 100.) / 100.},
++                              {"settings", ai_config_json(config)}});
++    if (!ranges.empty())
++        described["height_ranges"] = ranges;
 +    const int plate = wxGetApp().plater()->get_partplate_list().find_instance(obj_idx, 0);
 +    if (plate >= 0) {
 +        described["plate"] = plate + 1;

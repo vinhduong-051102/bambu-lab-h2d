@@ -267,6 +267,77 @@ describe('AI tối ưu: one plate only, and what the user asked for', () => {
   });
 });
 
+describe('AI tối ưu: settings objects already have of their own', () => {
+  const gear = {
+    ...studioRequest.objects[0],
+    name: 'Gear.stl',
+    plate: 1,
+    settings: { sparse_infill_density: '40%', enable_support: '1' },
+    parts: [{ name: 'Hub', type: 'modifier', settings: { wall_loops: '6' } }],
+    height_ranges: [{ from_mm: 0, to_mm: 5, settings: { layer_height: '0.12', sparse_infill_density: '60%' } }],
+  };
+  const request: StudioRequest = { ...studioRequest, objects: [{ ...studioRequest.objects[0], plate: 1 }, gear] };
+
+  it('shows them in the prompt, apart from the geometry', () => {
+    const prompt = buildUserPrompt(request, null);
+    expect(prompt).toContain('Setting riêng đang có');
+    expect(prompt).toContain('- #2 Gear.stl:');
+    expect(prompt).toContain('   vật thể: sparse_infill_density (Mật độ infill) = 40%; enable_support');
+    expect(prompt).toContain('   modifier "Hub": wall_loops');
+    expect(prompt).toContain('   khoảng chiều cao 0–5 mm: layer_height');
+    expect(prompt).not.toContain('"settings"');
+    // Nothing of the kind: no section
+    expect(buildUserPrompt(studioRequest, null)).not.toContain('Setting riêng đang có');
+  });
+
+  it('says where a change of the preset will not show', () => {
+    const result = checkProposal(
+      {
+        summary: '',
+        changes: [
+          { key: 'sparse_infill_density', value: '20%', reason: 'Đủ cứng' },
+          { key: 'wall_loops', value: '3', reason: 'Chịu lực' },
+          { key: 'brim_type', value: 'no_brim', reason: 'Đáy rộng' },
+        ],
+      },
+      request
+    );
+    expect(result.changes.map((c) => c.reason)).toEqual([
+      'Đủ cứng [Lưu ý: đặt riêng nên vẫn giữ giá trị cũ ở #2 Gear.stl: 40%; #2 Gear.stl › 0–5 mm: 60%]',
+      'Chịu lực [Lưu ý: đặt riêng nên vẫn giữ giá trị cũ ở #2 Gear.stl › Hub: 6]',
+      'Đáy rộng',
+    ]);
+  });
+
+  it('compares object changes with the object own value', () => {
+    const result = checkProposal(
+      {
+        summary: '',
+        changes: [],
+        object_changes: [
+          { object: 2, key: 'sparse_infill_density', value: '40%', reason: 'Đã đặt riêng' },
+          { object: 2, key: 'enable_support', value: '0', reason: 'Không cần support' },
+          { object: 2, key: 'wall_loops', value: '4', reason: 'Răng chịu lực' },
+        ],
+      },
+      request
+    );
+    expect(result.object_changes?.map((c) => [c.key, c.reason])).toEqual([
+      ['enable_support', 'Không cần support'],
+      ['wall_loops', 'Răng chịu lực [Lưu ý: đặt riêng nên vẫn giữ giá trị cũ ở #2 Gear.stl › Hub: 6]'],
+    ]);
+  });
+
+  it('for one plate, keeps a change back to the preset value that objects differ from', () => {
+    const plate: StudioRequest = { ...request, scope: 'plate', current_plate: 1 };
+    const result = checkProposal({ summary: '', changes: [{ key: 'sparse_infill_density', value: '15%', reason: 'Đồng đều' }] }, plate);
+    // Gear's own 40% is written over on the plate; its height range still wins
+    expect(result.changes.map((c) => [c.value, c.reason])).toEqual([['15%', 'Đồng đều [Lưu ý: đặt riêng nên vẫn giữ giá trị cũ ở #2 Gear.stl › 0–5 mm: 60%]']]);
+    const same = { ...plate, objects: [plate.objects[0]] };
+    expect(checkProposal({ summary: '', changes: [{ key: 'sparse_infill_density', value: '15%', reason: 'x' }] }, same).changes).toEqual([]);
+  });
+});
+
 describe('AI tối ưu: every setting Studio describes', () => {
   const check = (changes: AiProposal['changes']) => checkProposal({ summary: '', changes }, fullRequest);
 

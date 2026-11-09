@@ -148,6 +148,15 @@ export const studioRequestSchema = z.object({
           .max(500)
           .refine((rings) => rings.reduce((n, r) => n + r.length, 0) <= 12000, 'Outline has too many corners')
           .optional(),
+        // What the object already has set apart from the process preset, as Studio saves it: it wins over the preset
+        // when slicing (missing from Studio before, and for objects without settings of their own)
+        settings: z.record(z.string(), z.string()).optional(),
+        // Its parts and modifiers with settings of their own, and its height ranges: these win over the object's
+        parts: z.array(z.object({ name: z.string(), type: z.string(), settings: z.record(z.string(), z.string()) })).max(200).optional(),
+        height_ranges: z
+          .array(z.object({ from_mm: z.number(), to_mm: z.number(), settings: z.record(z.string(), z.string()) }))
+          .max(200)
+          .optional(),
       })
     )
     .max(200),
@@ -280,6 +289,37 @@ export function workingObjects(request: Pick<StudioRequest, 'scope' | 'current_p
 function plateSetting(request: StudioRequest, key: string): boolean {
   return OBJECT_SETTINGS.has(key) || request.options?.[key]?.object === true;
 }
+type StudioObject = StudioRequest['objects'][number];
+
+/** The object's own value of a setting, else the process preset's */
+function objectValue(request: StudioRequest, n: number, key: string): string | undefined {
+  return request.objects[n - 1]?.settings?.[key] ?? request.settings[key];
+}
+
+/** Where an object's parts (modifiers) and height ranges set `key` themselves, as "#2 Gear › Modifier: 10%" */
+function innerOverrides(n: number, object: StudioObject, key: string): string[] {
+  return [
+    ...(object.parts ?? []).filter((p) => key in p.settings).map((p) => `#${n} ${object.name} › ${p.name}: ${p.settings[key]}`),
+    ...(object.height_ranges ?? [])
+      .filter((r) => key in r.settings)
+      .map((r) => `#${n} ${object.name} › ${r.from_mm}–${r.to_mm} mm: ${r.settings[key]}`),
+  ];
+}
+
+/**
+ * Where a change of `key` will not show when slicing, for the end of its reason: the objects' own settings (`own`:
+ * a change of the process preset, which they win over), their parts' and their height ranges'
+ */
+function shadowNote(request: StudioRequest, objects: number[], key: string, own: boolean): string {
+  const kept = objects.flatMap((n) => {
+    const object = request.objects[n - 1];
+    if (!object) return [];
+    const value = object.settings?.[key];
+    return [...(own && value !== undefined ? [`#${n} ${object.name}: ${value}`] : []), ...innerOverrides(n, object, key)];
+  });
+  return kept.length ? ` [Lưu ý: đặt riêng nên vẫn giữ giá trị cũ ở ${kept.join('; ')}]` : '';
+}
+
 // More new plates than this is the AI taking the plate apart, not moving the parts at risk
 const MAX_NEW_PLATES = 4;
 
@@ -659,19 +699,24 @@ export function checkProposal(proposal: AiProposal, request: StudioRequest): AiO
       seen.add(key);
       if (plate !== null && !plateSetting(request, key)) return { error: 'Chỉ đặt được cho cả dự án (preset quá trình in), không riêng một bàn in' };
       const current = request.settings[key];
+      // For one plate Studio sets the value on each of its objects, over what they had; for the project it goes to
+      // the preset, which objects with their own value win over
+      const unchanged = (same: (now: string | undefined) => boolean) =>
+        plate !== null ? objects.every((n) => same(objectValue(request, n, key))) : same(current);
+      const note = shadowNote(request, objects, key, plate === null);
       if (key in AI_SETTINGS) {
         const settingKey = key as AiSettingKey;
         const normalized = normalizeValue(settingKey, value, request.nozzle_diameters, current);
         if ('error' in normalized) return normalized;
-        if (sameValue(settingKey, current, normalized.value)) return null;
-        return { change: { key, label: AI_SETTINGS[settingKey].label, value: normalized.value, reason } };
+        if (unchanged((now) => sameValue(settingKey, now, normalized.value))) return null;
+        return { change: { key, label: AI_SETTINGS[settingKey].label, value: normalized.value, reason: reason + note } };
       }
       const option = allowedOption(request, request.settings, key);
       if (!option) return { error: 'Tham số không nằm trong danh sách AI được phép đổi' };
       const normalized = normalizeOptionValue(option, value, current);
       if ('error' in normalized) return normalized;
-      if (sameOptionValue(current, normalized.value)) return null;
-      return { change: { key, label: optionLabel(key, option), value: normalized.value, reason } };
+      if (unchanged((now) => sameOptionValue(now, normalized.value))) return null;
+      return { change: { key, label: optionLabel(key, option), value: normalized.value, reason: reason + note } };
     }
 
     const filament = change.filament ?? 0;
@@ -719,7 +764,7 @@ export function checkProposal(proposal: AiProposal, request: StudioRequest): AiO
 
 /**
  * Settings for single objects: keys of OBJECT_SETTINGS, checked like the process setting of the same key. A value
- * equal to the process preset's changes nothing and is dropped.
+ * equal to the object's own (or else the process preset's) changes nothing and is dropped.
  */
 function checkObjectChanges(
   proposed: NonNullable<AiProposal['object_changes']>,
@@ -750,7 +795,7 @@ function checkObjectChanges(
       continue;
     }
     seen.add(`${n}:${key}`);
-    const current = request.settings[key];
+    const current = objectValue(request, n, key);
     let normalized: { value: string } | { error: string };
     let label: string;
     if (key in AI_SETTINGS) {
@@ -770,7 +815,8 @@ function checkObjectChanges(
       continue;
     }
     if (sameOptionValue(current, normalized.value)) continue;
-    changes.push({ object: n, name: object.name, key, label, value: normalized.value, reason: change.reason.trim() });
+    const reason = change.reason.trim() + shadowNote(request, [n], key, false);
+    changes.push({ object: n, name: object.name, key, label, value: normalized.value, reason });
   }
   return changes;
 }
@@ -830,7 +876,8 @@ Bạn nhận mô tả plate đang mở: preset máy, preset quá trình in, fila
 - Nếu có kết quả in thực tế của các plate tương tự trên chính máy này, coi đó là bằng chứng mạnh hơn quy tắc chung: giữ những thay đổi đã cho bản in tốt, không lặp lại thay đổi đi kèm lỗi, và sửa đúng lỗi người dùng đã báo. Một lần in có thể hỏng vì lý do ngoài setting (bàn bẩn, filament ẩm), nên chỉ kết luận chắc khi lỗi lặp lại. Khi một thay đổi dựa vào lịch sử in, nói rõ trong lý do.
 - Nếu có phần "Thành phần của plate này": mỗi thành phần đi kèm các lần in phần giống nó trên máy này, kết quả và setting lúc in. Với thành phần đã in tốt, giữ hoặc đưa setting liên quan về như lần in tốt; với thành phần từng lỗi, tránh setting của lần lỗi và sửa đúng lỗi đó. Giống càng cao (%) càng đáng tin. Khi một thay đổi dựa vào thành phần, lý do nêu id thành phần và bản in tham chiếu (ví dụ "F3 giống vành mâm của Plate07 in tốt với 3 vòng tường").
 - Nhận xét timelapse mà người dùng đã chọn dùng cho lần in sau là yêu cầu của người dùng: áp dụng các đề xuất của nó như yêu cầu rõ ở trên, không coi là một bằng chứng để cân với các bản in thành công. Đề xuất "tăng"/"giảm" là một bước vừa phải so với setting của bản in đó, không phải lần hỏi nào cũng tăng/giảm thêm: nếu giá trị hiện tại đã đổi theo hướng đó so với lúc in thì coi như đã làm.
-- object_changes: setting riêng cho một vật thể (object là số # của vật thể trong "Vật thể trên plate"), chồng lên preset quá trình in. Chỉ dùng các key trong phần "Tham số đặt riêng cho từng vật thể". Dùng khi chỉ một vài vật thể cần (brim cho chi tiết nhỏ, cao hoặc dài mảnh dễ bong; support cho vật có phần nhô; thêm vòng tường cho chi tiết chịu lực), thay vì đổi cho cả plate. Không đặt riêng cho vật thể giá trị đã bằng preset.
+- object_changes: setting riêng cho một vật thể (object là số # của vật thể trong "Vật thể trên plate"), chồng lên preset quá trình in. Chỉ dùng các key trong phần "Tham số đặt riêng cho từng vật thể". Dùng khi chỉ một vài vật thể cần (brim cho chi tiết nhỏ, cao hoặc dài mảnh dễ bong; support cho vật có phần nhô; thêm vòng tường cho chi tiết chịu lực), thay vì đổi cho cả plate. Không đặt riêng cho vật thể giá trị đã bằng giá trị hiện tại của nó (giá trị đặt riêng nếu có, không thì của preset).
+- Setting đặt riêng đang có (phần "Setting riêng đang có"): khi slice, setting riêng của vật thể thắng preset quá trình in, và setting của part/modifier hay khoảng chiều cao thắng cả setting riêng của vật thể. Đổi preset (cả dự án) không đổi vật thể ở key nó đã đặt riêng: nếu vật thể đó cũng cần đổi thì thêm object_changes cho nó; nếu giá trị riêng có vẻ là người dùng cố ý đặt (ví dụ support chỉ cho một vật) thì giữ. Ở phạm vi một bàn in, thay đổi target "process" ghi đè setting riêng của mọi vật thể trên bàn in đó. Setting của part/modifier và khoảng chiều cao thì AI không đổi được: nếu chúng làm một thay đổi mất tác dụng, nói trong summary.
 - new_plates: mỗi phần tử là một plate mới, chứa các vật thể (số #) được chuyển sang đó; Studio xếp lại plate mới. Dùng khi in chung dễ hỏng cả bàn: chi tiết nhỏ, cao, mảnh dễ đổ hoặc bị đầu phun đụng bật cạnh các tấm lớn, vật cần setting rất khác nhau, hoặc người dùng (hay nhận xét timelapse họ chọn) yêu cầu tách. Không chuyển hết mọi vật thể; tối đa ${MAX_NEW_PLATES} plate mới. Preset quá trình in vẫn dùng chung cho mọi plate, nên setting chỉ hợp với vật thể đã tách thì đặt bằng object_changes. Không cần thì để danh sách rỗng.
 - Mỗi lý do viết bằng tiếng Việt, một câu ngắn, nêu dựa vào đâu. Phần summary bằng tiếng Việt, tối đa ba câu (tối đa năm câu khi phải nói đề xuất nào của nhận xét timelapse đã bỏ qua).`;
 
@@ -915,6 +962,42 @@ function describeObjectSettings(request: StudioRequest): string[] {
     const spec = (AI_SETTINGS as Record<string, SettingSpec>)[key];
     return spec ? [`- ${key} (${spec.label}): hiện tại ${current}`] : [];
   });
+}
+
+/** "key (label) = value" for settings an object, part or height range has of its own */
+function describeOwn(request: StudioRequest, settings: Record<string, string>): string {
+  return Object.entries(settings)
+    .map(([key, value]) => {
+      const label = request.options?.[key]?.label ?? (AI_SETTINGS as Record<string, SettingSpec>)[key]?.label;
+      return `${key}${label ? ` (${label})` : ''} = ${value}`;
+    })
+    .join('; ');
+}
+
+const VOLUME_TYPES: Record<string, string> = {
+  part: 'part',
+  modifier: 'modifier',
+  negative: 'khối trừ',
+  support_blocker: 'chặn support',
+  support_enforcer: 'ép support',
+};
+
+/** What the plate's objects already have set apart from the process preset, which wins over it when slicing */
+function describeOwnSettings(request: StudioRequest, working: number[]): string[] {
+  const lines = working.flatMap((n) => {
+    const object = request.objects[n - 1];
+    const own = object.settings && Object.keys(object.settings).length ? [`   vật thể: ${describeOwn(request, object.settings)}`] : [];
+    const parts = (object.parts ?? []).map((p) => `   ${VOLUME_TYPES[p.type] ?? p.type} "${p.name}": ${describeOwn(request, p.settings)}`);
+    const ranges = (object.height_ranges ?? []).map((r) => `   khoảng chiều cao ${r.from_mm}–${r.to_mm} mm: ${describeOwn(request, r.settings)}`);
+    return own.length || parts.length || ranges.length ? [`- #${n} ${object.name}:`, ...own, ...parts, ...ranges] : [];
+  });
+  return lines.length
+    ? [
+        '',
+        'Setting riêng đang có (thắng preset quá trình in khi slice; part/modifier và khoảng chiều cao thắng cả setting riêng của vật thể):',
+        ...lines,
+      ]
+    : [];
 }
 
 /** Filament actually in the AMS and the nozzles fitted, as the gateway sees them over MQTT */
@@ -1052,7 +1135,7 @@ export function buildUserPrompt(
     // The footprints and outlines are for drawing the plate: hundreds of corners that say nothing about how to print
     JSON.stringify(
       working.map((n) => {
-        const { footprint: _footprint, outline: _outline, ...o } = request.objects[n - 1];
+        const { footprint: _footprint, outline: _outline, settings: _settings, parts: _parts, height_ranges: _ranges, ...o } = request.objects[n - 1];
         return { '#': n, ...o };
       }),
       null,
@@ -1061,6 +1144,7 @@ export function buildUserPrompt(
     '',
     'Tham số đặt riêng cho từng vật thể (object_changes), giá trị hiện tại là của preset quá trình in:',
     ...describeObjectSettings(request),
+    ...describeOwnSettings(request, working),
     ...parts,
     ...(pastPrints.length ? describePastPrints(pastPrints) : []),
     ...(followUp ? describeFollowUp(followUp) : []),
