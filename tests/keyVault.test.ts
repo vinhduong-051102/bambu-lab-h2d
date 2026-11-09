@@ -165,6 +165,15 @@ describe('KeyVault', () => {
     const before = calls.length;
     await getView();
     expect(calls.length).toBe(before);
+    // Starting over: the old registration backed up, the server and each plan's key kept, a new request with a new pair
+    await saveState({ ...(await loadState()), server: 'http://10.0.0.9:8000', targets: { primary: { key_id: 'id-claude-primary', key_name: 'claude-primary', fetched_at: 'x' } } });
+    const oldPub = (await (await post('pubkey')).json()).publicKey;
+    const again = await (await post('reconnect')).json();
+    expect(again).toMatchObject({ success: true, stage: 'none', requestId: null, hasPrivateKey: false, targets: { primary: { key_id: 'id-claude-primary' } } });
+    expect(readdirSync(again.backup).sort()).toEqual(['keyvault-recipient.key', 'keyvault.json']);
+    expect((await loadState()).server).toBe('http://10.0.0.9:8000');
+    expect(await (await post('request', { name: 'gw', contact: 'me', reason: 'again' })).json()).toMatchObject({ stage: 'pending', requestId: 'req1' });
+    expect((await (await post('pubkey')).json()).publicKey).not.toBe(oldPub);
   });
 
   it('takes an API key an admin made for the gateway, checked at once', async () => {

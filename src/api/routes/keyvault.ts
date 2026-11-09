@@ -6,6 +6,7 @@ import {
   KVError,
   listKeys,
   publicKey,
+  reconnect,
   refreshStatus,
   requestAccess,
   reset,
@@ -76,6 +77,9 @@ export const postKeyVault = handler<{ action: string }>(async ({ request, params
     // The keys granted, asked again
     case 'keys':
       return vault(async () => (await listKeys(), view()));
+    // Starts registering again, keeping the server and each plan's key; the old files go to .backup-<time>/
+    case 'reconnect':
+      return vault(async () => ({ backup: await reconnect(), ...(await view()) }));
     // Disconnects; the files go to .backup-<time>/
     case 'reset':
       return vault(async () => ({ backup: await reset(), ...(await view()) }));

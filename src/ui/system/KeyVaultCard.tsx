@@ -8,7 +8,7 @@ import { useActions } from '../DashboardContext';
 /**
  * The KeyVault the Claude tokens come from (GET/POST /api/keyvault): registering the gateway step by step (send a
  * request, see how it stands, take the authenticator's secret, activate with a code; or an admin registers the
- * gateway's public key and hands over an API key), then each key granted put on a plan with a code: tried for real
+ * gateway's public key and hands over an API key; "Kết nối lại" starts over from any stage), then each key granted put on a plan with a code: tried for real
  * first, kept only when it works. A token's value never reaches this page, only its last 4 characters.
  */
 
@@ -130,6 +130,25 @@ export function KeyVaultCard() {
   }, []);
 
   const stage = view ? STAGES[view.stage] : null;
+
+  /** Starts registering again from any stage: the request form comes back */
+  const reconnectButton = (label = 'Kết nối lại') => (
+    <Popconfirm
+      title="Kết nối lại KeyVault từ đầu?"
+      description="Đăng ký hiện tại (API key, private key) chuyển vào .backup-<giờ>/; gửi yêu cầu mới với cặp khóa mới. Token đã lấy vẫn dùng tiếp."
+      onConfirm={async () => {
+        const body = await act('reconnect');
+        if (body) {
+          setMode('request');
+          showToast('Đã bỏ đăng ký cũ: gửi yêu cầu mới bên dưới', 'success');
+        }
+      }}
+    >
+      <Button size="small" loading={busy === 'reconnect'}>
+        {label}
+      </Button>
+    </Popconfirm>
+  );
   const fromVault = view?.plans.some((p) => p.source === 'vault') ?? false;
   const toDrop = view?.plans.filter((p) => p.source === 'env') ?? [];
 
@@ -223,9 +242,12 @@ export function KeyVaultCard() {
                 <Typography.Text>
                   Đã gửi yêu cầu <Typography.Text code>{view.requestId}</Typography.Text>, chờ quản trị viên duyệt.
                 </Typography.Text>
-                <Button icon={<ReloadOutlined />} loading={busy === 'refresh'} onClick={() => act('refresh')}>
-                  Kiểm tra lại
-                </Button>
+                <Space>
+                  <Button icon={<ReloadOutlined />} loading={busy === 'refresh'} onClick={() => act('refresh')}>
+                    Kiểm tra lại
+                  </Button>
+                  {reconnectButton()}
+                </Space>
               </Flex>
             )}
 
@@ -236,7 +258,8 @@ export function KeyVaultCard() {
                   showIcon
                   title={`Đã duyệt${view.reviewNote ? ` (${view.reviewNote})` : ''}. Nhận thông tin${view.claimExpiresAt ? ` trước ${new Date(`${view.claimExpiresAt}Z`).toLocaleString('vi-VN')}` : ''}: chỉ nhận được một lần.`}
                 />
-                <Flex justify="flex-end">
+                <Flex justify="flex-end" gap={8}>
+                  {reconnectButton()}
                   <Button type="primary" loading={busy === 'claim'} onClick={() => act('claim')}>
                     Nhận thông tin
                   </Button>
@@ -260,11 +283,17 @@ export function KeyVaultCard() {
                     </Flex>
                   </Flex>
                 ) : (
-                  <Alert type="warning" showIcon title="Không còn secret của Google Authenticator: nhờ quản trị viên cấp lại mã QR cho bên nhận này, quét nó rồi nhập mã bên dưới." />
+                  <Alert
+                    type="warning"
+                    showIcon
+                    title="Không còn secret của Google Authenticator: nhờ quản trị viên cấp lại mã QR cho bên nhận này, quét nó rồi nhập mã bên dưới; hoặc gửi yêu cầu mới."
+                    action={reconnectButton('Gửi yêu cầu mới')}
+                  />
                 )}
                 <Flex gap={8} align="center" wrap>
                   <Typography.Text>Mã đang hiện trong Google Authenticator:</Typography.Text>
                   <OtpAction label="Kích hoạt" onSubmit={async (otp) => void (await act('activate', { otp }))} />
+                  {view.totpSecret && reconnectButton()}
                 </Flex>
               </Flex>
             )}
@@ -277,6 +306,7 @@ export function KeyVaultCard() {
                     <Button size="small" icon={<ReloadOutlined />} loading={busy === 'keys'} onClick={() => act('keys')}>
                       Kiểm tra
                     </Button>
+                    {reconnectButton()}
                     <Popconfirm title="Gỡ kết nối KeyVault?" description="API key và private key chuyển vào .backup-<giờ>/; token đã lấy vẫn dùng tiếp." onConfirm={() => act('reset')}>
                       <Button size="small" danger loading={busy === 'reset'}>
                         Gỡ kết nối

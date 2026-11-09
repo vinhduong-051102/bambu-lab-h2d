@@ -312,6 +312,18 @@ export async function listKeys(): Promise<VaultState> {
   return next;
 }
 
+/**
+ * Starts registering again (a lost authenticator secret, a claim gone stale, a new admin): the state and the private
+ * key go to .backup-<time>/ as on reset, keeping the server and which key each plan takes; a new request makes a new
+ * key pair
+ */
+export async function reconnect(): Promise<string | null> {
+  const state = await loadState();
+  const backup = await reset();
+  await saveState({ stage: 'none', server: state.server, targets: state.targets });
+  return backup;
+}
+
 /** Disconnects: the state and the private key go to .backup-<time>/, not away */
 export async function reset(): Promise<string | null> {
   const files = [stateFile(), keyFile()];
