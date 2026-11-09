@@ -183,7 +183,12 @@ async function loadFollowUp(request: StudioRequest): Promise<FollowUp | null> {
   if (!request.follow_up) return null;
   const previous = await sessionStore().get(request.follow_up.session_id);
   return {
-    previous: previous && { summary: previous.result.summary, changes: previous.result.changes },
+    previous: previous && {
+      summary: previous.result.summary,
+      changes: previous.result.changes,
+      object_changes: previous.result.object_changes,
+      plates: previous.result.plates,
+    },
     comment: request.follow_up.comment,
   };
 }
@@ -302,7 +307,7 @@ export const getAiSession = handler<{ id: string }>(async ({ params }) => {
 export const markAiSessionApplied = handler<{ id: string }>(async ({ request, params }) => {
   const body = appliedSchema.safeParse(await readJsonBody(request));
   if (!body.success) return invalidPayload(body.error);
-  const session = await sessionStore().markApplied(params.id, body.data.changes);
+  const session = await sessionStore().markApplied(params.id, body.data);
   return session ? json({ success: true, applied_at: session.applied?.at }) : sessionNotFound();
 });
 

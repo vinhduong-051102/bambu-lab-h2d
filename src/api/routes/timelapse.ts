@@ -67,7 +67,7 @@ export const listTimelapses = handler(async ({ request }) => {
   return json({
     success: true,
     videos: videos.map((video) => {
-      const print = matchPrint(video, prints);
+      const print = matchPrint(video, prints, videos);
       return { ...video, print: print && { id: print.id, job_name: print.job_name, status: print.status } };
     }),
   });
@@ -199,7 +199,7 @@ export const startTimelapseReview = handler<{ name: string }>(async ({ request, 
   if (!video) return notFound();
 
   const prints = journal();
-  const print = body.data.print_id ? await prints.get(body.data.print_id) : matchPrint(video, await prints.list(500));
+  const print = body.data.print_id ? await prints.get(body.data.print_id) : matchPrint(video, await prints.list(500), videos);
   if (body.data.print_id && !print) {
     return json({ success: false, error: 'PRINT_NOT_FOUND', message: 'Không tìm thấy bản in này.' }, 404);
   }

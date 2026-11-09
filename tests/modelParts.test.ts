@@ -11,6 +11,7 @@ import { buildUserPrompt, type StudioRequest } from '../src/domain/studio/aiOpti
 import {
   analysisKey,
   baseName,
+  defectsOn,
   describeFeature,
   describeParts,
   findImportFile,
@@ -169,6 +170,33 @@ describe('comparing parts', () => {
     expect(text).toContain('- F3: Mặt dưới phẳng (cầu, trần) ×4');
     expect(text).toContain('   Chưa in phần nào giống.');
     expect(describeParts([analysis('x', 'X.stl', [], { matched: false })], [bad])).toEqual([]);
+  });
+
+  it('pins the defects the user reported to the part they name, else to the parts their area is on', () => {
+    const past = analysis('c', 'Plate03.stl', [wall(0.6, 11), bridge(28)], {
+      components: [
+        { name: 'thành đèn', role: '', features: ['F2'], risk: '' },
+        { name: 'nắp', role: '', features: ['F3'], risk: '' },
+      ],
+    });
+    const print = printRecord('bad', 'Plate03', 'usable', ['weak']);
+    const defect = (d: object) => ({ object: 'Plate03.stl', part: '', area: 'side', issue: 'weak', severity: 'major', detail: '', ...d });
+    print.feedback!.defects = [
+      defect({ part: 'thành đèn', issue: 'layer_shift', height_mm: 6 }),
+      defect({ part: 'nắp', area: 'side', issue: 'surface' }),
+      defect({ area: 'overhang', issue: 'overhang' }),
+      defect({ object: 'Other(1).stl', issue: 'warping' }),
+    ] as never;
+    const [wallPart, bridgePart] = past.features;
+    // Named parts by name (the side of the lid is not this wall), unnamed ones by area, other objects never
+    expect(defectsOn(print, past, wallPart).map((d) => d.issue)).toEqual(['layer_shift']);
+    expect(defectsOn(print, past, bridgePart).map((d) => d.issue)).toEqual(['surface', 'overhang']);
+
+    const current = analysis('a', 'New.stl', [wall(0.6, 11)]);
+    const text = describeParts([current], [{ print, analyses: [past] }]).join(' | ');
+    expect(text).toContain('người dùng báo lỗi đúng ở phần này: Plate03.stl › thành đèn, Thành bên, từ ~6 mm: Lệch lớp (Rõ)');
+    // The issues ticked for the whole print say less than that
+    expect(text).not.toContain('lỗi ở loại phần này');
   });
 });
 

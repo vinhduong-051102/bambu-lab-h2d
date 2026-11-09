@@ -5,7 +5,7 @@ import { z } from 'zod';
 import type { PrintRecord } from '../prints/PrintJournal';
 import type { VisionModel } from '../timelapse/TimelapseReviewer';
 import type { StudioRequest } from './aiOptimize';
-import { PRINT_ISSUE_LABELS, PRINT_OUTCOME_LABELS } from './aiSessions';
+import { describeDefect, PRINT_ISSUE_LABELS, PRINT_OUTCOME_LABELS, type PrintDefect } from './aiSessions';
 
 /**
  * "Thành phần của mẫu": the parts of a model that matter for printing it (thin walls, overhangs, bridges, holes,
@@ -484,14 +484,47 @@ export function matchParts(current: ModelAnalysis[], past: PrintWithParts[]): { 
   );
 }
 
-/** How the print went, as far as this kind of part is concerned */
-function outcomeFor(print: PrintRecord, kind: PartKind): string {
+/** The kinds of measured part each area of a reported defect can be on */
+const AREA_PARTS: Record<PrintDefect['area'], PartKind[]> = {
+  first_layer: ['base'],
+  bottom_edge: ['base'],
+  side: ['thin_wall'],
+  top: ['top', 'thin_plate'],
+  overhang: ['overhang', 'ceiling'],
+  support_face: ['overhang', 'ceiling'],
+  hole: ['hole'],
+  edge: ['thin_wall', 'top'],
+  thin: ['pillar', 'thin_wall', 'thin_plate'],
+  inside: [],
+  whole: [],
+};
+
+/**
+ * The defects reported on this part of that print: on its object (or on no object named), then on the part by its
+ * name, or, when the defect names no part the analysis knows, on an area where this kind of part is
+ */
+export function defectsOn(print: PrintRecord, analysis: ModelAnalysis, feature: PartFeature): PrintDefect[] {
+  const component = componentOf(analysis, feature.id)?.trim().toLowerCase();
+  const named = new Set((analysis.components ?? []).map((c) => c.name.trim().toLowerCase()));
+  return (print.feedback?.defects ?? []).filter((d) => {
+    if (d.object && baseName(d.object) !== baseName(analysis.object.name)) return false;
+    const part = d.part.trim().toLowerCase();
+    if (part && named.has(part)) return part === component;
+    return AREA_PARTS[d.area].includes(feature.kind) || (d.area === 'whole' && !!part && part === component);
+  });
+}
+
+/** How the print went, as far as this part (or this kind of part) is concerned */
+function outcomeFor(print: PrintRecord, kind: PartKind, analysis?: ModelAnalysis, feature?: PartFeature): string {
   const feedback = print.feedback;
   const outcome = feedback ? PRINT_OUTCOME_LABELS[feedback.outcome] : 'người dùng chưa báo';
-  const issues = (feedback?.issues ?? []).filter((i) => ISSUE_PARTS[i]?.includes(kind)).map((i) => PRINT_ISSUE_LABELS[i]);
+  const defects = analysis && feature ? defectsOn(print, analysis, feature) : [];
+  // Defects pinned down say more than the print's issues ticked as a whole
+  const issues = defects.length ? [] : (feedback?.issues ?? []).filter((i) => ISSUE_PARTS[i]?.includes(kind)).map((i) => PRINT_ISSUE_LABELS[i]);
   const reviewIssues = (print.video_review?.issues ?? []).filter((i) => ISSUE_PARTS[i]?.includes(kind)).map((i) => PRINT_ISSUE_LABELS[i]);
   return [
     outcome,
+    defects.length ? `người dùng báo lỗi đúng ở phần này: ${defects.map(describeDefect).join(' | ')}` : '',
     issues.length ? `lỗi ở loại phần này: ${issues.join(', ')}` : '',
     reviewIssues.length ? `timelapse thấy: ${[...new Set(reviewIssues)].join(', ')}` : '',
     feedback?.note ? `ghi chú: ${JSON.stringify(feedback.note.slice(0, 160))}` : '',
@@ -527,7 +560,7 @@ export function describeParts(current: ModelAnalysis[], past: PrintWithParts[]):
       const other = componentOf(ref.analysis, ref.feature.id);
       const date = (ref.print.started_at ?? ref.print.ended_at ?? '').slice(0, 10);
       lines.push(
-        `   Giống ${Math.round(ref.similarity * 100)}%: ${other ? `"${other}" của ` : ''}bản in ${ref.print.job_name} (${date}): ${describeFeature(ref.feature)}. Kết quả: ${outcomeFor(ref.print, feature.kind)}. Setting khi in: ${partSettings(ref.print.setup!, feature.kind) || 'không rõ'}`
+        `   Giống ${Math.round(ref.similarity * 100)}%: ${other ? `"${other}" của ` : ''}bản in ${ref.print.job_name} (${date}): ${describeFeature(ref.feature)}. Kết quả: ${outcomeFor(ref.print, feature.kind, ref.analysis, ref.feature)}. Setting khi in: ${partSettings(ref.print.setup!, feature.kind) || 'không rõ'}`
       );
     }
   }

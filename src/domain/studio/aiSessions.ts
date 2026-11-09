@@ -41,12 +41,71 @@ export const PRINT_ISSUE_LABELS: Record<(typeof ISSUES)[number], string> = {
   too_much_material: 'Tốn nhựa hơn cần',
 };
 
-export const feedbackSchema = z.object({
-  outcome: z.enum(OUTCOMES),
-  issues: z.array(z.enum(ISSUES)).max(ISSUES.length).default([]),
-  note: z.string().max(4000).default(''),
+const DEFECT_AREAS = ['first_layer', 'bottom_edge', 'side', 'top', 'overhang', 'support_face', 'hole', 'edge', 'thin', 'inside', 'whole'] as const;
+const SEVERITIES = ['minor', 'major', 'critical'] as const;
+
+/** Where on a part a defect is */
+export const DEFECT_AREA_LABELS: Record<(typeof DEFECT_AREAS)[number], string> = {
+  first_layer: 'Lớp đầu, mặt đáy',
+  bottom_edge: 'Mép, góc dưới đáy',
+  side: 'Thành bên',
+  top: 'Mặt trên',
+  overhang: 'Mặt dưới phần nhô, cầu',
+  support_face: 'Mặt tiếp xúc support',
+  hole: 'Lỗ, ren, khe lắp',
+  edge: 'Cạnh, góc',
+  thin: 'Chi tiết mảnh (trụ, gờ, chữ)',
+  inside: 'Bên trong, infill',
+  whole: 'Cả bộ phận',
+};
+
+export const DEFECT_SEVERITY_LABELS: Record<(typeof SEVERITIES)[number], string> = {
+  minor: 'Nhẹ',
+  major: 'Rõ',
+  critical: 'Hỏng',
+};
+
+/** One defect, pinned down: which object of the plate, which part of it, where on that part, and what went wrong */
+export const defectSchema = z.object({
+  // The object's name on the plate (setup.objects); empty when the print has no setup
+  object: z.string().max(200).default(''),
+  // A part's name as "Thành phần của mẫu" named it ("vành mâm"), or the user's own words
+  part: z.string().max(120).default(''),
+  area: z.enum(DEFECT_AREAS),
+  issue: z.enum(ISSUES),
+  severity: z.enum(SEVERITIES).default('major'),
+  // About how high above the plate it starts, when the user can tell
+  height_mm: z.number().min(0).max(1000).nullish(),
+  detail: z.string().max(500).default(''),
 });
+export type PrintDefect = z.infer<typeof defectSchema>;
+
+/** "Thân hộp › ngàm cài, Thành bên, từ ~12 mm: Lệch lớp (Rõ): lệch 1 mm" */
+export function describeDefect(d: PrintDefect): string {
+  const where = [[d.object, d.part].filter(Boolean).join(' › ') || 'Không rõ vật thể', DEFECT_AREA_LABELS[d.area], d.height_mm != null ? `từ ~${d.height_mm} mm` : '']
+    .filter(Boolean)
+    .join(', ');
+  return `${where}: ${PRINT_ISSUE_LABELS[d.issue]} (${DEFECT_SEVERITY_LABELS[d.severity]})${d.detail.trim() ? `: ${d.detail.trim()}` : ''}`;
+}
+
+export const feedbackSchema = z
+  .object({
+    outcome: z.enum(OUTCOMES),
+    issues: z.array(z.enum(ISSUES)).max(ISSUES.length).default([]),
+    note: z.string().max(4000).default(''),
+    // Missing from Studio's report dialog: the defects already reported are then kept (see keepDefects)
+    defects: z.array(defectSchema).max(30).optional(),
+  })
+  // A defect's problem is a problem of the print, for what reads the print as a whole
+  .transform((f) => ({ ...f, issues: [...new Set([...f.issues, ...(f.defects ?? []).map((d) => d.issue)])] }));
 export type PrintFeedback = z.infer<typeof feedbackSchema>;
+
+/** A new report keeps the defects of the one it replaces when it says nothing of them (Studio's dialog) */
+export function keepDefects(feedback: PrintFeedback, previous: PrintFeedback | null | undefined): PrintFeedback {
+  if (feedback.defects || !previous?.defects?.length) return feedback;
+  const defects = previous.defects;
+  return { ...feedback, defects, issues: [...new Set([...feedback.issues, ...defects.map((d) => d.issue)])] };
+}
 
 export const appliedSchema = z.object({
   changes: z
@@ -60,8 +119,18 @@ export const appliedSchema = z.object({
       })
     )
     .max(800),
+  // Settings Studio gave single objects (1-based, as in the request) and the objects it moved to new plates
+  object_changes: z
+    .array(z.object({ object: z.number().int(), key: z.string().max(100), value: z.string().max(200) }))
+    .max(800)
+    .default([]),
+  plates: z
+    .array(z.object({ objects: z.array(z.number().int()).max(200) }))
+    .max(50)
+    .default([]),
 });
 type AppliedChange = z.infer<typeof appliedSchema>['changes'][number];
+type Applied = z.infer<typeof appliedSchema>;
 
 export interface AiSession {
   id: string;
@@ -84,10 +153,18 @@ export interface AiSession {
   /** Values the proposal was made against, for the settings it touched, by settingRef */
   settings_before: Record<string, string>;
   result: AiOptimizeResult;
-  applied: { at: string; changes: AppliedChange[] } | null;
+  /** object_changes and plates are missing in sessions applied before objects could be set one by one */
+  applied: ({ at: string } & Partial<Applied> & { changes: AppliedChange[] }) | null;
   feedback: (PrintFeedback & { at: string }) | null;
   /** The local AI's review of the print's timelapse, when one was made */
   video_review?: TimelapseReview;
+  /**
+   * The sessions whose chosen review the prompt asked to follow. Applying this session uses their advice up:
+   * "giảm quạt" asked again on every re-ask would lower the fan each time, on settings nobody printed.
+   */
+  followed_reviews?: string[];
+  /** The applied session that followed this session's chosen review; its advice is then only history */
+  review_followed?: { by: string; at: string };
 }
 
 /** One line of the session list Studio shows */
@@ -137,6 +214,9 @@ export class AiSessionStore {
     followUp: { previousId: string; comment: string } | null,
     now = new Date()
   ): Promise<AiSession> {
+    const followed = (await this.pastSessions(request))
+      .filter((s) => hasOpenReview(s))
+      .map((s) => s.id);
     const before: Record<string, string> = {};
     for (const c of [...result.changes, ...result.rejected]) {
       const settings = c.target === 'filament' ? request.filaments[(c.filament ?? 0) - 1]?.settings : request.settings;
@@ -163,6 +243,7 @@ export class AiSessionStore {
       result,
       applied: null,
       feedback: null,
+      ...(followed.length ? { followed_reviews: followed } : {}),
     };
     await this.write(session);
     return session;
@@ -218,35 +299,46 @@ export class AiSessionStore {
   /**
    * Earlier prints of plates like `request`, for the prompt: only sessions the user applied and then
    * reported on (or whose timelapse review the user chose to use), so the changes are known to have been printed.
-   * Prints with a chosen review first (the user asked for its advice to be followed), then the most similar,
-   * newest on a tie.
+   * Prints with a chosen review not yet followed first (the user asked for its advice to be followed), then
+   * the most similar, newest on a tie.
    */
   async pastPrints(request: StudioRequest, limit = PAST_PRINT_LIMIT): Promise<PastPrint[]> {
+    return (await this.pastSessions(request, limit)).map(toPastPrint);
+  }
+
+  private async pastSessions(request: StudioRequest, limit = PAST_PRINT_LIMIT): Promise<AiSession[]> {
     const plate = plateOf(request);
     return (await this.newest(PAST_PRINT_SCAN))
       .filter((s) => s.applied && (s.feedback || s.video_review))
       .map((s) => ({ session: s, score: similarity(plate, plateOf(s), request, s) }))
       .filter((c): c is { session: AiSession; score: number } => c.score !== null)
       // Stable sort over the newest-first list keeps newer sessions first on a tie
-      .sort((a, b) => Number(!!b.session.video_review) - Number(!!a.session.video_review) || b.score - a.score)
+      .sort((a, b) => Number(hasOpenReview(b.session)) - Number(hasOpenReview(a.session)) || b.score - a.score)
       .slice(0, limit)
-      .map(({ session: s }) => toPastPrint(s));
+      .map(({ session }) => session);
   }
 
-  async markApplied(id: string, changes: AppliedChange[], now = new Date()): Promise<AiSession | null> {
+  /** Also marks the chosen reviews this session followed as followed, the first time it is applied */
+  async markApplied(id: string, applied: { changes: AppliedChange[] } & Partial<Applied>, now = new Date()): Promise<AiSession | null> {
     const session = await this.get(id);
     if (!session) return null;
-    session.applied = { at: now.toISOString(), changes };
+    session.applied = { at: now.toISOString(), ...applied };
     await this.write(session);
+    for (const reviewed of await Promise.all((session.followed_reviews ?? []).map((r) => this.get(r)))) {
+      if (!reviewed || !hasOpenReview(reviewed)) continue;
+      reviewed.review_followed = { by: session.id, at: now.toISOString() };
+      await this.write(reviewed);
+    }
     return session;
   }
 
-  /** The timelapse review the user chose to use for later prints; null removes it */
+  /** The timelapse review the user chose to use for later prints; null removes it. A new review is followed afresh */
   async saveVideoReview(id: string, review: TimelapseReview | null): Promise<AiSession | null> {
     const session = await this.get(id);
     if (!session) return null;
     if (review) session.video_review = review;
     else delete session.video_review;
+    delete session.review_followed;
     await this.write(session);
     return session;
   }
@@ -254,7 +346,7 @@ export class AiSessionStore {
   async saveFeedback(id: string, feedback: PrintFeedback, now = new Date()): Promise<AiSession | null> {
     const session = await this.get(id);
     if (!session) return null;
-    session.feedback = { ...feedback, at: now.toISOString() };
+    session.feedback = { ...keepDefects(feedback, session.feedback), at: now.toISOString() };
     await this.write(session);
     return session;
   }
@@ -274,7 +366,10 @@ interface PlateShape {
   overhang: number | null;
 }
 
-type PlateSource = { filaments: StudioRequest['filaments']; objects: AiSession['objects'] };
+/** A chosen review whose advice no applied session has followed yet */
+const hasOpenReview = (s: AiSession) => !!s.video_review?.suggestions.some((t) => t.trim()) && !s.review_followed;
+
+type PlateSource ={ filaments: StudioRequest['filaments']; objects: AiSession['objects'] };
 
 function plateOf({ filaments, objects }: PlateSource): PlateShape {
   const surface = objects.reduce((sum, o) => sum + (o.surface_area_mm2 ?? NaN), 0);
@@ -339,11 +434,21 @@ function toPastPrint(s: AiSession): PastPrint {
       const label = s.result.changes.find((p) => settingRef(p) === ref)?.label;
       return { key: ref, ...(label ? { label } : {}), before: s.settings_before[ref] ?? null, after: c.value };
     }),
+    ...(s.applied!.object_changes?.length
+      ? { object_changes: s.applied!.object_changes.map((c) => ({ object: s.objects[c.object - 1]?.name ?? `#${c.object}`, key: c.key, after: c.value })) }
+      : {}),
+    ...(s.applied!.plates?.length ? { plates: s.applied!.plates.map((p) => p.objects.map((n) => s.objects[n - 1]?.name ?? `#${n}`)) } : {}),
     outcome: feedback ? PRINT_OUTCOME_LABELS[feedback.outcome] : 'người dùng chưa báo',
     issues: feedback?.issues.map((i) => PRINT_ISSUE_LABELS[i]) ?? [],
+    ...(feedback?.defects?.length ? { defects: feedback.defects.map(describeDefect) } : {}),
     note: note.length > NOTE_LIMIT ? `${note.slice(0, NOTE_LIMIT)}…` : note,
     ...(s.video_review
-      ? { video_review: videoReviewLine(s.video_review), review_suggestions: s.video_review.suggestions.map((t) => t.trim()).filter(Boolean) }
+      ? {
+          video_review: videoReviewLine(s.video_review),
+          ...(s.review_followed
+            ? { review_followed_at: s.review_followed.at }
+            : { review_suggestions: s.video_review.suggestions.map((t) => t.trim()).filter(Boolean) }),
+        }
       : {}),
   };
 }

@@ -1,5 +1,5 @@
 diff --git a/src/slic3r/GUI/MainFrame.cpp b/src/slic3r/GUI/MainFrame.cpp
-index d38b5d2..191ed58 100644
+index d38b5d2..49a39d8 100644
 --- a/src/slic3r/GUI/MainFrame.cpp
 +++ b/src/slic3r/GUI/MainFrame.cpp
 @@ -12,6 +12,15 @@
@@ -18,7 +18,7 @@ index d38b5d2..191ed58 100644
  #include <wx/debug.h>
  
  #include <boost/algorithm/string/predicate.hpp>
-@@ -49,6 +58,14 @@
+@@ -49,6 +58,15 @@
  #include "../Utils/MacDarkMode.hpp"
  
  #include <fstream>
@@ -30,10 +30,11 @@ index d38b5d2..191ed58 100644
 +#include <nlohmann/json.hpp>
 +#include "libslic3r/Model.hpp"
 +#include "libslic3r/TriangleMesh.hpp"
++#include "libslic3r/ClipperUtils.hpp"
  #include <string_view>
  
  #include "GUI_App.hpp"
-@@ -1289,6 +1306,8 @@ void MainFrame::show_option(bool show)
+@@ -1289,6 +1307,8 @@ void MainFrame::show_option(bool show)
              m_print_btn->Hide();
              m_slice_option_btn->Hide();
              m_print_option_btn->Hide();
@@ -42,7 +43,7 @@ index d38b5d2..191ed58 100644
              split_line_icon->Hide();
              expand_program_holder->Hide();
              Layout();
-@@ -1299,6 +1318,8 @@ void MainFrame::show_option(bool show)
+@@ -1299,6 +1319,8 @@ void MainFrame::show_option(bool show)
              m_print_btn->Show();
              m_slice_option_btn->Show();
              m_print_option_btn->Show();
@@ -51,7 +52,7 @@ index d38b5d2..191ed58 100644
              split_line_icon->Show();
              expand_program_holder->Show();
              Layout();
-@@ -2068,6 +2089,15 @@ wxBoxSizer* MainFrame::create_side_tools()
+@@ -2068,6 +2090,15 @@ wxBoxSizer* MainFrame::create_side_tools()
      print_sizer->Add(m_print_btn, 0, wxLEFT | wxALIGN_CENTER_VERTICAL, FromDIP(1));
      print_panel->SetSizer(print_sizer);
  
@@ -67,7 +68,7 @@ index d38b5d2..191ed58 100644
      update_side_button_style();
      m_slice_option_btn->Enable();
      m_print_option_btn->Enable();
-@@ -2076,6 +2106,10 @@ wxBoxSizer* MainFrame::create_side_tools()
+@@ -2076,6 +2107,10 @@ wxBoxSizer* MainFrame::create_side_tools()
      sizer->Add(FromDIP(4), 0, 0, 0, 0);
      sizer->Add(split_line_icon, 0, wxALIGN_CENTER, 0);
      sizer->Add(FromDIP(6), 0, 0, 0, 0);
@@ -78,7 +79,7 @@ index d38b5d2..191ed58 100644
      sizer->Add(slice_panel);
      sizer->Add(FromDIP(8), 0, 0, 0, 0);
      sizer->Add(print_panel);
-@@ -2651,6 +2685,971 @@ void MainFrame::update_side_button_style()
+@@ -2651,6 +2686,1350 @@ void MainFrame::update_side_button_style()
      m_print_option_btn->SetExtraSize(wxSize(FromDIP(10), FromDIP(10)));
      m_print_option_btn->SetIconOffset(FromDIP(2));
      m_print_option_btn->SetMinSize(wxSize(FromDIP(24), FromDIP(24)));
@@ -126,8 +127,80 @@ index d38b5d2..191ed58 100644
 +    return {};
 +}
 +
-+// Geometry of one placed instance: what the AI needs to judge supports, brim and strength
-+nlohmann::json ai_describe_object(const ModelObject &object)
++// The outline of a placed mesh seen from above: the convex hull of its vertices (monotone chain), in mm
++// from the corner of its plate, so the dashboard can draw the plate and let the user point at an object
++nlohmann::json ai_footprint(const indexed_triangle_set &its, const Vec3d &origin)
++{
++    std::vector<Vec2d> points;
++    points.reserve(its.vertices.size());
++    for (const auto &v : its.vertices)
++        points.emplace_back(std::round((v.x() - origin.x()) * 10.) / 10., std::round((v.y() - origin.y()) * 10.) / 10.);
++    std::sort(points.begin(), points.end(), [](const Vec2d &a, const Vec2d &b) { return a.x() < b.x() || (a.x() == b.x() && a.y() < b.y()); });
++    points.erase(std::unique(points.begin(), points.end()), points.end());
++    nlohmann::json outline = nlohmann::json::array();
++    if (points.size() < 3)
++        return outline;
++    auto cross = [](const Vec2d &o, const Vec2d &a, const Vec2d &b) { return (a.x() - o.x()) * (b.y() - o.y()) - (a.y() - o.y()) * (b.x() - o.x()); };
++    std::vector<Vec2d> hull(2 * points.size());
++    size_t k = 0;
++    for (size_t i = 0; i < points.size(); ++i) {
++        while (k >= 2 && cross(hull[k - 2], hull[k - 1], points[i]) <= 0) --k;
++        hull[k++] = points[i];
++    }
++    for (size_t i = points.size() - 1, t = k + 1; i > 0; --i) {
++        while (k >= t && cross(hull[k - 2], hull[k - 1], points[i - 1]) <= 0) --k;
++        hull[k++] = points[i - 1];
++    }
++    hull.resize(k - 1);
++    for (const Vec2d &p : hull)
++        outline.push_back({p.x(), p.y()});
++    return outline;
++}
++
++// The outline of a placed mesh seen from above, as Studio draws it on the plate (teeth, holes and all): the union
++// of its upward-facing triangles, simplified to 0.1 mm, as rings in mm from the corner of its plate (outer
++// contours and holes, drawn even-odd)
++nlohmann::json ai_outline(const indexed_triangle_set &its, const Vec3d &origin)
++{
++    Polygons triangles;
++    triangles.reserve(its.indices.size() / 2);
++    for (const auto &face : its.indices) {
++        const Vec3f &a = its.vertices[face[0]];
++        const Vec3f &b = its.vertices[face[1]];
++        const Vec3f &c = its.vertices[face[2]];
++        // Facing down or edge-on: the faces facing up already cover the outline of a closed mesh
++        if ((b.x() - a.x()) * (c.y() - a.y()) - (b.y() - a.y()) * (c.x() - a.x()) <= 0.f)
++            continue;
++        Polygon triangle;
++        for (const Vec3f *v : {&a, &b, &c})
++            triangle.points.emplace_back(coord_t(std::round((v->x() - origin.x()) / SCALING_FACTOR)), coord_t(std::round((v->y() - origin.y()) / SCALING_FACTOR)));
++        triangles.emplace_back(std::move(triangle));
++    }
++    nlohmann::json rings = nlohmann::json::array();
++    size_t points = 0;
++    auto add_ring = [&](const Polygon &polygon) {
++        nlohmann::json corners = nlohmann::json::array();
++        for (const Point &p : polygon.points)
++            corners.push_back({std::round(p.x() * SCALING_FACTOR * 10.) / 10., std::round(p.y() * SCALING_FACTOR * 10.) / 10.});
++        points += polygon.points.size();
++        rings.push_back(std::move(corners));
++    };
++    for (const ExPolygon &shape : union_ex(triangles)) {
++        for (const ExPolygon &simple : shape.simplify(0.1 / SCALING_FACTOR)) {
++            add_ring(simple.contour);
++            for (const Polygon &hole : simple.holes)
++                add_ring(hole);
++        }
++        // A very detailed object: what is drawn so far is enough to point at it
++        if (points > 6000)
++            break;
++    }
++    return rings;
++}
++
++// Geometry of one placed instance: what the AI needs to judge supports, brim and strength, and the plate it
++// is on (1-based), so the AI knows which objects print together
++nlohmann::json ai_describe_object(const ModelObject &object, int obj_idx)
 +{
 +    TriangleMesh mesh = object.raw_mesh();
 +    if (!object.instances.empty())
@@ -158,7 +231,7 @@ index d38b5d2..191ed58 100644
 +    }
 +
 +    const Vec3d size = bbox.size();
-+    return {
++    nlohmann::json described = {
 +        {"name", object.name},
 +        {"instances", object.instances.size()},
 +        {"size_mm", {std::round(size.x() * 10.) / 10., std::round(size.y() * 10.) / 10., std::round(size.z() * 10.) / 10.}},
@@ -168,6 +241,24 @@ index d38b5d2..191ed58 100644
 +        {"overhang_area_mm2", std::round(overhang)},
 +        {"triangles", its.indices.size()},
 +    };
++    const int plate = wxGetApp().plater()->get_partplate_list().find_instance(obj_idx, 0);
++    if (plate >= 0) {
++        described["plate"] = plate + 1;
++        if (PartPlate *on = wxGetApp().plater()->get_partplate_list().get_plate(plate))
++        {
++            described["footprint"] = ai_footprint(its, on->get_origin());
++            described["outline"] = ai_outline(its, on->get_origin());
++        }
++    }
++    return described;
++}
++
++// Settings Studio keeps on an object (the Objects tab of the process settings): object and region ones
++bool ai_object_option(const std::string &key)
++{
++    static const PrintObjectConfig object_defaults;
++    static const PrintRegionConfig region_defaults;
++    return object_defaults.option(key) != nullptr || region_defaults.option(key) != nullptr;
 +}
 +
 +// The value type the gateway checks a setting against, or nullptr for types the AI never writes
@@ -215,6 +306,8 @@ index d38b5d2..191ed58 100644
 +            option["max"] = def->max;
 +        if (std::string(type) == "enum")
 +            option["values"] = def->enum_values;
++        if (ai_object_option(key))
++            option["object"] = true;
 +        options[key] = option;
 +    }
 +    return settings;
@@ -227,15 +320,20 @@ index d38b5d2..191ed58 100644
 +    return {};
 +}
 +
-+nlohmann::json ai_describe_plate()
++// `plate_index`: the plate the AI works on (0-based); -1, or one that no longer exists, for the plate open
++nlohmann::json ai_describe_plate(int plate_index = -1)
 +{
++    PartPlateList &plates = wxGetApp().plater()->get_partplate_list();
++    if (plate_index < 0 || plate_index >= plates.get_plate_count())
++        plate_index = plates.get_curr_plate_index();
++    PartPlate *target = plates.get_plate(plate_index);
 +    PresetBundle &bundle = *wxGetApp().preset_bundle;
 +    const DynamicPrintConfig &print_config = bundle.prints.get_edited_preset().config;
 +    nlohmann::json options = nlohmann::json::object();
 +    nlohmann::json settings = ai_describe_settings(print_config, options);
 +
 +    // Filaments that print something on the current plate (1-based, as Studio numbers them)
-+    std::vector<int> used = wxGetApp().plater()->get_partplate_list().get_curr_plate()->get_extruders();
++    std::vector<int> used = target->get_extruders();
 +    nlohmann::json filaments = nlohmann::json::array();
 +    for (size_t i = 0; i < bundle.filament_presets.size(); ++i) {
 +        const std::string &name = bundle.filament_presets[i];
@@ -252,8 +350,9 @@ index d38b5d2..191ed58 100644
 +    }
 +
 +    nlohmann::json objects = nlohmann::json::array();
-+    for (const ModelObject *object : wxGetApp().plater()->model().objects)
-+        objects.push_back(ai_describe_object(*object));
++    const ModelObjectPtrs &model_objects = wxGetApp().plater()->model().objects;
++    for (size_t i = 0; i < model_objects.size(); ++i)
++        objects.push_back(ai_describe_object(*model_objects[i], int(i)));
 +
 +    return {
 +        {"version", 2},
@@ -265,6 +364,9 @@ index d38b5d2..191ed58 100644
 +        {"process_variants", ai_strings(print_config, "print_extruder_variant")},
 +        {"options", options},
 +        {"objects", objects},
++        {"current_plate", plate_index + 1},
++        // The plate's size, for drawing the objects' footprints on it
++        {"bed_mm", {target->get_size().x(), target->get_size().y()}},
 +    };
 +}
 +
@@ -364,6 +466,73 @@ index d38b5d2..191ed58 100644
 +    wxTextCtrl *m_comment;
 +};
 +
++// The gateway's names for the goals the start window offers, in its order
++const char *const AI_GOALS[] = {"balanced", "quality", "speed", "strength", "material"};
++
++// What "AI tối ưu" opens first: the plate to work on, whether the settings go on that plate only, the goal and
++// the user's own request. Nothing goes to the AI before "Tối ưu".
++class AiStartDialog : public wxDialog
++{
++public:
++    AiStartDialog(wxWindow *parent, const wxArrayString &plates, int plate, bool plate_only, int goal, const wxString &request)
++        : wxDialog(parent, wxID_ANY, wxString::FromUTF8("AI tối ưu"), wxDefaultPosition, wxDefaultSize, wxDEFAULT_DIALOG_STYLE | wxRESIZE_BORDER)
++    {
++        const int gap = FromDIP(12);
++        auto *sizer = new wxBoxSizer(wxVERTICAL);
++
++        auto *grid = new wxFlexGridSizer(2, FromDIP(8), FromDIP(10));
++        grid->AddGrowableCol(1);
++        grid->Add(new wxStaticText(this, wxID_ANY, wxString::FromUTF8("Bàn in")), 0, wxALIGN_CENTER_VERTICAL);
++        m_plate = new wxChoice(this, wxID_ANY, wxDefaultPosition, wxDefaultSize, plates);
++        m_plate->SetSelection(std::clamp(plate, 0, int(plates.size()) - 1));
++        grid->Add(m_plate, 1, wxEXPAND);
++        grid->Add(new wxStaticText(this, wxID_ANY, wxString::FromUTF8("Mục tiêu")), 0, wxALIGN_CENTER_VERTICAL);
++        wxArrayString goals;
++        for (const char *name : {"Cân bằng", "Bề mặt đẹp", "In nhanh", "Chịu lực, bền", "Tiết kiệm nhựa"})
++            goals.Add(wxString::FromUTF8(name));
++        m_goal = new wxChoice(this, wxID_ANY, wxDefaultPosition, wxDefaultSize, goals);
++        m_goal->SetSelection(std::clamp(goal, 0, int(goals.size()) - 1));
++        grid->Add(m_goal, 1, wxEXPAND);
++        sizer->Add(grid, 0, wxALL | wxEXPAND, gap);
++
++        wxArrayString scopes;
++        scopes.Add(wxString::FromUTF8("Chỉ bàn in đã chọn: đặt riêng cho các vật thể trên bàn, bàn in khác giữ nguyên"));
++        scopes.Add(wxString::FromUTF8("Cả dự án: sửa preset quá trình in, mọi bàn in đều theo"));
++        m_scope = new wxRadioBox(this, wxID_ANY, wxString::FromUTF8("Áp dụng setting cho"), wxDefaultPosition, wxDefaultSize, scopes, 1, wxRA_SPECIFY_COLS);
++        m_scope->SetSelection(plate_only ? 0 : 1);
++        sizer->Add(m_scope, 0, wxLEFT | wxRIGHT | wxEXPAND, gap);
++
++        auto *hint = new wxStaticText(this, wxID_ANY, wxString::FromUTF8("Yêu cầu cho AI (không bắt buộc), ví dụ: bánh răng phải khớp trục 5 mm; mặt trên phải phẳng; không dùng support"));
++        hint->Wrap(FromDIP(560));
++        sizer->Add(hint, 0, wxLEFT | wxRIGHT | wxTOP, gap);
++        m_request = new wxTextCtrl(this, wxID_ANY, request, wxDefaultPosition, wxSize(FromDIP(560), FromDIP(110)), wxTE_MULTILINE | wxTE_WORDWRAP);
++        sizer->Add(m_request, 1, wxALL | wxEXPAND, gap);
++
++        auto *start  = new wxButton(this, wxID_OK, wxString::FromUTF8("Tối ưu"));
++        auto *cancel = new wxButton(this, wxID_CANCEL, wxString::FromUTF8("Hủy"));
++        start->SetDefault();
++        auto *buttons = new wxBoxSizer(wxHORIZONTAL);
++        buttons->AddStretchSpacer();
++        buttons->Add(start, 0, wxRIGHT, FromDIP(8));
++        buttons->Add(cancel);
++        sizer->Add(buttons, 0, wxLEFT | wxRIGHT | wxBOTTOM | wxEXPAND, gap);
++
++        SetSizerAndFit(sizer);
++        CentreOnParent();
++        m_request->SetFocus();
++    }
++
++    int      plate() const { return m_plate->GetSelection(); }
++    bool     plate_only() const { return m_scope->GetSelection() == 0; }
++    int      goal() const { return m_goal->GetSelection(); }
++    wxString request() const { return ai_trimmed(m_request->GetValue()); }
++
++private:
++    wxChoice   *m_plate;
++    wxChoice   *m_goal;
++    wxRadioBox *m_scope;
++    wxTextCtrl *m_request;
++};
 +// Session ids go on a command line: only the gateway's own shape (digits, a-f and dashes) is used
 +bool ai_safe_id(const std::string &id)
 +{
@@ -706,11 +875,36 @@ index d38b5d2..191ed58 100644
 +        return;
 +    }
 +
++    // A new run starts from the window that says what to optimize; "Hỏi lại AI" keeps what was chosen there
++    if (follow_up_session.empty()) {
++        PartPlateList &plates = wxGetApp().plater()->get_partplate_list();
++        const ModelObjectPtrs &model_objects = wxGetApp().plater()->model().objects;
++        wxArrayString names;
++        for (int p = 0; p < plates.get_plate_count(); ++p) {
++            int count = 0;
++            for (size_t i = 0; i < model_objects.size(); ++i)
++                if (plates.find_instance(int(i), 0) == p)
++                    ++count;
++            names.Add(wxString::Format(wxString::FromUTF8("Bàn in %d: %d vật thể"), p + 1, count));
++        }
++        AiStartDialog start(this, names, plates.get_curr_plate_index(), m_ai_plate_only, m_ai_goal, m_ai_request);
++        if (start.ShowModal() != wxID_OK)
++            return;
++        m_ai_plate      = start.plate();
++        m_ai_plate_only = start.plate_only();
++        m_ai_goal       = start.goal();
++        m_ai_request    = start.request();
++    }
++
 +    const std::string request_path  = AI_DIR + "/request.json";
 +    const std::string response_path = AI_DIR + "/response.json";
 +    wxString plate;
 +    try {
-+        nlohmann::json request = ai_describe_plate();
++        nlohmann::json request = ai_describe_plate(m_ai_plate);
++        request["goal"]  = AI_GOALS[std::clamp(m_ai_goal, 0, 4)];
++        request["scope"] = m_ai_plate_only ? "plate" : "project";
++        if (!m_ai_request.empty())
++            request["user_request"] = m_ai_request.ToUTF8().data();
 +        // "Hỏi lại AI": the gateway puts the earlier proposal and this comment in the prompt
 +        if (!follow_up_session.empty())
 +            request["follow_up"] = {{"session_id", follow_up_session}, {"comment", comment.ToUTF8().data()}};
@@ -718,7 +912,13 @@ index d38b5d2..191ed58 100644
 +        for (const nlohmann::json &filament : request["filaments"])
 +            if (filament.value("used", false) && filament.contains("settings"))
 +                settings += filament["settings"].size();
-+        plate = wxString::Format(wxString::FromUTF8(": %d vật thể, %d setting"), int(request["objects"].size()), int(settings));
++        const int plate_number = request.value("current_plate", 0);
++        int on_plate = 0;
++        for (const nlohmann::json &object : request["objects"])
++            if (object.value("plate", plate_number) == plate_number)
++                ++on_plate;
++        plate = wxString::Format(wxString::FromUTF8(": bàn in %d, %d vật thể, %d setting%s"), plate_number, on_plate, int(settings),
++                                 m_ai_plate_only ? wxString::FromUTF8(", chỉ bàn này") : wxString());
 +        boost::filesystem::remove(response_path);
 +        boost::filesystem::remove(response_path + ".progress");
 +        ai_write_json(request_path, request);
@@ -855,6 +1055,19 @@ index d38b5d2..191ed58 100644
 +    int filament_index = -1;
 +    nlohmann::json applied = nlohmann::json::array(), applied_filament = nlohmann::json::array();
 +    wxString lines;
++    // For one plate (the gateway's "scope"): the process changes go on each of its objects, the other plates keep
++    // the preset. (object index, (key, value)), merged into the objects' settings below.
++    std::vector<size_t> plate_objects;
++    int scope_plate = 0;
++    if (response->contains("scope") && (*response)["scope"].is_object()) {
++        scope_plate = (*response)["scope"].value("plate", 0);
++        for (const nlohmann::json &n : (*response)["scope"].value("objects", nlohmann::json::array()))
++            if (n.is_number_integer() && n.get<int>() >= 1 && n.get<int>() <= int(wxGetApp().plater()->model().objects.size()))
++                plate_objects.push_back(size_t(n.get<int>() - 1));
++    }
++    const bool for_plate = scope_plate > 0 && !plate_objects.empty();
++    std::vector<std::pair<size_t, std::pair<std::string, std::string>>> plate_settings;
++    nlohmann::json applied_plate = nlohmann::json::array();
 +    const nlohmann::json changes = response->value("changes", nlohmann::json::array());
 +    for (const nlohmann::json &change : changes) {
 +        const std::string key   = change.value("key", "");
@@ -882,6 +1095,28 @@ index d38b5d2..191ed58 100644
 +        const ConfigOptionDef *def = print_config_def.get(key);
 +        if (def == nullptr || def->type == coString || def->type == coStrings || !config->has(key))
 +            continue;
++        if (for_plate && !for_filament) {
++            if (!ai_object_option(key))
++                continue;
++            try {
++                DynamicPrintConfig probe;
++                ConfigSubstitutionContext context(ForwardCompatibilitySubstitutionRule::Disable);
++                probe.set_deserialize(key, value, context);
++            } catch (const std::exception &e) {
++                BOOST_LOG_TRIVIAL(warning) << "AI optimize: plate " << scope_plate << " " << key << " = " << value << " rejected: " << e.what();
++                continue;
++            }
++            for (size_t idx : plate_objects) {
++                plate_settings.push_back({idx, {key, value}});
++                applied_plate.push_back({{"object", int(idx) + 1}, {"key", key}, {"value", value}});
++            }
++            wxString label = ai_text(change, "label");
++            if (label.empty())
++                label = wxString::FromUTF8(key);
++            lines += wxString::Format(wxString::FromUTF8("• Bàn in %d (%d vật thể), %s: %s → %s\n   %s\n\n"), scope_plate, int(plate_objects.size()), label,
++                                      wxString::FromUTF8(config->opt_serialize(key)), wxString::FromUTF8(value), ai_text(change, "reason"));
++            continue;
++        }
 +        try {
 +            ConfigSubstitutionContext context(ForwardCompatibilitySubstitutionRule::Disable);
 +            (for_filament ? proposed_filament : proposed).set_deserialize(key, value, context);
@@ -901,13 +1136,88 @@ index d38b5d2..191ed58 100644
 +        lines += wxString::Format(wxString::FromUTF8("• %s: %s → %s\n   %s\n\n"), label, wxString::FromUTF8(config->opt_serialize(key)),
 +                                  wxString::FromUTF8(value), ai_text(change, "reason"));
 +    }
-+    if (proposed.empty() && proposed_filament.empty())
++
++    // Settings for single objects (1-based, as ai_describe_plate lists them), on top of the process preset
++    ModelObjectPtrs &objects = wxGetApp().plater()->model().objects;
++    // (object index, (key, value))
++    std::vector<std::pair<size_t, std::pair<std::string, std::string>>> object_settings;
++    nlohmann::json applied_objects = nlohmann::json::array();
++    for (const nlohmann::json &change : response->value("object_changes", nlohmann::json::array())) {
++        const int         n     = change.value("object", 0);
++        const std::string key   = change.value("key", "");
++        const std::string value = change.value("value", "");
++        if (n < 1 || n > int(objects.size()) || !ai_object_option(key))
++            continue;
++        try {
++            DynamicPrintConfig probe;
++            ConfigSubstitutionContext context(ForwardCompatibilitySubstitutionRule::Disable);
++            probe.set_deserialize(key, value, context);
++        } catch (const std::exception &e) {
++            BOOST_LOG_TRIVIAL(warning) << "AI optimize: object " << n << " " << key << " = " << value << " rejected: " << e.what();
++            continue;
++        }
++        const ModelObject *object = objects[n - 1];
++        object_settings.push_back({size_t(n - 1), {key, value}});
++        applied_objects.push_back({{"object", n}, {"key", key}, {"value", value}});
++        // The object's own value when it has one, else the process preset's
++        const std::string current = object->config.has(key) ? object->config.opt_serialize(key) :
++                                    print_config.has(key)   ? print_config.opt_serialize(key) : std::string("?");
++        wxString label = ai_text(change, "label");
++        if (label.empty())
++            label = wxString::FromUTF8(key);
++        lines += wxString::Format(wxString::FromUTF8("• Vật thể #%d %s, %s: %s → %s\n   %s\n\n"), n, wxString::FromUTF8(object->name), label,
++                                  wxString::FromUTF8(current), wxString::FromUTF8(value), ai_text(change, "reason"));
++    }
++
++    // Objects moved together to a new plate; every object moves once, and some stay where they are
++    std::vector<std::vector<size_t>> new_plates;
++    nlohmann::json applied_plates = nlohmann::json::array();
++    std::vector<bool> moved(objects.size(), false);
++    size_t moved_count = 0;
++    for (const nlohmann::json &plate : response->value("plates", nlohmann::json::array())) {
++        std::vector<size_t> members;
++        nlohmann::json numbers = nlohmann::json::array();
++        wxString names;
++        for (const nlohmann::json &number : plate.value("objects", nlohmann::json::array())) {
++            const int n = number.is_number_integer() ? number.get<int>() : 0;
++            if (n < 1 || n > int(objects.size()) || moved[n - 1])
++                continue;
++            moved[n - 1] = true;
++            members.push_back(size_t(n - 1));
++            numbers.push_back(n);
++            names += wxString::Format(wxString::FromUTF8("%s#%d %s"), names.empty() ? wxString() : wxString(", "), n, wxString::FromUTF8(objects[n - 1]->name));
++        }
++        if (members.empty())
++            continue;
++        if (moved_count + members.size() >= objects.size()) {
++            for (size_t idx : members)
++                moved[idx] = false;
++            continue;
++        }
++        moved_count += members.size();
++        new_plates.push_back(members);
++        applied_plates.push_back({{"objects", numbers}});
++        lines += wxString::Format(wxString::FromUTF8("• Chuyển sang plate mới: %s\n   %s\n\n"), names, ai_text(plate, "reason"));
++    }
++    // The plate's settings first: an object's own setting from the AI then wins over its plate's
++    object_settings.insert(object_settings.begin(), plate_settings.begin(), plate_settings.end());
++    for (const nlohmann::json &change : applied_plate)
++        applied_objects.push_back(change);
++    const bool for_objects = !object_settings.empty() || !new_plates.empty();
++    if (for_plate && !plate_settings.empty())
++        lines += wxString::Format(wxString::FromUTF8("Setting của bàn in %d được đặt riêng cho từng vật thể trên bàn (xem trong danh sách vật thể); các bàn in khác giữ preset.\n"), scope_plate);
++    if (for_plate && !proposed_filament.empty())
++        lines += wxString::FromUTF8("Preset filament dùng chung cho mọi bàn in dùng filament đó.\n");
++    if (!new_plates.empty())
++        lines += wxString::FromUTF8("Plate mới được xếp lại tự động. Preset quá trình in dùng chung cho mọi plate.\n");
++
++    if (proposed.empty() && proposed_filament.empty() && !for_objects)
 +        lines = wxString::FromUTF8("Setting hiện tại đã phù hợp, AI không đề xuất thay đổi nào.");
 +    else if (!proposed_filament.empty())
 +        lines += wxString::FromUTF8("Thay đổi filament được nạp vào preset ") + wxString::FromUTF8(filament_preset) +
 +                 wxString::FromUTF8(" (tab Filament), như khi tự sửa: lưu preset nếu muốn giữ cho lần sau.");
 +
-+    AiResultDialog dlg(this, ai_text(*response, "summary"), lines, !proposed.empty() || !proposed_filament.empty());
++    AiResultDialog dlg(this, ai_text(*response, "summary"), lines, !proposed.empty() || !proposed_filament.empty() || for_objects);
 +    const int answer = dlg.ShowModal();
 +    if (answer == ID_AI_ASK_AGAIN) {
 +        // Back to the button's busy state; the new answer opens this dialog again
@@ -945,7 +1255,9 @@ index d38b5d2..191ed58 100644
 +    }
 +    if (Tab *tab = wxGetApp().get_tab(Preset::TYPE_PRINT); tab != nullptr && !proposed.empty())
 +        tab->load_config(proposed);
-+    if (applied.empty())
++    if (for_objects)
++        ai_apply_objects(object_settings, new_plates);
++    if (applied.empty() && !for_objects)
 +        return;
 +    // The next print sent from Studio is linked to this proposal in the print history
 +    m_ai_last_applied_session = session_id;
@@ -954,11 +1266,79 @@ index d38b5d2..191ed58 100644
 +    if (!session_id.empty() && wxFileName::IsFileExecutable(AI_GATEWAY)) {
 +        try {
 +            const std::string body = AI_DIR + "/applied.json";
-+            ai_write_json(body, {{"changes", applied}});
++            ai_write_json(body, {{"changes", applied}, {"object_changes", applied_objects}, {"plates", applied_plates}});
 +            ai_run(AI_GATEWAY + " POST studio/ai-sessions/" + session_id + "/applied " + body + " " + AI_DIR + "/applied-response.json", []() {});
 +        } catch (const std::exception &e) {
 +            BOOST_LOG_TRIVIAL(warning) << "AI optimize: applied changes not recorded: " << e.what();
 +        }
++    }
++}
++
++void MainFrame::ai_apply_objects(const std::vector<std::pair<size_t, std::pair<std::string, std::string>>> &settings,
++                                 const std::vector<std::vector<size_t>> &new_plates)
++{
++    Plater *plater = wxGetApp().plater();
++    ModelObjectPtrs &objects = plater->model().objects;
++    // One step of Undo for everything the AI did to the objects and plates
++    plater->take_snapshot("AI optimize: objects");
++
++    std::vector<size_t> changed;
++    for (const auto &[idx, setting] : settings) {
++        if (idx >= objects.size())
++            continue;
++        try {
++            ConfigSubstitutionContext context(ForwardCompatibilitySubstitutionRule::Disable);
++            objects[idx]->config.set_deserialize(setting.first, setting.second, context);
++        } catch (const std::exception &e) {
++            BOOST_LOG_TRIVIAL(warning) << "AI optimize: object " << idx + 1 << " " << setting.first << " not set: " << e.what();
++            continue;
++        }
++        if (std::find(changed.begin(), changed.end(), idx) == changed.end())
++            changed.push_back(idx);
++    }
++    // As after editing an object's settings in the object list: its settings item shows them
++    for (size_t idx : changed)
++        wxGetApp().obj_list()->object_config_options_changed({objects[idx], nullptr});
++
++    // As the toolbar's "add plate", then the objects are moved by the offset between their plate and the new
++    // one (worked out after adding it: a new column of plates moves the others), and the new plate arranged
++    PartPlateList &plates = plater->get_partplate_list();
++    int last_plate = -1;
++    for (const std::vector<size_t> &members : new_plates) {
++        const int count = plates.get_plate_count();
++        plates.add_plate();
++        if (plates.get_plate_count() == count) {
++            BOOST_LOG_TRIVIAL(warning) << "AI optimize: no room for another plate";
++            break;
++        }
++        last_plate = plates.get_plate_count() - 1;
++        const Vec3d target = plates.get_plate(last_plate)->get_origin();
++        for (size_t idx : members) {
++            if (idx >= objects.size())
++                continue;
++            ModelObject *object = objects[idx];
++            for (size_t i = 0; i < object->instances.size(); ++i) {
++                const int from = plates.find_instance(int(idx), int(i));
++                const Vec3d origin = from >= 0 ? plates.get_plate(from)->get_origin() : plates.get_plate(0)->get_origin();
++                ModelInstance *instance = object->instances[i];
++                instance->set_offset(instance->get_offset() + (target - origin));
++            }
++            object->invalidate_bounding_box();
++            for (size_t i = 0; i < object->instances.size(); ++i)
++                plates.notify_instance_update(int(idx), int(i));
++            wxGetApp().obj_list()->notify_instance_updated(int(idx));
++            if (std::find(changed.begin(), changed.end(), idx) == changed.end())
++                changed.push_back(idx);
++        }
++    }
++    if (!changed.empty())
++        plater->changed_objects(changed);
++    plater->update();
++    if (last_plate >= 0) {
++        // The arrange button on the new plate: only that plate's objects
++        plater->select_plate(last_plate);
++        plater->set_prepare_state(Job::PREPARE_STATE_MENU);
++        plater->arrange();
 +    }
 +}
 +
@@ -1051,7 +1431,7 @@ index d38b5d2..191ed58 100644
  
  void MainFrame::update_slice_print_status(SlicePrintEventType event, bool can_slice, bool can_print)
 diff --git a/src/slic3r/GUI/MainFrame.hpp b/src/slic3r/GUI/MainFrame.hpp
-index 93422a8..1fe9d06 100644
+index 93422a8..b9d28d9 100644
 --- a/src/slic3r/GUI/MainFrame.hpp
 +++ b/src/slic3r/GUI/MainFrame.hpp
 @@ -1,6 +1,7 @@
@@ -1062,7 +1442,7 @@ index 93422a8..1fe9d06 100644
  #include "libslic3r/PrintConfig.hpp"
  
  #include <boost/property_tree/ptree_fwd.hpp>
-@@ -420,6 +421,34 @@ public:
+@@ -420,6 +421,44 @@ public:
      SideButton* m_slice_option_btn{ nullptr };
      SideButton* m_print_btn{ nullptr };
      SideButton* m_print_option_btn{ nullptr };
@@ -1071,6 +1451,12 @@ index 93422a8..1fe9d06 100644
 +    SideButton* m_ai_report_btn{ nullptr };
 +    bool m_ai_running{ false };
 +    bool m_ai_reporting{ false };
++    // What the start window chose last: the plate (0-based, -1 for the one open), settings for it only, the goal
++    // (AI_GOALS) and the user's request; "Hỏi lại AI" runs with them again
++    int m_ai_plate{ -1 };
++    bool m_ai_plate_only{ true };
++    int m_ai_goal{ 0 };
++    wxString m_ai_request;
 +    // The AI proposal applied last, linked to the next print in the print history
 +    std::string m_ai_last_applied_session;
 +    // Runs an /opt/studio-ai command without blocking; done runs on the UI thread once it exits
@@ -1078,6 +1464,10 @@ index 93422a8..1fe9d06 100644
 +    // Runs the AI hook on the open plate (again, with the user's comment on an earlier session), then offers its changes
 +    void ai_optimize(const std::string &follow_up_session = "", const wxString &comment = wxString());
 +    void ai_optimize_apply(const std::string &response_path);
++    // Gives single objects the AI's settings ((object index, (key, value))) and moves objects to new plates,
++    // each arranged, as one undo step
++    void ai_apply_objects(const std::vector<std::pair<size_t, std::pair<std::string, std::string>>> &settings,
++                          const std::vector<std::vector<size_t>> &new_plates);
 +    // The progress window of a running hook (an AiProgressDialog), fed from the file the hook writes
 +    wxDialog *m_ai_progress{ nullptr };
 +    wxTimer *m_ai_timer{ nullptr };

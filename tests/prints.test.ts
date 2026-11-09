@@ -261,6 +261,34 @@ describe('Print history API', () => {
     expect((await sessions.get(session.id))?.feedback).toMatchObject({ outcome: 'usable', note: 'Hơi kéo sợi' });
   });
 
+  it('saves defects pinned to a part of an object, and keeps them when a report without them replaces it', async () => {
+    const session = await sessions.create(
+      { version: 1, goal: 'balanced', printer_preset: 'p', process_preset: 'q', nozzle_diameters: [0.4], filaments: [], settings: {}, objects: [] },
+      { summary: '', changes: [], rejected: [] },
+      null
+    );
+    const print = await journal.create('Plate01_Bracket', new Date(), { ...setupBody, ai_session_id: session.id, received_at: new Date().toISOString() });
+    const defect = { object: 'Bracket.stl', part: 'ngàm cài', area: 'side', issue: 'layer_shift', severity: 'critical', height_mm: 12, detail: 'lệch 1 mm' };
+    const post = (payload: object) => app.inject({ method: 'POST', url: `/api/prints/${print.id}/feedback`, payload });
+
+    expect((await post({ outcome: 'failed', issues: ['stringing'], defects: [defect] })).statusCode).toBe(200);
+    // The defect's problem counts for the print as a whole too
+    expect((await journal.get(print.id))?.feedback).toMatchObject({ issues: ['stringing', 'layer_shift'], defects: [defect] });
+    expect((await sessions.get(session.id))?.feedback?.defects).toEqual([defect]);
+
+    // Studio's report dialog knows nothing of defects
+    await post({ outcome: 'usable', issues: [] });
+    expect((await journal.get(print.id))?.feedback).toMatchObject({ outcome: 'usable', issues: ['layer_shift'], defects: [defect] });
+    await post({ outcome: 'usable', issues: [], defects: [] });
+    expect((await journal.get(print.id))?.feedback).toMatchObject({ issues: [], defects: [] });
+
+    const bad = await post({ outcome: 'usable', defects: [{ ...defect, area: 'somewhere' }] });
+    expect(bad.statusCode).toBe(400);
+    const labels = (await app.inject({ method: 'GET', url: '/api/prints' })).json();
+    expect(labels.areas).toContainEqual({ id: 'side', label: 'Thành bên' });
+    expect(labels.severities.map((s: { id: string }) => s.id)).toEqual(['minor', 'major', 'critical']);
+  });
+
   it('uploads, serves and deletes photos', async () => {
     const print = await journal.create('Plate01_Bracket', new Date(), null);
     const form = new FormData();

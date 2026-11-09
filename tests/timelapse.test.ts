@@ -74,6 +74,23 @@ describe('timelapse listing', () => {
     expect(matchPrint(other, [{ id: 'near', ended_at: '2026-10-11T16:50:10.000Z', timelapse: 'v.mp4' }])).toBeNull();
   });
 
+  it('pairs a video by the clock offset of the named video closest in time when the printer clock is off', () => {
+    const at = (name: string, ended_at: string) => ({ name, size: 1, ended_at, name_time: null, has_thumbnail: false });
+    // The printer's clock 10 days 6 h 7 min behind, as in October 2026
+    const old = at('old.mp4', '2026-10-15T07:18:00.000Z');
+    const later = at('later.mp4', '2026-10-19T10:08:00.000Z');
+    const prints = [
+      { id: 'named', ended_at: '2026-10-25T13:25:11.000Z', timelapse: 'old.mp4' },
+      { id: 'robot', ended_at: '2026-10-29T16:14:59.000Z' },
+    ];
+    expect(matchPrint(later, prints, [old, later])?.id).toBe('robot');
+    // Without a named video there is no offset to go by
+    expect(matchPrint(later, prints)).toBeNull();
+    // A print that ended at the video's own time still wins: the clock may have been set right since
+    const onTime = { id: 'on-time', ended_at: '2026-10-19T10:07:00.000Z' };
+    expect(matchPrint(later, [...prints, onTime], [old, later])?.id).toBe('on-time');
+  });
+
   it('lists videos newest first, caches the listing and the downloads', async () => {
     const dir = mkdtempSync(path.join(os.tmpdir(), 'timelapse-'));
     try {

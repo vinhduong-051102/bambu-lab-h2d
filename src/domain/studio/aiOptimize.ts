@@ -7,7 +7,8 @@ import type { PrinterState } from '../PrinterState';
  * "AI tối ưu" in Bambu Studio: Studio describes the open plate (presets, the process and filament
  * settings with how Studio defines each one, object geometry), Claude proposes setting changes, and
  * only checked ones come back. Studio shows them to the user and applies the accepted ones to the
- * edited process preset and to one filament preset.
+ * edited process preset and to one filament preset, to single objects (their own settings, as the
+ * Objects tab of the process settings sets them), and moves objects to new plates.
  */
 
 type SettingSpec =
@@ -89,6 +90,8 @@ const studioOptionSchema = z.object({
   max: z.number().optional(),
   values: z.array(z.string()).optional(),
   mode: z.enum(['simple', 'advanced', 'develop']).default('simple'),
+  // Studio also keeps it on an object (PrintObjectConfig/PrintRegionConfig): it can then be set for one plate
+  object: z.boolean().optional(),
 });
 export type StudioOption = z.infer<typeof studioOptionSchema>;
 
@@ -102,6 +105,11 @@ const vec3 = z.tuple([z.number(), z.number(), z.number()]);
 export const studioRequestSchema = z.object({
   version: z.union([z.literal(1), z.literal(2)]),
   goal: z.enum(['balanced', 'quality', 'speed', 'strength', 'material']).default('balanced'),
+  // What the user typed in Studio's "AI tối ưu" window before starting
+  user_request: z.string().trim().max(2000).optional(),
+  // "plate": settings for current_plate only (Studio sets them on its objects); "project": the process preset
+  // (missing: the whole project, as from Studio before the start window)
+  scope: z.enum(['project', 'plate']).optional(),
   printer_preset: z.string(),
   process_preset: z.string(),
   nozzle_diameters: z.array(z.number()),
@@ -130,9 +138,23 @@ export const studioRequestSchema = z.object({
         base_area_mm2: z.number(),
         overhang_area_mm2: z.number(),
         triangles: z.number().int(),
+        // 1-based plate the object's first instance is on; missing from Studio before plate moves
+        plate: z.number().int().optional(),
+        // Its first instance seen from above: the outline's corners in mm from its plate's corner (missing from Studio before)
+        footprint: z.array(z.tuple([z.number(), z.number()])).max(2000).optional(),
+        // Its true outline from above (Studio's view of the plate): outer contours and holes, drawn even-odd
+        outline: z
+          .array(z.array(z.tuple([z.number(), z.number()])).max(8000))
+          .max(500)
+          .refine((rings) => rings.reduce((n, r) => n + r.length, 0) <= 12000, 'Outline has too many corners')
+          .optional(),
       })
     )
     .max(200),
+  // 1-based plate open in Studio
+  current_plate: z.number().int().optional(),
+  // The plate's width and depth in mm, for drawing the footprints
+  bed_mm: z.tuple([z.number(), z.number()]).optional(),
   // "Hỏi lại AI" in Studio's result dialog: the session being answered and what the user said about it
   follow_up: z.object({ session_id: z.string(), comment: z.string().trim().min(1).max(2000) }).optional(),
 });
@@ -140,7 +162,7 @@ export type StudioRequest = z.infer<typeof studioRequestSchema>;
 
 /** The proposal a re-ask answers, and the user's comment on it */
 export interface FollowUp {
-  previous: { summary: string; changes: AiChange[] } | null;
+  previous: { summary: string; changes: AiChange[]; object_changes?: AiObjectChange[]; plates?: AiPlateMove[] } | null;
   comment: string;
 }
 
@@ -153,13 +175,20 @@ export interface PastPrint {
   objects: string[];
   /** Applied changes by settingRef, with the value each replaced (null when it was not kept) */
   changes: { key: string; label?: string; before: string | null; after: string }[];
+  /** Settings given to single objects, and the objects moved together to each new plate (by name) */
+  object_changes?: { object: string; key: string; after: string }[];
+  plates?: string[][];
   outcome: string;
   issues: string[];
+  /** The defects the user pinned to an object and a part of it (aiSessions.describeDefect) */
+  defects?: string[];
   note: string;
   /** What Claude saw in the print's timelapse; only through the printer's camera, so weighed below the user's report */
   video_review?: string;
   /** That review's advice, in full: the user chose it for later prints, so the prompt asks for each to be followed */
   review_suggestions?: string[];
+  /** When a session that followed that advice was applied: the current settings hold it already, and it is only history */
+  review_followed_at?: string;
 }
 
 /**
@@ -181,6 +210,8 @@ export interface AiChange extends FilamentTarget {
 }
 
 export interface AiRejected extends FilamentTarget {
+  /** For a setting of one object, or a plate move (key "new_plate"): the 1-based object */
+  object?: number;
   key: string;
   value: string;
   reason: string;
@@ -191,11 +222,66 @@ export function settingRef(change: { key: string; target?: string; filament?: nu
   return change.target === 'filament' ? `filament#${change.filament}:${change.key}` : change.key;
 }
 
+/** A setting of one object only (1-based, as Studio lists them in the request), on top of the process preset */
+export interface AiObjectChange {
+  object: number;
+  name: string;
+  key: string;
+  label: string;
+  value: string;
+  reason: string;
+}
+
+/** Objects (1-based) that go together to a new plate of their own */
+export interface AiPlateMove {
+  objects: number[];
+  names: string[];
+  reason: string;
+}
+
 export interface AiOptimizeResult {
   summary: string;
   changes: AiChange[];
+  /** Missing in sessions saved before objects could be set one by one, as is `plates` */
+  object_changes?: AiObjectChange[];
+  plates?: AiPlateMove[];
   rejected: AiRejected[];
+  /** For one plate only: the process changes go on every one of its objects (1-based), the other plates keep the preset */
+  scope?: { plate: number; objects: number[] };
 }
+
+// The settings Studio also keeps per object (src/libslic3r/PrintConfig.hpp's PrintObjectConfig and
+// PrintRegionConfig, v02.08.04.57): what the AI may give one object instead of the whole plate. Kept to
+// adhesion, support and strength; Studio refuses keys that are not an object's anyway.
+export const OBJECT_SETTING_KEYS = [
+  'brim_type', 'brim_width', 'brim_object_gap', 'raft_layers', 'elefant_foot_compensation',
+  'enable_support', 'support_type', 'support_style', 'support_threshold_angle', 'support_on_build_plate_only',
+  'support_top_z_distance', 'support_object_xy_distance', 'tree_support_wall_count',
+  'wall_loops', 'top_shell_layers', 'bottom_shell_layers', 'sparse_infill_density', 'sparse_infill_pattern',
+  'seam_position', 'ironing_type', 'detect_overhang_wall', 'only_one_wall_first_layer',
+] as const;
+const OBJECT_SETTINGS = new Set<string>(OBJECT_SETTING_KEYS);
+
+/** The plate the AI works on alone, or null for the whole project */
+export function targetPlate(request: Pick<StudioRequest, 'scope' | 'current_plate'>): number | null {
+  return request.scope === 'plate' && request.current_plate ? request.current_plate : null;
+}
+
+/** The objects (1-based) the AI works on: those of the target plate, or all of them */
+export function workingObjects(request: Pick<StudioRequest, 'scope' | 'current_plate' | 'objects'>): number[] {
+  const all = request.objects.map((_, i) => i + 1);
+  const plate = targetPlate(request);
+  // Studio before plate numbers: every object counts as on the plate
+  if (plate === null || !request.objects.some((o) => o.plate)) return all;
+  return all.filter((n) => request.objects[n - 1].plate === plate);
+}
+
+/** A process setting that can be set for one plate: Studio keeps it on objects too */
+function plateSetting(request: StudioRequest, key: string): boolean {
+  return OBJECT_SETTINGS.has(key) || request.options?.[key]?.object === true;
+}
+// More new plates than this is the AI taking the plate apart, not moving the parts at risk
+const MAX_NEW_PLATES = 4;
 
 /**
  * One proposal as the model writes it. Keys and values are free text, checked against the settings of
@@ -220,8 +306,34 @@ export const PROPOSAL_JSON_SCHEMA = {
         additionalProperties: false,
       },
     },
+    object_changes: {
+      type: 'array',
+      items: {
+        type: 'object',
+        properties: {
+          object: { type: 'integer' },
+          key: { type: 'string' },
+          value: { type: 'string' },
+          reason: { type: 'string' },
+        },
+        required: ['object', 'key', 'value', 'reason'],
+        additionalProperties: false,
+      },
+    },
+    new_plates: {
+      type: 'array',
+      items: {
+        type: 'object',
+        properties: {
+          objects: { type: 'array', items: { type: 'integer' } },
+          reason: { type: 'string' },
+        },
+        required: ['objects', 'reason'],
+        additionalProperties: false,
+      },
+    },
   },
-  required: ['summary', 'changes'],
+  required: ['summary', 'changes', 'object_changes', 'new_plates'],
   additionalProperties: false,
 } as const;
 
@@ -232,6 +344,9 @@ export interface AiProposal {
   summary: string;
   /** target defaults to "process"; filament is 1-based and only read for target "filament" */
   changes: { target?: 'process' | 'filament'; filament?: number; key: string; value: string; reason: string }[];
+  /** object is 1-based, as the request lists them */
+  object_changes?: { object: number; key: string; value: string; reason: string }[];
+  new_plates?: { objects: number[]; reason: string }[];
 }
 
 /** A proposal made outside the gateway (`claude -p` in Studio's container), sent back to be checked */
@@ -249,6 +364,14 @@ export const aiProposalSchema = z.object({
     )
     // Room for every setting of the process and a filament preset, when the user asks to change them all
     .max(800),
+  object_changes: z
+    .array(z.object({ object: z.number().int(), key: z.string(), value: z.string(), reason: z.string() }))
+    .max(800)
+    .default([]),
+  new_plates: z
+    .array(z.object({ objects: z.array(z.number().int()).max(200), reason: z.string() }))
+    .max(50)
+    .default([]),
 });
 
 const round = (n: number, digits: number) => Number(n.toFixed(digits));
@@ -523,6 +646,8 @@ export function checkProposal(proposal: AiProposal, request: StudioRequest): AiO
   const changes: AiChange[] = [];
   const rejected: AiRejected[] = [];
   const seen = new Set<string>();
+  const plate = targetPlate(request);
+  const objects = workingObjects(request);
   // Studio holds unsaved edits for one filament preset at a time, so a proposal changes at most one
   let filamentPreset: string | null = null;
 
@@ -532,6 +657,7 @@ export function checkProposal(proposal: AiProposal, request: StudioRequest): AiO
     if (change.target !== 'filament') {
       if (seen.has(key)) return { error: 'Đề xuất trùng lặp' };
       seen.add(key);
+      if (plate !== null && !plateSetting(request, key)) return { error: 'Chỉ đặt được cho cả dự án (preset quá trình in), không riêng một bàn in' };
       const current = request.settings[key];
       if (key in AI_SETTINGS) {
         const settingKey = key as AiSettingKey;
@@ -579,7 +705,103 @@ export function checkProposal(proposal: AiProposal, request: StudioRequest): AiO
     const target = change.target === 'filament' ? { target: 'filament' as const, filament: change.filament } : {};
     rejected.push({ ...target, key: change.key, value: change.value, reason: result.error });
   }
-  return { summary: proposal.summary.trim(), changes, rejected };
+  const objectChanges = checkObjectChanges(proposal.object_changes ?? [], request, objects, rejected);
+  const plates = checkPlateMoves(proposal.new_plates ?? [], request, objects, rejected);
+  return {
+    summary: proposal.summary.trim(),
+    changes,
+    object_changes: objectChanges,
+    plates,
+    rejected,
+    ...(plate !== null ? { scope: { plate, objects } } : {}),
+  };
+}
+
+/**
+ * Settings for single objects: keys of OBJECT_SETTINGS, checked like the process setting of the same key. A value
+ * equal to the process preset's changes nothing and is dropped.
+ */
+function checkObjectChanges(
+  proposed: NonNullable<AiProposal['object_changes']>,
+  request: StudioRequest,
+  working: number[],
+  rejected: AiRejected[]
+): AiObjectChange[] {
+  const changes: AiObjectChange[] = [];
+  const seen = new Set<string>();
+  for (const change of proposed) {
+    const { object: n, key, value } = change;
+    const reject = (reason: string) => rejected.push({ object: n, key, value, reason });
+    const object = request.objects[n - 1];
+    if (!object) {
+      reject(`Không có vật thể #${n}`);
+      continue;
+    }
+    if (!working.includes(n)) {
+      reject(`Vật thể #${n} không nằm trên bàn in ${request.current_plate}`);
+      continue;
+    }
+    if (!OBJECT_SETTINGS.has(key)) {
+      reject('Tham số này không đặt riêng cho một vật thể được');
+      continue;
+    }
+    if (seen.has(`${n}:${key}`)) {
+      reject('Đề xuất trùng lặp');
+      continue;
+    }
+    seen.add(`${n}:${key}`);
+    const current = request.settings[key];
+    let normalized: { value: string } | { error: string };
+    let label: string;
+    if (key in AI_SETTINGS) {
+      normalized = normalizeValue(key as AiSettingKey, value, request.nozzle_diameters, current);
+      label = AI_SETTINGS[key as AiSettingKey].label;
+    } else {
+      const option = allowedOption(request, request.settings, key);
+      if (!option) {
+        reject('Studio không gửi tham số này');
+        continue;
+      }
+      normalized = normalizeOptionValue(option, value, current);
+      label = optionLabel(key, option);
+    }
+    if ('error' in normalized) {
+      reject(normalized.error);
+      continue;
+    }
+    if (sameOptionValue(current, normalized.value)) continue;
+    changes.push({ object: n, name: object.name, key, label, value: normalized.value, reason: change.reason.trim() });
+  }
+  return changes;
+}
+
+/** New plates: each object moves at most once, and some stay where they are */
+function checkPlateMoves(
+  proposed: NonNullable<AiProposal['new_plates']>,
+  request: StudioRequest,
+  working: number[],
+  rejected: AiRejected[]
+): AiPlateMove[] {
+  const plates: AiPlateMove[] = [];
+  const moved = new Set<number>();
+  for (const plate of proposed) {
+    const objects = [...new Set(plate.objects)];
+    if (objects.length === 0) continue;
+    const reject = (reason: string) =>
+      rejected.push({ object: objects[0], key: 'new_plate', value: objects.map((n) => `#${n}`).join(', '), reason });
+    const missing = objects.find((n) => !request.objects[n - 1]);
+    const elsewhere = objects.find((n) => !working.includes(n));
+    if (missing !== undefined) reject(`Không có vật thể #${missing}`);
+    else if (elsewhere !== undefined) reject(`Vật thể #${elsewhere} không nằm trên bàn in ${request.current_plate}`);
+    else if (objects.some((n) => moved.has(n))) reject('Vật thể đã được chuyển sang plate mới khác');
+    else if (plates.length >= MAX_NEW_PLATES) reject(`Tối đa ${MAX_NEW_PLATES} plate mới mỗi lần`);
+    else if (moved.size + objects.length >= working.length) reject('Không chuyển hết mọi vật thể: plate cũ sẽ trống');
+    else {
+      objects.forEach((n) => moved.add(n));
+      plates.push({ objects, names: objects.map((n) => request.objects[n - 1].name), reason: plate.reason.trim() });
+    }
+  }
+  return plates;
 }
 
 const GOALS: Record<StudioRequest['goal'], string> = {
@@ -607,11 +829,13 @@ Bạn nhận mô tả plate đang mở: preset máy, preset quá trình in, fila
 - Thông tin hình học là ước lượng từ lưới tam giác, không phải kết quả slice.
 - Nếu có kết quả in thực tế của các plate tương tự trên chính máy này, coi đó là bằng chứng mạnh hơn quy tắc chung: giữ những thay đổi đã cho bản in tốt, không lặp lại thay đổi đi kèm lỗi, và sửa đúng lỗi người dùng đã báo. Một lần in có thể hỏng vì lý do ngoài setting (bàn bẩn, filament ẩm), nên chỉ kết luận chắc khi lỗi lặp lại. Khi một thay đổi dựa vào lịch sử in, nói rõ trong lý do.
 - Nếu có phần "Thành phần của plate này": mỗi thành phần đi kèm các lần in phần giống nó trên máy này, kết quả và setting lúc in. Với thành phần đã in tốt, giữ hoặc đưa setting liên quan về như lần in tốt; với thành phần từng lỗi, tránh setting của lần lỗi và sửa đúng lỗi đó. Giống càng cao (%) càng đáng tin. Khi một thay đổi dựa vào thành phần, lý do nêu id thành phần và bản in tham chiếu (ví dụ "F3 giống vành mâm của Plate07 in tốt với 3 vòng tường").
-- Nhận xét timelapse mà người dùng đã chọn dùng cho lần in sau là yêu cầu của người dùng: áp dụng các đề xuất của nó như yêu cầu rõ ở trên, không coi là một bằng chứng để cân với các bản in thành công.
+- Nhận xét timelapse mà người dùng đã chọn dùng cho lần in sau là yêu cầu của người dùng: áp dụng các đề xuất của nó như yêu cầu rõ ở trên, không coi là một bằng chứng để cân với các bản in thành công. Đề xuất "tăng"/"giảm" là một bước vừa phải so với setting của bản in đó, không phải lần hỏi nào cũng tăng/giảm thêm: nếu giá trị hiện tại đã đổi theo hướng đó so với lúc in thì coi như đã làm.
+- object_changes: setting riêng cho một vật thể (object là số # của vật thể trong "Vật thể trên plate"), chồng lên preset quá trình in. Chỉ dùng các key trong phần "Tham số đặt riêng cho từng vật thể". Dùng khi chỉ một vài vật thể cần (brim cho chi tiết nhỏ, cao hoặc dài mảnh dễ bong; support cho vật có phần nhô; thêm vòng tường cho chi tiết chịu lực), thay vì đổi cho cả plate. Không đặt riêng cho vật thể giá trị đã bằng preset.
+- new_plates: mỗi phần tử là một plate mới, chứa các vật thể (số #) được chuyển sang đó; Studio xếp lại plate mới. Dùng khi in chung dễ hỏng cả bàn: chi tiết nhỏ, cao, mảnh dễ đổ hoặc bị đầu phun đụng bật cạnh các tấm lớn, vật cần setting rất khác nhau, hoặc người dùng (hay nhận xét timelapse họ chọn) yêu cầu tách. Không chuyển hết mọi vật thể; tối đa ${MAX_NEW_PLATES} plate mới. Preset quá trình in vẫn dùng chung cho mọi plate, nên setting chỉ hợp với vật thể đã tách thì đặt bằng object_changes. Không cần thì để danh sách rỗng.
 - Mỗi lý do viết bằng tiếng Việt, một câu ngắn, nêu dựa vào đâu. Phần summary bằng tiếng Việt, tối đa ba câu (tối đa năm câu khi phải nói đề xuất nào của nhận xét timelapse đã bỏ qua).`;
 
-function describeSettings(request: StudioRequest): string {
-  return AI_SETTING_KEYS.map((key) => {
+function describeSettings(request: StudioRequest, keep: (key: string) => boolean = () => true): string {
+  return AI_SETTING_KEYS.filter(keep).map((key) => {
     const spec: SettingSpec = AI_SETTINGS[key];
     const allowed =
       spec.kind === 'enum'
@@ -681,6 +905,18 @@ function describeFilaments(request: StudioRequest): string[] {
   });
 }
 
+/** The OBJECT_SETTINGS Studio sent, as "- key (label): hiện tại X; allowed" */
+function describeObjectSettings(request: StudioRequest): string[] {
+  return OBJECT_SETTING_KEYS.flatMap((key) => {
+    const current = request.settings[key];
+    if (current === undefined) return [];
+    const option = request.options?.[key];
+    if (option) return [describeOption(key, option, current)];
+    const spec = (AI_SETTINGS as Record<string, SettingSpec>)[key];
+    return spec ? [`- ${key} (${spec.label}): hiện tại ${current}`] : [];
+  });
+}
+
 /** Filament actually in the AMS and the nozzles fitted, as the gateway sees them over MQTT */
 function describePrinter(state: PrinterState | null): string {
   if (!state) return 'Không có dữ liệu máy in trực tiếp.';
@@ -700,6 +936,8 @@ function describeFollowUp(followUp: FollowUp): string[] {
         'Lần trước bạn đã đề xuất (người dùng chưa áp dụng):',
         followUp.previous.summary,
         ...followUp.previous.changes.map((c) => `- ${settingRef(c)} (${c.label}) = ${c.value}: ${c.reason}`),
+        ...(followUp.previous.object_changes ?? []).map((c) => `- vật thể #${c.object} ${c.name}: ${c.key} (${c.label}) = ${c.value}: ${c.reason}`),
+        ...(followUp.previous.plates ?? []).map((p) => `- plate mới cho ${p.objects.map((n, i) => `#${n} ${p.names[i]}`).join(', ')}: ${p.reason}`),
       ]
     : ['Không còn lưu đề xuất lần trước.'];
   return [
@@ -724,10 +962,18 @@ function describePastPrints(pastPrints: PastPrint[]): string[] {
       p.changes.length
         ? `   Đã đổi: ${p.changes.map((c) => `${c.key}${label(c) ? ` (${label(c)})` : ''} ${c.before ?? '?'} → ${c.after}`).join('; ')}`
         : '   Đã đổi: không, in với preset như cũ',
+      ...(p.object_changes?.length ? [`   Setting riêng của vật thể: ${p.object_changes.map((c) => `${c.object}: ${c.key} = ${c.after}`).join('; ')}`] : []),
+      ...(p.plates?.length ? [`   Tách sang plate mới: ${p.plates.map((names) => names.join(', ')).join(' | ')}`] : []),
       `   Kết quả: ${p.outcome}${p.issues.length ? `; lỗi: ${p.issues.join(', ')}` : ''}`,
+      ...(p.defects?.length ? ['   Lỗi theo chi tiết (vật thể › bộ phận, vị trí: lỗi):', ...p.defects.map((d) => `   - ${d}`)] : []),
       ...(p.note ? [`   Ghi chú của người dùng: ${JSON.stringify(p.note)}`] : []),
       ...(p.video_review
         ? [`   Claude xem timelapse (chỉ qua camera ở xa, có thể nhầm; người dùng báo khác thì tin người dùng): ${JSON.stringify(p.video_review)}`]
+        : []),
+      ...(p.review_followed_at
+        ? [
+            `   Các đề xuất của nhận xét timelapse này đã được áp dụng ngày ${p.review_followed_at.slice(0, 10)}: giá trị hiện tại đã gồm chúng. Không tăng hay giảm thêm theo nhận xét này; chỉ đổi tiếp khi một bản in mới cho thấy còn lỗi.`,
+          ]
         : []),
     ]),
     ...describeChosenReviews(pastPrints),
@@ -748,7 +994,7 @@ function describeChosenReviews(pastPrints: PastPrint[]): string[] {
       `Bản in số ${n} ở trên (${p.created_at.slice(0, 10)}, ${p.objects.join('; ')}):`,
       ...p.review_suggestions!.map((s, i) => `   ${n}.${i + 1}. ${s}`),
     ]),
-    'Với từng đề xuất: nếu làm được bằng các key được liệt kê thì đổi theo, trừ khi giá trị hiện tại đã đúng như đề xuất. Các bản in khác thành công không phải lý do để bỏ qua. Chỉ bỏ qua đề xuất không làm được bằng setting (sấy nhựa, hiệu chỉnh máy...), đã có sẵn, hoặc trái với yêu cầu của người dùng. Lý do của mỗi thay đổi nêu số đề xuất (ví dụ "theo nhận xét timelapse 4.3"). Summary liệt kê ngắn các đề xuất đã bỏ qua và vì sao.',
+    'Các đề xuất này chưa được áp dụng lần nào. Với từng đề xuất: nếu làm được bằng các key được liệt kê, bằng setting riêng của vật thể (object_changes) hoặc bằng tách vật thể sang plate mới (new_plates) thì làm theo, trừ khi giá trị hiện tại đã đúng như đề xuất. Các bản in khác thành công không phải lý do để bỏ qua. Chỉ bỏ qua đề xuất không làm được bằng setting hay tách plate (sấy nhựa, hiệu chỉnh máy...), đã có sẵn, hoặc trái với yêu cầu của người dùng. Lý do của mỗi thay đổi nêu số đề xuất (ví dụ "theo nhận xét timelapse 4.3"). Summary liệt kê ngắn các đề xuất đã bỏ qua và vì sao.',
   ];
 }
 
@@ -760,8 +1006,25 @@ export function buildUserPrompt(
   pastPrints: PastPrint[] = [],
   parts: string[] = []
 ): string {
+  const plate = targetPlate(request);
+  const working = workingObjects(request);
+  // For one plate, only what Studio can set on its objects
+  const keep = (key: string) => plate === null || plateSetting(request, key);
   return [
     `Mục tiêu: ${GOALS[request.goal]}`,
+    ...(request.user_request
+      ? [
+          '',
+          'Yêu cầu của người dùng (làm theo; nếu yêu cầu làm tăng nguy cơ in hỏng thì vẫn làm nhưng nói rõ rủi ro trong summary; nếu không làm được bằng setting thì nói trong summary):',
+          JSON.stringify(request.user_request),
+        ]
+      : []),
+    ...(plate !== null
+      ? [
+          '',
+          `Phạm vi: chỉ bàn in ${plate} (${working.length} vật thể). Studio đặt các thay đổi target "process" riêng cho từng vật thể trên bàn in này, các bàn in khác giữ nguyên preset. Chỉ dùng các key target "process" được liệt kê dưới đây (key khác chỉ đặt được cho cả dự án và sẽ bị từ chối). Preset filament dùng chung cho mọi bàn in dùng filament đó: chỉ đổi filament khi thật cần, và nói rõ điều đó trong lý do. object_changes và new_plates chỉ cho vật thể của bàn in này.`,
+        ]
+      : []),
     '',
     `Preset máy: ${request.printer_preset}`,
     `Preset quá trình in: ${request.process_preset}`,
@@ -771,20 +1034,33 @@ export function buildUserPrompt(
     'Máy in thực tế:',
     describePrinter(printerState),
     '',
-    'Tham số chính của preset quá trình in (target "process"):',
-    describeSettings(request),
+    plate !== null ? `Tham số chính đặt được cho bàn in ${plate} (target "process"), giá trị hiện tại là của preset:` : 'Tham số chính của preset quá trình in (target "process"):',
+    describeSettings(request, keep),
     ...(request.options
       ? [
           '',
-          'Các tham số khác của preset quá trình in (target "process"):',
+          plate !== null ? `Các tham số khác đặt được cho bàn in ${plate} (target "process"):` : 'Các tham số khác của preset quá trình in (target "process"):',
           ...variantsLine(request.process_variants),
-          ...describeOptions(request, request.settings, (key) => key in AI_SETTINGS),
+          ...describeOptions(request, request.settings, (key) => key in AI_SETTINGS || !keep(key)),
         ]
       : []),
     ...describeFilaments(request),
     '',
-    'Vật thể trên plate:',
-    JSON.stringify(request.objects, null, 1),
+    plate !== null
+      ? `Vật thể trên bàn in ${plate} (số # dùng cho object_changes và new_plates):`
+      : `Vật thể trên plate (số # dùng cho object_changes và new_plates${request.current_plate ? `; plate đang mở là plate ${request.current_plate}` : ''}):`,
+    // The footprints and outlines are for drawing the plate: hundreds of corners that say nothing about how to print
+    JSON.stringify(
+      working.map((n) => {
+        const { footprint: _footprint, outline: _outline, ...o } = request.objects[n - 1];
+        return { '#': n, ...o };
+      }),
+      null,
+      1
+    ),
+    '',
+    'Tham số đặt riêng cho từng vật thể (object_changes), giá trị hiện tại là của preset quá trình in:',
+    ...describeObjectSettings(request),
     ...parts,
     ...(pastPrints.length ? describePastPrints(pastPrints) : []),
     ...(followUp ? describeFollowUp(followUp) : []),

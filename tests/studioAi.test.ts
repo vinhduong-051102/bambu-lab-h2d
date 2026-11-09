@@ -87,6 +87,44 @@ describe('AI tối ưu: checking proposals', () => {
     expect(buildUserPrompt(request, null)).toContain('- outer_wall_speed (Tốc độ tường ngoài): hiện tại 200 (tất cả biến thể: 200,500,500,200)');
   });
 
+  it('sets single objects and moves objects to new plates', () => {
+    const second = { ...studioRequest.objects[0], name: 'Pin.stl', size_mm: [5, 5, 40] as [number, number, number] };
+    const third = { ...studioRequest.objects[0], name: 'Plate.stl', size_mm: [180, 120, 3] as [number, number, number] };
+    const request = { ...studioRequest, objects: [...studioRequest.objects, second, third] };
+    const result = checkProposal(
+      {
+        summary: '',
+        changes: [],
+        object_changes: [
+          { object: 2, key: 'brim_type', value: 'outer_only', reason: 'Trụ 5 mm cao 40 mm' },
+          { object: 2, key: 'brim_type', value: 'no_brim', reason: 'trùng' },
+          { object: 3, key: 'wall_loops', value: '2', reason: 'Giữ nguyên' },
+          { object: 1, key: 'layer_height', value: '0.12', reason: 'Không đặt riêng được' },
+          { object: 4, key: 'wall_loops', value: '3', reason: 'Không có' },
+          { object: 1, key: 'wall_loops', value: '3.5', reason: 'Sai' },
+        ],
+        new_plates: [
+          { objects: [2, 2, 1], reason: 'Chi tiết cao, mảnh in riêng' },
+          { objects: [1], reason: 'Đã chuyển' },
+          { objects: [3], reason: 'Plate cũ sẽ trống' },
+        ],
+      },
+      request
+    );
+    expect(result.object_changes).toEqual([
+      { object: 2, name: 'Pin.stl', key: 'brim_type', label: 'Kiểu brim', value: 'outer_only', reason: 'Trụ 5 mm cao 40 mm' },
+    ]);
+    expect(result.plates).toEqual([{ objects: [2, 1], names: ['Pin.stl', 'Bracket.stl'], reason: 'Chi tiết cao, mảnh in riêng' }]);
+    expect(result.rejected.map((r) => [r.object, r.key])).toEqual([
+      [2, 'brim_type'],
+      [1, 'layer_height'],
+      [4, 'wall_loops'],
+      [1, 'wall_loops'],
+      [1, 'new_plate'],
+      [3, 'new_plate'],
+    ]);
+  });
+
   it('drops a per-variant change that keeps every value', () => {
     const request = { ...studioRequest, settings: { ...studioRequest.settings, outer_wall_speed: '200,200.0' } };
     const result = checkProposal(
@@ -124,6 +162,14 @@ describe('AI tối ưu: checking proposals', () => {
     expect(prompt).toContain('- sparse_infill_density (Mật độ infill): hiện tại 15%');
     expect(prompt).toContain('"overhang_area_mm2": 850');
     expect(prompt).toContain('Bambu PLA Basic @BBL H2D (PLA)');
+  });
+
+  it('leaves the footprints Studio sends for the plate map out of the prompt', () => {
+    const footprint: [number, number][] = [[10, 10], [60, 10], [60, 40], [10, 40]];
+    const request = { ...studioRequest, bed_mm: [350, 320] as [number, number], objects: studioRequest.objects.map((o) => ({ ...o, footprint })) };
+    const prompt = buildUserPrompt(request, null);
+    expect(prompt).not.toContain('footprint');
+    expect(prompt).toContain('"overhang_area_mm2": 850');
   });
 });
 
@@ -166,6 +212,60 @@ const fullRequest: StudioRequest = {
     filament_density: { type: 'float', vector: true, label: 'Density', category: 'Filament', unit: 'g/cm³', min: 0, mode: 'simple' },
   },
 };
+
+describe('AI tối ưu: one plate only, and what the user asked for', () => {
+  const object = (name: string, plate: number) => ({ ...studioRequest.objects[0], name, plate });
+  const request: StudioRequest = {
+    ...fullRequest,
+    scope: 'plate',
+    current_plate: 1,
+    user_request: 'Bánh răng phải khớp, không cần đẹp',
+    objects: [object('Gear.stl', 1), object('Panel.stl', 2), object('Pin.stl', 1)],
+    options: { ...fullRequest.options!, gap_infill_speed: { ...fullRequest.options!.gap_infill_speed, object: true } },
+  };
+
+  it('keeps process changes Studio can set on the plate objects, and the plate objects only', () => {
+    const result = checkProposal(
+      {
+        summary: 'x',
+        changes: [
+          { key: 'gap_infill_speed', value: '150', reason: 'object option' },
+          { key: 'wall_loops', value: '4', reason: 'listed object setting' },
+          { key: 'spiral_mode', value: '1', reason: 'whole project only' },
+        ],
+        object_changes: [
+          { object: 3, key: 'brim_type', value: 'outer_only', reason: 'chốt nhỏ' },
+          { object: 2, key: 'brim_type', value: 'outer_only', reason: 'bàn khác' },
+        ],
+        new_plates: [{ objects: [1, 3], reason: 'tách hết' }],
+      },
+      request
+    );
+    expect(result.changes.map((c) => c.key)).toEqual(['gap_infill_speed', 'wall_loops']);
+    expect(result.object_changes?.map((c) => c.object)).toEqual([3]);
+    expect(result.scope).toEqual({ plate: 1, objects: [1, 3] });
+    expect(result.rejected.map((r) => [r.key, r.reason])).toEqual([
+      ['spiral_mode', expect.stringContaining('cả dự án')],
+      ['brim_type', 'Vật thể #2 không nằm trên bàn in 1'],
+      ['new_plate', expect.stringContaining('plate cũ sẽ trống')],
+    ]);
+    // The whole project, as before
+    expect(checkProposal({ summary: '', changes: [{ key: 'spiral_mode', value: '1', reason: 'x' }] }, { ...request, scope: 'project' }).changes).toHaveLength(1);
+  });
+
+  it('asks for the plate objects and plate settings, with the user request', () => {
+    const prompt = buildUserPrompt(request, null);
+    expect(prompt).toContain('"Bánh răng phải khớp, không cần đẹp"');
+    expect(prompt).toContain('Phạm vi: chỉ bàn in 1 (2 vật thể)');
+    expect(prompt).toContain('"name": "Gear.stl"');
+    expect(prompt).toContain('"#": 3');
+    expect(prompt).not.toContain('Panel.stl');
+    expect(prompt).toContain('- gap_infill_speed');
+    expect(prompt).not.toContain('- spiral_mode');
+    expect(prompt).not.toContain('- layer_height');
+    expect(prompt).toContain('- wall_loops');
+  });
+});
 
 describe('AI tối ưu: every setting Studio describes', () => {
   const check = (changes: AiProposal['changes']) => checkProposal({ summary: '', changes }, fullRequest);
@@ -250,7 +350,7 @@ describe('AI tối ưu: every setting Studio describes', () => {
       const result = check([{ target: 'filament', filament: 1, key: 'fan_max_speed', value: '80', reason: 'Giảm cong vênh' }]);
       const session = await store.create(fullRequest, result, null);
       expect(session.settings_before).toEqual({ 'filament#1:fan_max_speed': '100,100' });
-      await store.markApplied(session.id, [{ target: 'filament', filament: 1, key: 'fan_max_speed', value: '80,80' }]);
+      await store.markApplied(session.id, { changes: [{ target: 'filament', filament: 1, key: 'fan_max_speed', value: '80,80' }] });
       await store.saveFeedback(session.id, { outcome: 'success', issues: [], note: '' });
       const [past] = await store.pastPrints(fullRequest);
       expect(past.changes).toEqual([{ key: 'filament#1:fan_max_speed', label: 'Fan max speed (fan_max_speed)', before: '100,100', after: '80,80' }]);
@@ -298,6 +398,8 @@ describe('POST /api/studio/ai-optimize', () => {
       session_id: expect.stringMatching(/^\d{8}-\d{6}-[0-9a-f]{6}$/),
       summary: 'Cần support.',
       changes: [{ key: 'enable_support', label: 'Bật support', value: '1', reason: 'Phần nhô lớn' }],
+      object_changes: [],
+      plates: [],
       rejected: [],
     });
     expect(prompts[0]).toContain('Máy in thực tế:');
@@ -495,7 +597,7 @@ describe('AI sessions: past prints in the prompt', () => {
     report: { applied?: boolean; feedback?: Parameters<AiSessionStore['saveFeedback']>[1] | null } = {}
   ) => {
     const session = await store.create(request, supportResult, null, new Date(2026, 9, 1, 10, 0, second));
-    if (report.applied !== false) await store.markApplied(session.id, [{ key: 'enable_support', value: '1' }]);
+    if (report.applied !== false) await store.markApplied(session.id, { changes: [{ key: 'enable_support', value: '1' }] });
     const feedback = report.feedback === undefined ? { outcome: 'usable' as const, issues: ['support_removal' as const], note: 'Support dính chặt' } : report.feedback;
     if (feedback) await store.saveFeedback(session.id, feedback);
     return session;
@@ -576,6 +678,8 @@ describe('AI sessions: past prints in the prompt', () => {
     const reviewed = await printed({ ...studioRequest, goal: 'speed', process_preset: '0.28mm Extra Draft @BBL H2D' }, 1, {
       feedback: { outcome: 'usable', issues: ['weak'], note: '' },
     });
+    // Printed before the review was chosen, so it did not follow it
+    await printed(studioRequest, 2);
     await store.saveVideoReview(reviewed.id, {
       video: 'video_2026-10-12_00-32-49.mp4',
       model: 'claude-opus-5-5',
@@ -589,8 +693,6 @@ describe('AI sessions: past prints in the prompt', () => {
       suggestions: ['Giảm Part cooling fan cho PETG', ' Sấy filament trước khi in '],
       used: { at: '2026-10-01T12:05:00.000Z', print_id: '20261001-120000-abcdef' },
     });
-    await printed(studioRequest, 2);
-
     const past = await store.pastPrints(studioRequest);
     expect(past.map((p) => p.created_at)[0]).toBe(reviewed.created_at);
     expect(past[0].review_suggestions).toEqual(['Giảm Part cooling fan cho PETG', 'Sấy filament trước khi in']);
@@ -603,6 +705,45 @@ describe('AI sessions: past prints in the prompt', () => {
     expect(prompt).toContain('Các bản in khác thành công không phải lý do để bỏ qua');
     // No chosen review: no such request
     expect(buildUserPrompt(studioRequest, null, null, past.slice(1))).not.toContain('Dùng cho lần in sau');
+  });
+
+  it('follows a chosen review once: applying the session that followed it makes it history', async () => {
+    const reviewed = await printed(studioRequest, 1, { feedback: { outcome: 'failed', issues: ['warping'], note: '' } });
+    const review = {
+      video: 'video_2026-10-12_00-32-49.mp4',
+      model: 'claude-opus-5-5',
+      at: '2026-10-01T12:00:00.000Z',
+      print_id: null,
+      frames_at: [0, 50, 100],
+      summary: 'Góc trái bong khỏi bàn.',
+      outcome_guess: 'failed' as const,
+      issues: ['warping' as const],
+      observations: [],
+      suggestions: ['Tăng Bed temperature'],
+      used: { at: '2026-10-01T12:05:00.000Z', print_id: '20261001-120000-abcdef' },
+    };
+    await store.saveVideoReview(reviewed.id, review);
+
+    // Re-asked without applying: the advice still stands
+    const unapplied = await store.create(studioRequest, supportResult, null, new Date(2026, 9, 1, 10, 0, 2));
+    expect(unapplied.followed_reviews).toEqual([reviewed.id]);
+    expect((await store.pastPrints(studioRequest))[0].review_suggestions).toEqual(['Tăng Bed temperature']);
+
+    const followed = await store.create(studioRequest, supportResult, null, new Date(2026, 9, 1, 10, 0, 3));
+    await store.markApplied(followed.id, { changes: [{ key: 'enable_support', value: '1' }] });
+    expect((await store.get(reviewed.id))?.review_followed?.by).toBe(followed.id);
+
+    const [past] = (await store.pastPrints(studioRequest)).filter((p) => p.created_at === reviewed.created_at);
+    expect(past.review_suggestions).toBeUndefined();
+    expect(past.review_followed_at).toBeDefined();
+    const prompt = buildUserPrompt(studioRequest, null, null, [past]);
+    expect(prompt).not.toContain('Dùng cho lần in sau');
+    expect(prompt).toContain('Không tăng hay giảm thêm theo nhận xét này');
+    expect((await store.create(studioRequest, supportResult, null, new Date(2026, 9, 1, 10, 0, 4))).followed_reviews).toBeUndefined();
+
+    // A new review chosen for the print is followed again
+    await store.saveVideoReview(reviewed.id, { ...review, suggestions: ['Thêm brim 5 mm'] });
+    expect((await store.pastPrints(studioRequest))[0].review_suggestions).toEqual(['Thêm brim 5 mm']);
   });
 
   it('sends past prints to the AI through the API', async () => {

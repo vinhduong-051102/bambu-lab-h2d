@@ -4,7 +4,7 @@ The button sits left of **Slice plate** in Bambu Studio's top bar. It is compile
 (`studio/bambustudio/ai-button.patch`), so changing its look, what Studio measures or how it applies the
 result means rebuilding the image.
 
-A click (when this folder, mounted read-only at `/opt/studio-ai`, has an executable `on-click`):
+A click (when this folder, mounted read-only at `/opt/studio-ai`, has an executable `on-click`) first opens a window: the plate, the goal, whether the settings go on that plate only (`scope: "plate"`, set on its objects) or the whole project, and the user's request (`user_request`). **Tối ưu** then:
 
 1. Studio writes `/tmp/studio-ai/request.json`: the printer, process and filament presets, every numeric,
    on/off and choice setting of the edited process preset and of each filament preset, how Studio defines each

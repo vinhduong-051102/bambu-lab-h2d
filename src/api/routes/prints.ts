@@ -3,7 +3,15 @@ import path from 'path';
 import { env } from '../../config/env';
 import { AI_SETTINGS } from '../../domain/studio/aiOptimize';
 import { PHOTO_TYPES, PrintJournal, printSetupSchema, summarizePrint } from '../../domain/prints/PrintJournal';
-import { AiSessionStore, feedbackSchema, PRINT_ISSUE_LABELS, PRINT_OUTCOME_LABELS } from '../../domain/studio/aiSessions';
+import {
+  AiSessionStore,
+  DEFECT_AREA_LABELS,
+  DEFECT_SEVERITY_LABELS,
+  feedbackSchema,
+  keepDefects,
+  PRINT_ISSUE_LABELS,
+  PRINT_OUTCOME_LABELS,
+} from '../../domain/studio/aiSessions';
 import { handler, json, readJsonBody } from '../http';
 import { analyzeInBackground } from './parts';
 
@@ -38,6 +46,9 @@ export const listPrints = handler(async ({ request }) => {
     prints: records.map(summarizePrint),
     outcomes: Object.entries(PRINT_OUTCOME_LABELS).map(([id, label]) => ({ id, label })),
     issues: Object.entries(PRINT_ISSUE_LABELS).map(([id, label]) => ({ id, label })),
+    // Where on a part a defect is, and how bad, for the report's defects
+    areas: Object.entries(DEFECT_AREA_LABELS).map(([id, label]) => ({ id, label })),
+    severities: Object.entries(DEFECT_SEVERITY_LABELS).map(([id, label]) => ({ id, label })),
     // Vietnamese names of the settings the AI tunes, for comparing prints
     setting_labels: Object.fromEntries(Object.entries(AI_SETTINGS).map(([key, spec]) => [key, spec.label])),
   });
@@ -59,18 +70,18 @@ export const savePrintSetup = handler(async ({ request }) => {
   return json({ success: true });
 });
 
-// POST /api/prints/:id/feedback - {outcome, issues, note}: the report on this print, copied to its AI proposal
+// POST /api/prints/:id/feedback - {outcome, issues, note, defects?}: the report on this print, copied to its AI proposal
 export const savePrintFeedback = handler<{ id: string }>(async ({ request, params }) => {
   const body = feedbackSchema.safeParse(await readJsonBody(request));
   if (!body.success) return invalidPayload(body.error);
   const at = new Date();
   const record = await journal().update(params.id, (r) => {
-    r.feedback = { ...body.data, at: at.toISOString() };
+    r.feedback = { ...keepDefects(body.data, r.feedback), at: at.toISOString() };
   });
   if (!record) return notFound();
   // The AI proposal's own report, so the AI's track record stays in one place
   const sessionId = record.setup?.ai_session_id;
-  if (sessionId) await sessionStore().saveFeedback(sessionId, body.data, at);
+  if (sessionId) await sessionStore().saveFeedback(sessionId, { ...record.feedback! }, at);
   return json({ success: true, feedback_at: record.feedback?.at });
 });
 

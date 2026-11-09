@@ -28,6 +28,8 @@ import { useActions } from '../DashboardContext';
 import { diffSettings, formatPrintTime, listSettings, photoUrl, printSettings } from '../prints';
 import { formatSize, videoUrl } from '../timelapse';
 import { labelOf, OutcomeTag, StatusTag, type Label } from './badges';
+import { DefectFields, DefectList, toDefect, type Defect } from './DefectReport';
+import { PlateMap, printedObjects, worstByObject, type PlateObject } from './PlateMap';
 import { PrintParts } from './ModelParts';
 import { ReviewResult, TimelapseReview, type Review, type Video } from './TimelapseReview';
 
@@ -36,6 +38,9 @@ const NO_SETUP_TEXT = 'Không có setting (bản in không gửi từ Studio)';
 export interface Labels {
   outcomes: Label[];
   issues: Label[];
+  /** Where on a part a defect is, and how bad (missing until the history was read) */
+  areas?: Label[];
+  severities?: Label[];
   settingLabels: Record<string, string>;
 }
 
@@ -49,6 +54,7 @@ interface Feedback {
   outcome: string;
   issues?: string[];
   note?: string;
+  defects?: Defect[];
   at: string;
 }
 
@@ -57,7 +63,9 @@ interface Setup {
   process_preset: string;
   filaments?: { preset: string; type?: string; settings?: Record<string, unknown> }[];
   nozzle_diameters?: number[];
-  objects?: { name: string; size_mm?: number[] }[];
+  objects?: PlateObject[];
+  current_plate?: number;
+  bed_mm?: [number, number];
   ai_session_id?: string | null;
   settings?: Record<string, unknown>;
 }
@@ -122,17 +130,32 @@ function Photos({ print, onDelete }: { print: PrintDetail; onDelete?: (name: str
   );
 }
 
-function Report({ feedback, labels }: { feedback: Feedback | null | undefined; labels: Labels }) {
+/** The issues ticked for the print as a whole: the server adds each defect's own issue to them */
+const generalIssues = (feedback: Pick<Feedback, 'issues' | 'defects'>) =>
+  (feedback.issues ?? []).filter((i) => !(feedback.defects ?? []).some((d) => d.issue === i));
+
+/** The objects of the plate that printed, as the plate map draws them */
+const plateOf = (setup: Setup | null | undefined) => ({ objects: printedObjects(setup?.objects ?? [], setup?.current_plate), bed: setup?.bed_mm });
+
+function Report({ feedback, labels, setup }: { feedback: Feedback | null | undefined; labels: Labels; setup?: Setup | null }) {
   if (!feedback) return <Typography.Text type="secondary">Chưa có báo cáo.</Typography.Text>;
+  const general = generalIssues(feedback);
   return (
     <div>
       <Space size={4}>
         <OutcomeTag outcome={feedback.outcome} outcomes={labels.outcomes} />
         <Typography.Text type="secondary">{formatPrintTime(feedback.at)}</Typography.Text>
       </Space>
-      {!!feedback.issues?.length && (
+      {!!feedback.defects?.some((d) => d.object) && !!setup?.objects?.length && (
+        <div style={{ marginTop: 8 }}>
+          <PlateMap {...plateOf(setup)} marks={worstByObject(feedback.defects ?? [])} />
+        </div>
+      )}
+      <DefectList defects={feedback.defects} labels={labels} />
+      {/* The problems of the print as a whole: those of its defects are listed with them */}
+      {!!general.length && (
         <ul style={{ margin: '6px 0', paddingLeft: 20 }}>
-          {feedback.issues.map((i) => (
+          {general.map((i) => (
             <li key={i}>{labelOf(labels.issues, i)}</li>
           ))}
         </ul>
@@ -217,13 +240,18 @@ function SettingsView({ settings, labels }: { settings: Record<string, unknown> 
 function FeedbackForm({ print, labels, onSaved, onCancel }: { print: PrintDetail; labels: Labels; onSaved: () => void; onCancel: () => void }) {
   const { showToast, addLog } = useActions();
   const [saving, setSaving] = useState(false);
-  const save = async (values: { outcome: string; issues?: string[]; note?: string }) => {
+  const save = async (values: { outcome: string; issues?: string[]; note?: string; defects?: Partial<Defect>[] }) => {
     setSaving(true);
     try {
       await printsApi(`/api/prints/${encodeURIComponent(print.id)}/feedback`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ outcome: values.outcome, issues: values.issues ?? [], note: (values.note ?? '').trim() }),
+        body: JSON.stringify({
+          outcome: values.outcome,
+          issues: values.issues ?? [],
+          note: (values.note ?? '').trim(),
+          defects: (values.defects ?? []).map(toDefect),
+        }),
       });
       showToast('Đã lưu báo cáo.', 'success');
       addLog(`Đã lưu báo cáo cho bản in "${print.job_name}": ${labelOf(labels.outcomes, values.outcome)}.`, 'success');
@@ -239,12 +267,23 @@ function FeedbackForm({ print, labels, onSaved, onCancel }: { print: PrintDetail
     <Form
       layout="vertical"
       onFinish={save}
-      initialValues={{ outcome: print.feedback?.outcome, issues: print.feedback?.issues ?? [], note: print.feedback?.note ?? '' }}
+      initialValues={{
+        outcome: print.feedback?.outcome,
+        issues: print.feedback ? generalIssues(print.feedback) : [],
+        note: print.feedback?.note ?? '',
+        defects: print.feedback?.defects ?? [],
+      }}
     >
       <Form.Item name="outcome" label="Kết quả" rules={[{ required: true, message: 'Hãy chọn kết quả của bản in.' }]}>
         <Radio.Group options={labels.outcomes.map((o) => ({ value: o.id, label: o.label }))} />
       </Form.Item>
-      <Form.Item name="issues" label="Vấn đề gặp phải">
+      <Form.Item
+        label="Lỗi theo chi tiết"
+        tooltip="Chỉ rõ vật thể nào, bộ phận nào, ở phần nào của bộ phận và lỗi gì: AI tối ưu dùng để chỉnh đúng chỗ (setting riêng cho vật thể đó, hoặc cho các bộ phận giống nó ở lần in sau)"
+      >
+        <DefectFields printId={print.id} plate={plateOf(print.setup)} labels={labels} />
+      </Form.Item>
+      <Form.Item name="issues" label="Vấn đề chung của cả bản in">
         <Checkbox.Group>
           <Row gutter={[8, 4]}>
             {labels.issues.map((i) => (
@@ -462,7 +501,7 @@ export function PrintDetailModal(props: {
                 }}
               />
             ) : (
-              <Report feedback={print.feedback} labels={labels} />
+              <Report feedback={print.feedback} labels={labels} setup={print.setup} />
             )}
           </Section>
 

@@ -20,6 +20,8 @@ import type { Video } from './TimelapseReview';
 const REFRESH_MS = 60_000;
 // The printer's video listing is read over FTPS: reloaded less often than the history, and on "Làm mới"
 const VIDEOS_REFRESH_MS = 5 * 60_000;
+// …but every refresh while a print that just ended has no video yet: the printer saves it a little after the end
+const VIDEO_WAIT_MS = 15 * 60_000;
 const LIST_LIMIT = 50;
 
 export function PrintHistoryCard() {
@@ -38,6 +40,9 @@ export function PrintHistoryCard() {
   const busy = useRef(false);
   const lastLoad = useRef(0);
   const videosAt = useRef(0);
+  const videoList = useRef<Video[]>([]);
+  /** A print ended in the last VIDEO_WAIT_MS with no video paired to it yet */
+  const awaitingVideo = useRef(false);
 
   /** `manual` reports errors as a toast and re-reads the printer's videos */
   const load = useCallback(
@@ -46,13 +51,14 @@ export function PrintHistoryCard() {
       busy.current = true;
       setLoading(true);
       try {
-        const readVideos = manual || Date.now() - videosAt.current >= VIDEOS_REFRESH_MS;
+        const readVideos = manual || awaitingVideo.current || Date.now() - videosAt.current >= VIDEOS_REFRESH_MS;
         const [data] = await Promise.all([
           printsApi(`/api/prints?limit=${LIST_LIMIT}`),
           readVideos &&
             printsApi<{ videos: Video[] }>(`/api/timelapse${manual ? '?refresh=1' : ''}`).then(
               (d) => {
-                setVideos(d.videos ?? []);
+                videoList.current = d.videos ?? [];
+                setVideos(videoList.current);
                 setVideosError(null);
                 videosAt.current = Date.now();
               },
@@ -63,7 +69,17 @@ export function PrintHistoryCard() {
         const list: PrintSummary[] = data.prints ?? [];
         setPrints(list);
         setListError(null);
-        setLabels({ outcomes: data.outcomes ?? [], issues: data.issues ?? [], settingLabels: data.setting_labels ?? {} });
+        const paired = new Set(videoList.current.map((v) => v.print?.id));
+        awaitingVideo.current = list.some(
+          (p) => p.ended_at && Date.now() - Date.parse(p.ended_at) < VIDEO_WAIT_MS && !paired.has(p.id)
+        );
+        setLabels({
+          outcomes: data.outcomes ?? [],
+          issues: data.issues ?? [],
+          areas: data.areas ?? [],
+          severities: data.severities ?? [],
+          settingLabels: data.setting_labels ?? {},
+        });
         setSelected((prev) => prev.filter((id) => list.some((p) => p.id === id)));
         lastLoad.current = Date.now();
       } catch (err) {

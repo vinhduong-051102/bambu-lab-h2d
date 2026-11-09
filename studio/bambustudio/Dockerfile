@@ -27,7 +27,13 @@ WORKDIR /BambuStudio
 # Build packages (apt), then the bundled dependencies (wxWidgets, Boost, OCCT, ...): the slow, cached part.
 # -r skips the free RAM/disk check, which reads the whole VM and fails under Docker Desktop's defaults.
 RUN ./BuildLinux.sh -u && rm -rf /var/lib/apt/lists/*
-RUN ./BuildLinux.sh -dr
+# MPFR's mirrors in deps/MPFR/MPFR.cmake: ftp.vim.org is gone and www.mpfr.org often cuts the download
+# short, so GNU's own server goes first (same tarball, still checked against its SHA256)
+RUN sed -i 's#URL http://ftp.vim.org/ftp/gnu/mpfr/mpfr-3.1.6.tar.bz2#URL https://ftp.gnu.org/gnu/mpfr/mpfr-3.1.6.tar.bz2 http://ftp.vim.org/ftp/gnu/mpfr/mpfr-3.1.6.tar.bz2#' deps/MPFR/MPFR.cmake \
+ && grep -q 'ftp.gnu.org/gnu/mpfr' deps/MPFR/MPFR.cmake
+# Its output is far past BuildKit's 2 MiB step log: kept in a file, and only the failure is shown
+RUN ./BuildLinux.sh -dr > /tmp/deps.log 2>&1 \
+ || { grep -n -B3 -A12 -E 'FAILED:|Killed|fatal error|error:' /tmp/deps.log | tail -n 200; tail -n 40 /tmp/deps.log; exit 1; }
 
 # ccache for Studio's own sources (after -dr, so adding it kept the dependency layer), kept in a
 # BuildKit cache mount: a patch change only recompiles the files it touches. Through ccache's
