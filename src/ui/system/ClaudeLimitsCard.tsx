@@ -1,7 +1,7 @@
 'use client';
 
-import { KeyOutlined, ReloadOutlined, RobotOutlined } from '@ant-design/icons';
-import { Alert, Button, Card, Col, Flex, Input, Progress, Row, Segmented, Space, Tag, Tooltip, Typography } from 'antd';
+import { KeyOutlined, ReloadOutlined, RobotOutlined, SettingOutlined } from '@ant-design/icons';
+import { Alert, AutoComplete, Button, Card, Col, Flex, Input, Progress, Row, Segmented, Space, Tag, Tooltip, Typography } from 'antd';
 import { useCallback, useEffect, useState } from 'react';
 import { useActions } from '../DashboardContext';
 import { activePlan, barColor, formatReset, percent, planOptions, planState } from '../aiLimits';
@@ -11,7 +11,8 @@ import { activePlan, barColor, formatReset, percent, planOptions, planState } fr
  * much of each one's 5-hour and 7-day allowance is used and when it starts over. The gateway checks them with a tiny
  * model call and keeps the answer 5 minutes; "Kiểm tra lại" asks again. Which one tasks run on is picked here
  * (GET/PUT /api/ai/plan): both in turn, or only one, to keep the other's allowance. With a KeyVault (KV_SERVER), each
- * plan's token is fetched here with a one-time code from Google Authenticator (/api/ai/vault).
+ * plan's token is fetched here with a one-time code from Google Authenticator (/api/ai/vault); "KeyVault" sets its
+ * address and the key each plan takes (/api/ai/vault/config).
  */
 
 type PlanChoice = { plan: 'auto' | 'primary' | 'fallback'; label: string; configured: boolean };
@@ -21,7 +22,71 @@ type Vault = {
   ready: boolean;
   problem: string | null;
   plans: { key: string; vaultKey: string | null; fetchedAt: string | null }[];
+  config: { server: string; primary: string; fallback: string };
+  keys: { id: string; name: string; description: string }[] | null;
+  keysError: string | null;
 };
+
+/** Where the tokens are fetched from: the KeyVault's address and the key holding each plan's token */
+function VaultConfig({ vault, onSaved }: { vault: Vault; onSaved: (vault: Vault) => void }) {
+  const [form, setForm] = useState(vault.config);
+  const [saving, setSaving] = useState(false);
+  const { showToast } = useActions();
+  useEffect(() => setForm(vault.config), [vault.config]);
+  const options = (vault.keys ?? []).map((k) => ({ value: k.name, label: k.description ? `${k.name} · ${k.description}` : k.name }));
+
+  const save = async () => {
+    setSaving(true);
+    try {
+      const res = await fetch('/api/ai/vault/config', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(form) });
+      const body = await res.json().catch(() => null);
+      if (!res.ok || !body?.success) throw new Error(body?.message || `HTTP ${res.status}`);
+      showToast('Đã lưu cấu hình KeyVault', 'success');
+      onSaved(body);
+    } catch (err) {
+      showToast(`Không lưu được cấu hình KeyVault: ${err instanceof Error ? err.message : String(err)}`, 'error');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <Card size="small" title="Cấu hình KeyVault" style={{ marginTop: 16 }}>
+      <Flex vertical gap={10}>
+        <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+          Token của hai gói lấy từ KeyVault bằng mã OTP Google Authenticator được dùng ngay, thay cho token trong .env. Ô để trống thì dùng giá trị
+          trong .env (KV_SERVER, KV_KEY_PRIMARY, KV_KEY_FALLBACK).
+        </Typography.Text>
+        {vault.problem && <Alert type="warning" showIcon title={vault.problem} />}
+        {vault.keysError && <Alert type="warning" showIcon title={`KeyVault chưa cho liệt kê key: ${vault.keysError}`} />}
+        <Flex vertical gap={2}>
+          <Typography.Text>Địa chỉ KeyVault</Typography.Text>
+          <Input value={form.server} placeholder="http://100.112.133.34:8000" onChange={(e) => setForm({ ...form, server: e.target.value })} />
+        </Flex>
+        <Row gutter={[12, 8]}>
+          {(['primary', 'fallback'] as const).map((plan) => (
+            <Col key={plan} xs={24} md={12}>
+              <Flex vertical gap={2}>
+                <Typography.Text>Key của {plan === 'primary' ? 'Gói 1 (chính)' : 'Gói 2 (dự phòng)'}</Typography.Text>
+                <AutoComplete
+                  value={form[plan]}
+                  options={options}
+                  placeholder={vault.keys ? 'Chọn key' : 'Tên hoặc id của key'}
+                  onChange={(v) => setForm({ ...form, [plan]: v })}
+                />
+              </Flex>
+            </Col>
+          ))}
+        </Row>
+        <Flex justify="flex-end">
+          <Button type="primary" size="small" loading={saving} onClick={save}>
+            Lưu cấu hình
+          </Button>
+        </Flex>
+      </Flex>
+    </Card>
+  );
+}
 
 /** Fetches one plan's token from the KeyVault: the code is asked for here, each one works once */
 function VaultFetch({ plan, vault, onFetched }: { plan: string; vault: Vault; onFetched: () => void }) {
@@ -121,6 +186,7 @@ export function ClaudeLimitsCard() {
   const [choices, setChoices] = useState<PlanChoice[]>([]);
   const [saving, setSaving] = useState(false);
   const [vault, setVault] = useState<Vault | null>(null);
+  const [showVault, setShowVault] = useState(false);
 
   const loadVault = useCallback(() => {
     fetch('/api/ai/vault', { cache: 'no-store' })
@@ -191,11 +257,16 @@ export function ClaudeLimitsCard() {
         </Space>
       }
       extra={
-        <Tooltip title="Mỗi lần kiểm tra là một lời gọi Claude rất nhỏ, tốn chút xíu hạn mức">
-          <Button size="small" icon={<ReloadOutlined />} loading={loading} onClick={() => load(true)}>
-            Kiểm tra lại
+        <Space>
+          <Button size="small" icon={<SettingOutlined />} type={showVault ? 'primary' : 'default'} onClick={() => setShowVault(!showVault)}>
+            KeyVault
           </Button>
-        </Tooltip>
+          <Tooltip title="Mỗi lần kiểm tra là một lời gọi Claude rất nhỏ, tốn chút xíu hạn mức">
+            <Button size="small" icon={<ReloadOutlined />} loading={loading} onClick={() => load(true)}>
+              Kiểm tra lại
+            </Button>
+          </Tooltip>
+        </Space>
       }
     >
       {choices.length > 0 && (
@@ -263,6 +334,7 @@ export function ClaudeLimitsCard() {
           );
         })}
       </Row>
+      {showVault && vault && <VaultConfig vault={vault} onSaved={setVault} />}
     </Card>
   );
 }

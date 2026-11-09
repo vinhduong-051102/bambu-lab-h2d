@@ -8,9 +8,11 @@
  * What comes out is kept in CLAUDE_TOKENS_FILE (data/secrets/claude/tokens.json, {env name: token}), which the
  * gateway lays over its own environment at start and after every fetch, and which the CAD, mesh3d and Studio
  * containers mount and read before each Claude run: a fetched token is in use at once, with no restart.
+ *
+ * The server and each plan's key are set on the dashboard (KV_DIR/config.json), else KV_SERVER and KV_KEY_* in .env.
  */
 import { createDecipheriv, createPrivateKey, createPublicKey, diffieHellman, hkdfSync, type KeyObject } from 'crypto';
-import { promises as fs } from 'fs';
+import { readFileSync, promises as fs } from 'fs';
 import path from 'path';
 import { clearLimitsCache, LIMIT_TOKENS } from './claudeLimits';
 
@@ -21,9 +23,38 @@ const TIMEOUT_MS = 30000;
 
 const vaultDir = () => path.resolve(process.env.KV_DIR || './data/secrets/keyvault');
 const tokensFile = () => path.resolve(process.env.CLAUDE_TOKENS_FILE || './data/secrets/claude/tokens.json');
-const server = () => (process.env.KV_SERVER || '').trim().replace(/\/+$/, '');
+const configFile = () => path.join(vaultDir(), 'config.json');
+
+export interface VaultConfig {
+  server: string;
+  primary: string;
+  fallback: string;
+}
+
+/** What the dashboard set; a field left empty there falls back to .env */
+function savedConfig(): Partial<VaultConfig> {
+  try {
+    const data = JSON.parse(readFileSync(configFile(), 'utf8'));
+    return data && typeof data === 'object' ? data : {};
+  } catch {
+    return {};
+  }
+}
+
+const server = () => (savedConfig().server?.trim() || process.env.KV_SERVER || '').trim().replace(/\/+$/, '');
 /** The KeyVault key (its name or id) holding each plan's token */
-const keyFor = (plan: VaultPlan) => (process.env[plan === 'primary' ? 'KV_KEY_PRIMARY' : 'KV_KEY_FALLBACK'] || '').trim();
+const keyFor = (plan: VaultPlan) => (savedConfig()[plan]?.trim() || process.env[plan === 'primary' ? 'KV_KEY_PRIMARY' : 'KV_KEY_FALLBACK'] || '').trim();
+
+/** Keeps the server and the plans' keys set on the dashboard */
+export async function saveVaultConfig(config: VaultConfig): Promise<void> {
+  const value = config.server.trim();
+  if (value && !/^https?:\/\/[^\s/]+/i.test(value)) throw new VaultError('Địa chỉ KeyVault phải bắt đầu bằng http:// hoặc https://.');
+  const file = configFile();
+  await fs.mkdir(path.dirname(file), { recursive: true });
+  const data = { server: value, primary: config.primary.trim(), fallback: config.fallback.trim(), updated_at: new Date().toISOString() };
+  await fs.writeFile(`${file}.part`, JSON.stringify(data, null, 2));
+  await fs.rename(`${file}.part`, file);
+}
 
 type Fetch = typeof fetch;
 let fetchImpl: Fetch = (...args) => fetch(...args);
@@ -82,14 +113,14 @@ export function openExport(priv: KeyObject, ciphertext: string, wrappedKey: stri
   return aesGcm(dek, Buffer.from(ciphertext, 'base64'), Buffer.from(aad));
 }
 
-async function call<T>(method: string, route: string, key: string, body?: unknown): Promise<T> {
+async function call<T>(method: string, route: string, key: string, body?: unknown, timeoutMs = TIMEOUT_MS): Promise<T> {
   let res: Response;
   try {
     res = await fetchImpl(`${server()}${route}`, {
       method,
       headers: { 'Content-Type': 'application/json', 'X-API-Key': key },
       body: body === undefined ? undefined : JSON.stringify(body),
-      signal: AbortSignal.timeout(TIMEOUT_MS),
+      signal: AbortSignal.timeout(timeoutMs),
     });
   } catch (err) {
     throw new VaultError(`Không kết nối được KeyVault ${server()}: ${err instanceof Error ? err.message : String(err)}`, 502);
@@ -121,6 +152,11 @@ export interface VaultStatus {
   ready: boolean;
   problem: string | null;
   plans: { key: VaultPlan; label: string; vaultKey: string | null; fetchedAt: string | null }[];
+  /** What the dashboard set (else .env), for its form */
+  config: VaultConfig;
+  /** The keys the KeyVault grants the gateway, when it answers */
+  keys: { id: string; name: string; description: string }[] | null;
+  keysError: string | null;
 }
 
 export async function vaultStatus(): Promise<VaultStatus> {
@@ -138,7 +174,22 @@ export async function vaultStatus(): Promise<VaultStatus> {
     ready: !problem,
     problem,
     plans: LIMIT_TOKENS.map((t) => ({ key: t.key, label: t.label, vaultKey: keyFor(t.key) || null, fetchedAt: tokens[`${t.env}_FETCHED_AT`] ?? null })),
+    config: { server: server(), primary: keyFor('primary'), fallback: keyFor('fallback') },
+    keys: null,
+    keysError: null,
   };
+}
+
+/** The status with the keys the KeyVault grants the gateway (no code needed to list them) */
+export async function vaultStatusWithKeys(): Promise<VaultStatus> {
+  const status = await vaultStatus();
+  if (!status.ready) return status;
+  try {
+    const keys = await call<{ id: string; name: string; description?: string }[]>('GET', '/api/v1/keys', await apiKey(), undefined, 8000);
+    return { ...status, keys: keys.map((k) => ({ id: k.id, name: k.name, description: k.description ?? '' })) };
+  } catch (err) {
+    return { ...status, keysError: err instanceof Error ? err.message : String(err) };
+  }
 }
 
 type VaultKey = { id: string; name: string };

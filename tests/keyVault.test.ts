@@ -3,7 +3,7 @@ import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { getAiVault, postAiVaultFetch } from '../src/api/routes/ai';
+import { getAiVault, postAiVaultFetch, putAiVaultConfig } from '../src/api/routes/ai';
 import { applyVaultTokens, setVaultFetch } from '../src/domain/ai/keyVault';
 import { setRuntime } from '../src/runtime/runtime';
 
@@ -11,6 +11,9 @@ const VARS = ['KV_SERVER', 'KV_DIR', 'KV_API_KEY', 'KV_KEY_PRIMARY', 'KV_KEY_FAL
 const ctx = { params: Promise.resolve({}) };
 const fetchToken = (plan: string, otp: string) =>
   postAiVaultFetch(new Request('http://localhost/api/ai/vault/fetch', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ plan, otp }) }), ctx as never);
+
+const putConfig = (config: unknown) =>
+  putAiVaultConfig(new Request('http://localhost/api/ai/vault/config', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(config) }), ctx as never);
 
 const seal = (key: Buffer, data: Buffer, aad: string) => {
   const nonce = randomBytes(12);
@@ -117,5 +120,21 @@ describe('fetching the Claude tokens from the KeyVault', () => {
     const status = await (await getAiVault(new Request('http://localhost/api/ai/vault'), ctx as never)).json();
     expect(status).toMatchObject({ ready: false, problem: expect.stringMatching(/API key/) });
     expect((await fetchToken('primary', '123456')).status).toBe(400);
+  });
+
+  it('takes the server and the plans’ keys set on the dashboard over .env, and lists the keys it may fetch', async () => {
+    delete process.env.KV_SERVER;
+    delete process.env.KV_KEY_PRIMARY;
+    expect((await (await getAiVault(new Request('http://localhost/api/ai/vault'), ctx as never)).json()).problem).toMatch(/KV_SERVER/);
+
+    const res = await putConfig({ server: 'http://vault.test', primary: 'claude-fallback', fallback: '' });
+    const body = await res.json();
+    expect(body).toMatchObject({ ready: true, config: { server: 'http://vault.test', primary: 'claude-fallback', fallback: 'id-claude-fallback' }, keysError: null });
+    expect(body.keys.map((k: { name: string }) => k.name)).toEqual(['claude-primary', 'claude-fallback', 'other']);
+    expect((await fetchToken('primary', '123456')).status).toBe(200);
+    expect(process.env.CLAUDE_CODE_OAUTH_TOKEN).toBe('sk-ant-oat01-two');
+
+    expect((await putConfig({ server: 'vault.test', primary: '', fallback: '' })).status).toBe(400);
+    expect((await putConfig({ server: 'http://vault.test' })).status).toBe(400);
   });
 });

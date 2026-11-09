@@ -28,7 +28,11 @@ KV_ALLOW_HTTP=1 python kvclient.py claim                # scan the QR in Google 
 `claim` saves the API key in `kv-request.json`, where the gateway reads it (or set `KV_API_KEY`). `KV_ALLOW_HTTP=1` is
 for a server on plain HTTP: keep it on a private link such as Tailscale.
 
-## .env
+## Server and keys
+
+Set on the dashboard: **Hệ thống → Gói Claude → KeyVault** (the address, and each plan's key picked from the ones the
+KeyVault grants the gateway, once it is activated). Kept in `KV_DIR/config.json`; a field left empty there comes from
+`.env`:
 
 ```
 KV_SERVER=http://100.112.133.34:8000
