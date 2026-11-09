@@ -399,10 +399,26 @@ limited_at = {}  # token → time.monotonic() when it hit its usage limit, so th
 PLAN_TOKENS = {"primary": "CLAUDE_CODE_OAUTH_TOKEN", "fallback": "CLAUDE_CODE_OAUTH_TOKEN_FALLBACK"}
 
 
+# Tokens fetched from the KeyVault on the dashboard (src/domain/ai/keyVault.ts), mounted from data/secrets/claude:
+# they win over the container's environment and are read again before each run, so a new one is used at once
+TOKENS_FILE = Path(os.environ.get("CLAUDE_TOKENS_FILE", "/run/claude/tokens.json"))
+
+
+def load_vault_tokens():
+    try:
+        tokens = json.loads(TOKENS_FILE.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return
+    for name in PLAN_TOKENS.values():
+        if isinstance(tokens.get(name), str) and tokens[name].strip():
+            os.environ[name] = tokens[name].strip()
+
+
 def claude_tokens(directory=None):
     """The job's own subscription when it was given one (job.json "plan") and its token is set; else
     CLAUDE_CODE_OAUTH_TOKEN, then CLAUDE_CODE_OAUTH_TOKEN_FALLBACK (a second subscription), one that hit its usage
     limit within the hour last"""
+    load_vault_tokens()
     plan = (read_json(directory / "job.json", {}) or {}).get("plan") if directory else None
     if plan in PLAN_TOKENS and os.environ.get(PLAN_TOKENS[plan], "").strip():
         return [os.environ[PLAN_TOKENS[plan]].strip()]
@@ -627,6 +643,7 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         if self.path == "/health":
+            load_vault_tokens()
             with lock:
                 ids = list(running)
             return self.reply(200, {"ok": True, "claude": bool(os.environ.get("CLAUDE_CODE_OAUTH_TOKEN")),
@@ -646,6 +663,7 @@ class Handler(BaseHTTPRequestHandler):
         body = self.body()
 
         if action == "generate":
+            load_vault_tokens()
             if not os.environ.get("CLAUDE_CODE_OAUTH_TOKEN"):
                 return self.reply(501, {"ok": False, "error": "AI_DISABLED",
                                         "message": "Container cad chưa có CLAUDE_CODE_OAUTH_TOKEN (claude setup-token)."})

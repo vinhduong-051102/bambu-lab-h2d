@@ -141,6 +141,7 @@ STUDIO_IMPORT_DIR=
 # Claude: subscription token(s) or API key, and the model per feature
 CLAUDE_CODE_OAUTH_TOKEN=
 CLAUDE_CODE_OAUTH_TOKEN_FALLBACK=   # used once the first subscription hits its limit, or alone when picked (Hệ thống → Gói Claude)
+# KV_SERVER=...  KV_KEY_PRIMARY=...  KV_KEY_FALLBACK=...   # or fetch both from a KeyVault with an OTP (docs/keyvault.md)
 ANTHROPIC_API_KEY=
 STUDIO_AI_MODEL=claude-opus-5-5
 TIMELAPSE_AI_MODEL=claude-opus-5-5
@@ -275,6 +276,7 @@ Detailed documentation is available in `docs/`:
 - [`docs/studio.md`](docs/studio.md) — Bambu Studio embedded in the dashboard (slicing & printing, "AI tối ưu", print history)
 - [`docs/cad.md`](docs/cad.md) — AI model design (Claude: technical parts in build123d; figures from Hunyuan3D-2, finished by Claude in Blender through MCP for Blender; Antigravity) for printing
 - [`docs/engineering-analysis.md`](docs/engineering-analysis.md) — Engineering checks of printed parts: mesh, assembly, fits, FEA (gmsh + CalculiX), printability, reports, through MCP
+- [`docs/keyvault.md`](docs/keyvault.md) — Claude subscription tokens fetched from a KeyVault with a Google Authenticator code
 
 ---
 

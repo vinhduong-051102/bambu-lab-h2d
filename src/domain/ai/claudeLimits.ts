@@ -82,6 +82,11 @@ export function setLimitsFetch(f: Fetch | null): void {
   cache = null;
 }
 
+/** Forgets the limits read so far: a plan's token changed */
+export function clearLimitsCache(): void {
+  cache = null;
+}
+
 async function probe(token: string): Promise<Omit<PlanLimits, 'key' | 'label' | 'configured' | 'checkedAt'>> {
   let res: Response;
   try {

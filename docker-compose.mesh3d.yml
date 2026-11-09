@@ -32,6 +32,8 @@ services:
       # The worker, and the CAD worker's preview renderer
       - ./mesh3d:/opt/mesh3d:ro
       - ./cad:/opt/cad:ro
+      # Claude tokens fetched from the KeyVault on the dashboard: read before each run, over the ones above
+      - ./data/secrets/claude:/run/claude:ro
       # "Thành phần của mẫu" (analyze.py): Studio's import folder, read only, and the renders of each analysis
       - ${STUDIO_IMPORT_DIR:-./data/studio/imports}:/imports:ro
       - ${MODEL_ANALYSIS_DIR:-./data/studio/analyses}:/analyses

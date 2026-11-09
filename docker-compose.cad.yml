@@ -23,6 +23,8 @@ services:
       - ./data/cad/jobs:/jobs
       # The worker, build runner, Claude's instructions and the modelling guide, editable without a rebuild
       - ./cad:/opt/cad:ro
+      # Claude tokens fetched from the KeyVault on the dashboard: read before each run, over the ones above
+      - ./data/secrets/claude:/run/claude:ro
     ports:
       # Only the gateway on this machine talks to the worker: it runs the model code it is given
       - "127.0.0.1:3102:8000"

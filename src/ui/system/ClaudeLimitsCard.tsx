@@ -1,7 +1,7 @@
 'use client';
 
-import { ReloadOutlined, RobotOutlined } from '@ant-design/icons';
-import { Alert, Button, Card, Col, Flex, Progress, Row, Segmented, Space, Tag, Tooltip, Typography } from 'antd';
+import { KeyOutlined, ReloadOutlined, RobotOutlined } from '@ant-design/icons';
+import { Alert, Button, Card, Col, Flex, Input, Progress, Row, Segmented, Space, Tag, Tooltip, Typography } from 'antd';
 import { useCallback, useEffect, useState } from 'react';
 import { useActions } from '../DashboardContext';
 import { activePlan, barColor, formatReset, percent, planOptions, planState } from '../aiLimits';
@@ -10,10 +10,74 @@ import { activePlan, barColor, formatReset, percent, planOptions, planState } fr
  * The Claude subscriptions the project runs on (CLAUDE_CODE_OAUTH_TOKEN and CLAUDE_CODE_OAUTH_TOKEN_FALLBACK): how
  * much of each one's 5-hour and 7-day allowance is used and when it starts over. The gateway checks them with a tiny
  * model call and keeps the answer 5 minutes; "Kiểm tra lại" asks again. Which one tasks run on is picked here
- * (GET/PUT /api/ai/plan): both in turn, or only one, to keep the other's allowance.
+ * (GET/PUT /api/ai/plan): both in turn, or only one, to keep the other's allowance. With a KeyVault (KV_SERVER), each
+ * plan's token is fetched here with a one-time code from Google Authenticator (/api/ai/vault).
  */
 
 type PlanChoice = { plan: 'auto' | 'primary' | 'fallback'; label: string; configured: boolean };
+
+type Vault = {
+  server: string | null;
+  ready: boolean;
+  problem: string | null;
+  plans: { key: string; vaultKey: string | null; fetchedAt: string | null }[];
+};
+
+/** Fetches one plan's token from the KeyVault: the code is asked for here, each one works once */
+function VaultFetch({ plan, vault, onFetched }: { plan: string; vault: Vault; onFetched: () => void }) {
+  const [open, setOpen] = useState(false);
+  const [otp, setOtp] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const { showToast } = useActions();
+  const info = vault.plans.find((p) => p.key === plan);
+
+  const submit = async (code: string) => {
+    setBusy(true);
+    setError(null);
+    try {
+      const res = await fetch('/api/ai/vault/fetch', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ plan, otp: code }) });
+      const body = await res.json().catch(() => null);
+      if (!res.ok || !body?.success) throw new Error(body?.message || `HTTP ${res.status}`);
+      showToast(`Đã lấy token từ KeyVault (${body.keyName}) và dùng ngay`, 'success');
+      setOpen(false);
+      onFetched();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setOtp('');
+      setBusy(false);
+    }
+  };
+
+  return (
+    <Flex vertical gap={6}>
+      {!open ? (
+        <Flex justify="space-between" align="center" wrap gap={6}>
+          <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+            {info?.fetchedAt ? `Lấy từ KeyVault lúc ${new Date(info.fetchedAt).toLocaleString('vi-VN')}` : 'Token đang lấy từ .env'}
+          </Typography.Text>
+          <Tooltip title={!vault.ready ? vault.problem : !info?.vaultKey ? `Chưa đặt ${plan === 'primary' ? 'KV_KEY_PRIMARY' : 'KV_KEY_FALLBACK'} trong .env` : `Key "${info.vaultKey}"`}>
+            <Button size="small" icon={<KeyOutlined />} disabled={!vault.ready || !info?.vaultKey} onClick={() => setOpen(true)}>
+              Lấy từ KeyVault
+            </Button>
+          </Tooltip>
+        </Flex>
+      ) : (
+        <Flex vertical gap={6}>
+          <Typography.Text style={{ fontSize: 12 }}>Mã OTP trong Google Authenticator (mục KeyVault của gateway):</Typography.Text>
+          <Flex gap={6} align="center" wrap>
+            <Input.OTP length={6} value={otp} disabled={busy} onChange={(v) => (setOtp(v), v.length === 6 && void submit(v))} />
+            <Button size="small" disabled={busy} onClick={() => setOpen(false)}>
+              Hủy
+            </Button>
+          </Flex>
+        </Flex>
+      )}
+      {error && <Alert type="error" showIcon title={error} />}
+    </Flex>
+  );
+}
 
 type Window = { utilization: number | null; resetsAt: string | null; status: string | null };
 type Plan = {
@@ -56,6 +120,15 @@ export function ClaudeLimitsCard() {
   const [chosen, setChosen] = useState<PlanChoice['plan']>('auto');
   const [choices, setChoices] = useState<PlanChoice[]>([]);
   const [saving, setSaving] = useState(false);
+  const [vault, setVault] = useState<Vault | null>(null);
+
+  const loadVault = useCallback(() => {
+    fetch('/api/ai/vault', { cache: 'no-store' })
+      .then((res) => res.json())
+      .then((body) => body?.success && setVault(body))
+      .catch(() => {});
+  }, []);
+  useEffect(loadVault, [loadVault]);
 
   useEffect(() => {
     fetch('/api/ai/plan', { cache: 'no-store' })
@@ -159,7 +232,7 @@ export function ClaudeLimitsCard() {
                   {!plan.configured ? (
                     <Typography.Text type="secondary">
                       Chưa cài: đặt {plan.key === 'primary' ? 'CLAUDE_CODE_OAUTH_TOKEN' : 'CLAUDE_CODE_OAUTH_TOKEN_FALLBACK'} trong .env (tạo bằng
-                      claude setup-token) rồi khởi động lại gateway.
+                      claude setup-token) rồi khởi động lại gateway{vault?.server ? ', hoặc lấy từ KeyVault' : ''}.
                     </Typography.Text>
                   ) : plan.error ? (
                     <Alert type="error" showIcon title={plan.error} />
@@ -173,6 +246,16 @@ export function ClaudeLimitsCard() {
                         {plan.overage === 'rejected' ? ' · không dùng vượt hạn mức' : plan.overage === 'allowed' ? ' · cho dùng vượt (tính thêm phí)' : ''}
                       </Typography.Text>
                     </>
+                  )}
+                  {vault?.server && (
+                    <VaultFetch
+                      plan={plan.key}
+                      vault={vault}
+                      onFetched={() => {
+                        loadVault();
+                        void load(true);
+                      }}
+                    />
                   )}
                 </Flex>
               </Card>

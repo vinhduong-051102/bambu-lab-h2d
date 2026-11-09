@@ -48,6 +48,16 @@ class ClaudeTokensTest(unittest.TestCase):
         self.plan("fallback")
         self.assertEqual(worker.claude_tokens(self.dir), ["one"])
 
+    def test_tokens_fetched_from_the_keyvault_win(self):
+        tokens = self.dir / "tokens.json"
+        tokens.write_text(json.dumps({"CLAUDE_CODE_OAUTH_TOKEN_FALLBACK": "vault-two", "OTHER": "x"}), encoding="utf-8")
+        saved, worker.TOKENS_FILE = worker.TOKENS_FILE, tokens
+        try:
+            self.assertEqual(worker.claude_tokens(self.dir), ["one", "vault-two"])
+            self.assertNotIn("OTHER", os.environ)
+        finally:
+            worker.TOKENS_FILE = saved
+
 
 if __name__ == "__main__":
     unittest.main()

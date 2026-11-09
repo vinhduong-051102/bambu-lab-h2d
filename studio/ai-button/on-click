@@ -22,6 +22,17 @@ for var in STUDIO_AI_URL STUDIO_AI_TOKEN STUDIO_AI_MODEL CLAUDE_CODE_OAUTH_TOKEN
     eval "export $var"
   fi
 done
+# Tokens fetched from the KeyVault on the dashboard (mounted from data/secrets/claude) win over the container's
+tokens_file="${CLAUDE_TOKENS_FILE:-/run/claude/tokens.json}"
+if [ -r "$tokens_file" ] && command -v jq >/dev/null 2>&1; then
+  for var in CLAUDE_CODE_OAUTH_TOKEN CLAUDE_CODE_OAUTH_TOKEN_FALLBACK; do
+    value=$(jq -r --arg name "$var" '.[$name] // empty' "$tokens_file" 2>/dev/null)
+    if [ -n "$value" ]; then
+      eval "$var=\$value"
+      eval "export $var"
+    fi
+  done
+fi
 url="${STUDIO_AI_URL:-http://host.docker.internal:3000/api/studio/ai-optimize}"
 work="$response.d"
 

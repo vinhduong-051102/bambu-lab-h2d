@@ -57,6 +57,8 @@ services:
       - ./studio/labwc-autostart:/config/.config/labwc/autostart:ro
       # Optional on-click script for Studio's "AI tối ưu" button (see studio/ai-button/README.md)
       - ./studio/ai-button:/opt/studio-ai:ro
+      # Claude tokens fetched from the KeyVault on the dashboard: read before each run, over the ones above
+      - ./data/secrets/claude:/run/claude:ro
       # Reworked Vietnamese translation (source: studio/i18n/vi/BambuStudio_vi.po)
       - ./studio/i18n/vi/BambuStudio.mo:/opt/bambustudio/resources/i18n/vi/BambuStudio.mo:ro
       # WSL2 D3D12 libraries (libd3d12, libdxcore) from the Docker Desktop VM, for Mesa's d3d12 driver

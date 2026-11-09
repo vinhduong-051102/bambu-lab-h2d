@@ -64,6 +64,7 @@ ENG_POST = {"inspect": eng.inspect_model, "validate": eng.validate_mesh, "assemb
 
 
 def claude_ready():
+    review.load_vault_tokens()
     return bool(os.environ.get("CLAUDE_CODE_OAUTH_TOKEN"))
 
 
